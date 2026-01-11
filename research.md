@@ -7,6 +7,18 @@ description: Spawn a background researcher agent for long research tasks
 
 You need to spawn a background research agent to investigate: $ARGUMENTS
 
+## Local Configuration
+
+**Check for project-specific config:** If `.claude/research-config.md` exists, read it first. It may specify:
+
+- Preferred research sources or documentation
+- Project tech stack context to include in prompts
+- Standard deliverable formats
+- Domain-specific terminology or constraints
+- Links to internal wikis or docs to reference
+
+Include any relevant local context in the research prompt you generate.
+
 ## Instructions
 
 Use the Task tool to spawn a background research agent with the following configuration:

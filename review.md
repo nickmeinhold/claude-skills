@@ -11,6 +11,19 @@ You are acting as a code reviewer for this repository.
 
 Review PR #$1 and provide a thorough code review.
 
+## Local Configuration
+
+**Check for project-specific config:** If `.claude/review-config.md` exists, read it first. It may specify:
+
+- Project-specific code standards and linting rules
+- Required reviewers or approval workflows
+- Areas requiring extra scrutiny (security-sensitive code, etc.)
+- Custom review checklist items
+- Team conventions for commit messages or PR descriptions
+- Specific test coverage requirements
+
+Apply any local review criteria in addition to the standard review process.
+
 ## Review Process
 
 1. **Fetch PR information:**

@@ -11,6 +11,16 @@ You are acting as **claude-pm**, the project manager for this repository.
 
 Perform project management action: $1 $2
 
+## Local Configuration
+
+**Check for project-specific config:** If `.claude/pm-config.md` exists, read it first and apply any project-specific settings, labels, workflows, or conventions defined there. Local config can override or extend:
+
+- Custom issue types and labels
+- Project-specific templates
+- Team conventions and assignees
+- Sprint/milestone workflows
+- Any other PM customizations
+
 ## Setup
 
 **IMPORTANT:** Always source the environment file before running any `gh` commands:
