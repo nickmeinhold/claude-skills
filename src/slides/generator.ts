@@ -1,20 +1,217 @@
 import { google, slides_v1 } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
-import { ReviewData, SlideGenerationResult } from "./types.js";
 import {
-  COLORS,
-  getStatusEmoji,
-  getRiskColor,
-  getVerdictColor,
-} from "./templates.js";
+  ReviewData,
+  SlideGenerationResult,
+  SlideConfig,
+  SlideElement,
+  RgbColor,
+} from "./types.js";
+import { resolveColor } from "./config-loader.js";
+import { getStatusEmoji } from "./templates.js";
 
+// Points to EMU (English Metric Units) conversion
+const PT_TO_EMU = 12700;
+function pt(points: number): number {
+  return points * PT_TO_EMU;
+}
+
+/**
+ * Generate slides from a SlideConfig
+ */
+export async function generateSlidesFromConfig(
+  auth: OAuth2Client,
+  config: SlideConfig
+): Promise<SlideGenerationResult> {
+  const slidesApi = google.slides({ version: "v1", auth });
+  const themeColors = config.theme?.colors;
+
+  let presentationId = config.presentationId;
+
+  if (presentationId) {
+    // Update existing presentation
+    const existing = await slidesApi.presentations.get({ presentationId });
+    const existingSlides = existing.data.slides || [];
+
+    if (existingSlides.length > 0) {
+      const deleteRequests = existingSlides.map((slide) => ({
+        deleteObject: { objectId: slide.objectId },
+      }));
+      await slidesApi.presentations.batchUpdate({
+        presentationId,
+        requestBody: { requests: deleteRequests },
+      });
+    }
+  } else {
+    // Create new presentation
+    const presentation = await slidesApi.presentations.create({
+      requestBody: { title: config.title },
+    });
+    presentationId = presentation.data.presentationId!;
+
+    // Delete the default blank slide
+    const defaultSlideId = presentation.data.slides![0].objectId;
+    if (defaultSlideId) {
+      await slidesApi.presentations.batchUpdate({
+        presentationId,
+        requestBody: {
+          requests: [{ deleteObject: { objectId: defaultSlideId } }],
+        },
+      });
+    }
+  }
+
+  // Build all requests
+  const requests: slides_v1.Schema$Request[] = [];
+
+  config.slides.forEach((slide, slideIndex) => {
+    const slideId = `slide_${slideIndex}_${Date.now()}`;
+
+    // Create slide with BLANK layout
+    requests.push({
+      createSlide: {
+        objectId: slideId,
+        insertionIndex: slideIndex,
+        slideLayoutReference: { predefinedLayout: "BLANK" },
+      },
+    });
+
+    // Set background if specified
+    if (slide.background) {
+      const bgColor = resolveColor(slide.background, themeColors);
+      requests.push({
+        updatePageProperties: {
+          objectId: slideId,
+          pageProperties: {
+            pageBackgroundFill: {
+              solidFill: { color: { rgbColor: bgColor } },
+            },
+          },
+          fields: "pageBackgroundFill",
+        },
+      });
+    }
+
+    // Add text elements
+    slide.elements.forEach((elem, elemIndex) => {
+      const elementId = `${slideId}_text_${elemIndex}`;
+      requests.push(...createTextBoxRequests(slideId, elementId, elem, themeColors));
+    });
+  });
+
+  // Apply in batches (API limit is ~100 per request)
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < requests.length; i += BATCH_SIZE) {
+    const batch = requests.slice(i, i + BATCH_SIZE);
+    await slidesApi.presentations.batchUpdate({
+      presentationId,
+      requestBody: { requests: batch },
+    });
+  }
+
+  // Add speaker notes
+  const notesRequests: slides_v1.Schema$Request[] = [];
+  const presentation = await slidesApi.presentations.get({ presentationId });
+
+  presentation.data.slides?.forEach((slide, i) => {
+    if (i >= config.slides.length || !config.slides[i].notes) return;
+
+    const notesId =
+      slide.slideProperties?.notesPage?.notesProperties?.speakerNotesObjectId;
+    if (notesId) {
+      notesRequests.push({
+        insertText: {
+          objectId: notesId,
+          text: config.slides[i].notes!,
+          insertionIndex: 0,
+        },
+      });
+    }
+  });
+
+  if (notesRequests.length > 0) {
+    await slidesApi.presentations.batchUpdate({
+      presentationId,
+      requestBody: { requests: notesRequests },
+    });
+  }
+
+  return {
+    presentationId,
+    presentationUrl: `https://docs.google.com/presentation/d/${presentationId}/edit`,
+  };
+}
+
+function createTextBoxRequests(
+  slideId: string,
+  elementId: string,
+  elem: SlideElement,
+  themeColors?: Record<string, RgbColor>
+): slides_v1.Schema$Request[] {
+  const color = resolveColor(elem.color, themeColors);
+
+  return [
+    {
+      createShape: {
+        objectId: elementId,
+        shapeType: "TEXT_BOX",
+        elementProperties: {
+          pageObjectId: slideId,
+          size: {
+            width: { magnitude: pt(elem.w), unit: "EMU" },
+            height: { magnitude: pt(elem.h), unit: "EMU" },
+          },
+          transform: {
+            scaleX: 1,
+            scaleY: 1,
+            translateX: pt(elem.x),
+            translateY: pt(elem.y),
+            unit: "EMU",
+          },
+        },
+      },
+    },
+    {
+      insertText: {
+        objectId: elementId,
+        text: elem.text,
+      },
+    },
+    {
+      updateTextStyle: {
+        objectId: elementId,
+        style: {
+          fontFamily: "Arial",
+          fontSize: { magnitude: elem.size, unit: "PT" },
+          foregroundColor: { opaqueColor: { rgbColor: color } },
+          bold: elem.bold || false,
+        },
+        fields: "fontFamily,fontSize,foregroundColor,bold",
+      },
+    },
+    {
+      updateParagraphStyle: {
+        objectId: elementId,
+        style: {
+          lineSpacing: 115,
+          alignment: "START",
+        },
+        fields: "lineSpacing,alignment",
+      },
+    },
+  ];
+}
+
+/**
+ * Legacy function: Generate slides from ReviewData
+ * Kept for backward compatibility
+ */
 export async function generateSlides(
   auth: OAuth2Client,
   reviewData: ReviewData
 ): Promise<SlideGenerationResult> {
   const slides = google.slides({ version: "v1", auth });
 
-  // Create the presentation
   const presentation = await slides.presentations.create({
     requestBody: {
       title: `PR Review: ${reviewData.prTitle}`,
@@ -22,8 +219,6 @@ export async function generateSlides(
   });
 
   const presentationId = presentation.data.presentationId!;
-
-  // Delete the default blank slide and create our slides
   const defaultSlideId = presentation.data.slides![0].objectId!;
 
   const slideIds = {
@@ -34,7 +229,6 @@ export async function generateSlides(
     verdict: `verdict_${Date.now()}`,
   };
 
-  // Create slides with TITLE_AND_BODY layout
   const createRequests: slides_v1.Schema$Request[] = [
     { deleteObject: { objectId: defaultSlideId } },
     ...Object.values(slideIds).map((id) => ({
@@ -50,7 +244,6 @@ export async function generateSlides(
     requestBody: { requests: createRequests },
   });
 
-  // Get the created slides to find placeholder IDs
   const updatedPresentation = await slides.presentations.get({
     presentationId,
   });

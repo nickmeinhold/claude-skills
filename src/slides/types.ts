@@ -31,3 +31,39 @@ export interface SlideGenerationResult {
   presentationId: string;
   presentationUrl: string;
 }
+
+// Config-based slide types
+export interface RgbColor {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+export interface SlideElement {
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  size: number;
+  color: string | RgbColor;
+  bold?: boolean;
+}
+
+export interface SlideDefinition {
+  background?: string | RgbColor;
+  elements: SlideElement[];
+  notes?: string;
+}
+
+export interface SlideTheme {
+  colors: Record<string, RgbColor>;
+  defaultFont?: string;
+}
+
+export interface SlideConfig {
+  title: string;
+  theme?: SlideTheme;
+  slides: SlideDefinition[];
+  presentationId?: string; // For updating existing presentations
+}
