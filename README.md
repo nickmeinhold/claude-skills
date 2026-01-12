@@ -28,69 +28,59 @@ Once installed, use skills as slash commands in Claude Code:
 ```bash
 /pm list                           # Show project board status
 /research "topic" --depth thorough # Research a topic
-/review                            # Review current PR
+/review 123                        # Review PR #123
 /slides 5 pitch deck for my app    # Generate 5-slide presentation
 ```
+
+## Setup
+
+### 1. Create `.env` file
+
+Copy `.env.example` to `.env` and fill in the values:
+
+```bash
+cp .env.example .env
+```
+
+### 2. Google Slides (for `/slides`)
+
+1. Go to https://console.cloud.google.com/apis/credentials
+2. Create a new OAuth 2.0 Client ID (Desktop app)
+3. Add `http://localhost:3847/callback` as authorized redirect URI
+4. Add credentials to `.env`
+5. Run `npm install && npm run build && npm run auth` to authenticate
+
+### 3. PR Reviews (for `/review`)
+
+The `/review` command uses a separate GitHub account (claude-reviewer-max) to approve PRs.
+
+1. Create a PAT at https://github.com/settings/tokens (logged in as claude-reviewer-max)
+2. Required scopes: `repo`
+3. Add to `.env`: `CLAUDE_REVIEWER_PAT=ghp_your_token_here`
+
+#### Adding claude-reviewer-max to a new repo
+
+1. Add claude-reviewer-max as collaborator with Write access in repo settings
+2. Accept the invite via API:
+   ```bash
+   source ~/git/individuals/nickmeinhold/claude-skills/.env
+   # List pending invites
+   curl -s -H "Authorization: Bearer \$CLAUDE_REVIEWER_PAT" \
+     "https://api.github.com/user/repository_invitations" | jq
+   # Accept invite (replace INVITE_ID)
+   curl -s -X PATCH -H "Authorization: Bearer \$CLAUDE_REVIEWER_PAT" \
+     "https://api.github.com/user/repository_invitations/INVITE_ID"
+   ```
 
 ## Claude Slides CLI
 
 Node.js tool for generating Google Slides presentations.
 
-### Setup
-
-```bash
-npm install
-npm run build
-
-# Authenticate with Google (first time only)
-npm run auth
-```
-
-Required: Create `.env` with Google OAuth credentials:
-
-```
-GOOGLE_CLIENT_ID=your-client-id
-GOOGLE_CLIENT_SECRET=your-client-secret
-```
-
 ### Usage
 
 ```bash
-# From config file (static content)
 npx claude-slides --config slides.json
-
-# From template with data (dynamic content)
 npx claude-slides --template review.json --data pr-data.json
-
-# Update existing presentation
-npx claude-slides --config slides.json --presentation-id EXISTING_ID
-```
-
-### Config Format
-
-```json
-{
-  "title": "Presentation Title",
-  "theme": {
-    "colors": {
-      "primary": { "red": 0.1, "green": 0.2, "blue": 0.4 },
-      "accent": { "red": 0.2, "green": 0.5, "blue": 0.8 }
-    }
-  },
-  "slides": [
-    {
-      "background": "primary",
-      "elements": [
-        {
-          "text": "Title",
-          "x": 50, "y": 150, "w": 620, "h": 80,
-          "size": 48, "color": "white", "bold": true
-        }
-      ],
-      "notes": "Speaker notes here"
-    }
-  ]
-}
 ```
 
 ## Project Structure
@@ -98,13 +88,12 @@ npx claude-slides --config slides.json --presentation-id EXISTING_ID
 ```
 claude-skills/
 ├── pm.md              # Project management skill
-├── research.md        # Research skill
+├── research.md        # Research skill  
 ├── review.md          # PR review skill
 ├── slides.md          # Slides generation skill
-├── src/
-│   ├── cli.ts         # CLI entry point
-│   ├── auth/          # Google OAuth handling
-│   └── slides/        # Slides generation logic
+├── .env               # Local config (not committed)
+├── .env.example       # Template for .env
+├── src/               # Slides CLI source
 └── dist/              # Compiled output
 ```
 

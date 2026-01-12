@@ -105,7 +105,7 @@ Apply any local review criteria in addition to the standard review process.
 First, source the environment file if not already loaded:
 
 ```bash
-source .env
+source ~/git/individuals/nickmeinhold/claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Then post the review using the GitHub API:
