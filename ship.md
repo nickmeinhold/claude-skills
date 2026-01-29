@@ -113,134 +113,23 @@ fi
 3. **Create CI workflow** (based on config):
 
    Check `.claude/ship-config.md` for CI settings. If not specified, auto-detect:
-   - Has `pubspec.yaml` → use Flutter template
-   - Has `package.json` → use Node.js template
-   - Neither → skip CI creation
-   - `.github/workflows/` already exists → don't overwrite
+   - Has `pubspec.yaml` → Flutter
+   - Has `package.json` → Node.js
+   - Neither → skip CI
+   - `.github/workflows/` exists → don't overwrite
 
-   **Node.js template** (ci: node):
+   **All CI templates should include:**
+   - Trigger on push/PR to main
+   - Docs-skip: detect if only .md/.txt/LICENSE changed, skip build/test if so
+   - Run appropriate build, lint, and test commands for the stack
+   - Job name: `test` (for branch protection)
 
-   ```yaml
-   name: CI
+   | Stack | Key steps |
+   |-------|-----------|
+   | Node.js | `npm ci`, `npm run build`, `npm run test:coverage` |
+   | Flutter | `flutter pub get`, `flutter analyze`, `flutter test --coverage` |
 
-   on:
-     push:
-       branches: [main]
-     pull_request:
-       branches: [main]
-
-   jobs:
-     test:
-       runs-on: ubuntu-latest
-
-       steps:
-         - uses: actions/checkout@v4
-           with:
-             fetch-depth: 0
-
-         - name: Check for code changes
-           id: changes
-           run: |
-             if [ "${{ github.event_name }}" = "pull_request" ]; then
-               BASE=${{ github.event.pull_request.base.sha }}
-               HEAD=${{ github.event.pull_request.head.sha }}
-             else
-               BASE=${{ github.event.before }}
-               HEAD=${{ github.sha }}
-             fi
-             CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE' || true)
-             if [ -z "$CODE_CHANGES" ]; then
-               echo "docs_only=true" >> $GITHUB_OUTPUT
-             else
-               echo "docs_only=false" >> $GITHUB_OUTPUT
-             fi
-
-         - name: Setup Node.js
-           if: steps.changes.outputs.docs_only != 'true'
-           uses: actions/setup-node@v4
-           with:
-             node-version: '20'
-             cache: 'npm'
-
-         - name: Install dependencies
-           if: steps.changes.outputs.docs_only != 'true'
-           run: npm ci
-
-         - name: Build
-           if: steps.changes.outputs.docs_only != 'true'
-           run: npm run build
-
-         - name: Run tests with coverage
-           if: steps.changes.outputs.docs_only != 'true'
-           run: npm run test:coverage
-
-         - name: Skip tests (docs only)
-           if: steps.changes.outputs.docs_only == 'true'
-           run: echo "Skipping tests - documentation only changes"
-   ```
-
-   **Flutter template** (ci: flutter):
-
-   ```yaml
-   name: CI
-
-   on:
-     push:
-       branches: [main]
-     pull_request:
-       branches: [main]
-
-   jobs:
-     test:
-       runs-on: ubuntu-latest
-
-       steps:
-         - uses: actions/checkout@v4
-           with:
-             fetch-depth: 0
-
-         - name: Check for code changes
-           id: changes
-           run: |
-             if [ "${{ github.event_name }}" = "pull_request" ]; then
-               BASE=${{ github.event.pull_request.base.sha }}
-               HEAD=${{ github.event.pull_request.head.sha }}
-             else
-               BASE=${{ github.event.before }}
-               HEAD=${{ github.sha }}
-             fi
-             CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE' || true)
-             if [ -z "$CODE_CHANGES" ]; then
-               echo "docs_only=true" >> $GITHUB_OUTPUT
-             else
-               echo "docs_only=false" >> $GITHUB_OUTPUT
-             fi
-
-         - name: Setup Flutter
-           if: steps.changes.outputs.docs_only != 'true'
-           uses: subosito/flutter-action@v2
-           with:
-             flutter-version: '3.x'
-             channel: 'stable'
-
-         - name: Install dependencies
-           if: steps.changes.outputs.docs_only != 'true'
-           run: flutter pub get
-
-         - name: Analyze
-           if: steps.changes.outputs.docs_only != 'true'
-           run: flutter analyze
-
-         - name: Run tests
-           if: steps.changes.outputs.docs_only != 'true'
-           run: flutter test --coverage
-
-         - name: Skip tests (docs only)
-           if: steps.changes.outputs.docs_only == 'true'
-           run: echo "Skipping tests - documentation only changes"
-   ```
-
-   Commit the appropriate CI file as part of the setup.
+   Commit the CI file as part of setup.
 
 4. **Set up branch protection** (if missing):
 
