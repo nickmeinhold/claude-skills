@@ -12,26 +12,59 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for code changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.event.pull_request.head.sha }}
+          else
+            BASE=${{ github.event.before }}
+            HEAD=${{ github.sha }}
+          fi
+
+          # Get changed files, excluding docs
+          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE|^\.github/.*\.md$' || true)
+
+          if [ -z "$CODE_CHANGES" ]; then
+            echo "docs_only=true" >> $GITHUB_OUTPUT
+            echo "Only documentation changes detected - skipping tests"
+          else
+            echo "docs_only=false" >> $GITHUB_OUTPUT
+            echo "Code changes detected:"
+            echo "$CODE_CHANGES"
+          fi
 
       - name: Setup Node.js
+        if: steps.changes.outputs.docs_only != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.changes.outputs.docs_only != 'true'
         run: npm ci
 
       - name: Build
+        if: steps.changes.outputs.docs_only != 'true'
         run: npm run build
 
       - name: Run tests with coverage
+        if: steps.changes.outputs.docs_only != 'true'
         run: npm run test:coverage
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: steps.changes.outputs.docs_only != 'true' && always()
         with:
           name: coverage-report
           path: coverage/
           retention-days: 7
+
+      - name: Skip tests (docs only)
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Skipping tests - documentation only changes"
