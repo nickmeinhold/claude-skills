@@ -67,29 +67,97 @@ fi
      gh api repos/$REPO/collaborators/claude-reviewer-max -X PUT -f permission=push
    ```
 
-3. **Set up branch protection** (if missing):
+3. **Create CI workflow** (if missing):
+
+   If `.github/workflows/ci.yml` doesn't exist, create it with test coverage and docs-skip:
+
+   ```yaml
+   name: CI
+
+   on:
+     push:
+       branches: [main]
+     pull_request:
+       branches: [main]
+
+   jobs:
+     test:
+       runs-on: ubuntu-latest
+
+       steps:
+         - uses: actions/checkout@v4
+           with:
+             fetch-depth: 0
+
+         - name: Check for code changes
+           id: changes
+           run: |
+             if [ "${{ github.event_name }}" = "pull_request" ]; then
+               BASE=${{ github.event.pull_request.base.sha }}
+               HEAD=${{ github.event.pull_request.head.sha }}
+             else
+               BASE=${{ github.event.before }}
+               HEAD=${{ github.sha }}
+             fi
+             CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE' || true)
+             if [ -z "$CODE_CHANGES" ]; then
+               echo "docs_only=true" >> $GITHUB_OUTPUT
+             else
+               echo "docs_only=false" >> $GITHUB_OUTPUT
+             fi
+
+         - name: Setup Node.js
+           if: steps.changes.outputs.docs_only != 'true'
+           uses: actions/setup-node@v4
+           with:
+             node-version: '20'
+             cache: 'npm'
+
+         - name: Install dependencies
+           if: steps.changes.outputs.docs_only != 'true'
+           run: npm ci
+
+         - name: Build
+           if: steps.changes.outputs.docs_only != 'true'
+           run: npm run build
+
+         - name: Run tests with coverage
+           if: steps.changes.outputs.docs_only != 'true'
+           run: npm run test:coverage
+
+         - name: Skip tests (docs only)
+           if: steps.changes.outputs.docs_only == 'true'
+           run: echo "Skipping tests - documentation only changes"
+   ```
+
+   Commit this file as part of the setup.
+
+4. **Set up branch protection** (if missing):
    ```bash
    gh api repos/$REPO/branches/$BASE_BRANCH/protection -X PUT \
      -H "Accept: application/vnd.github+json" \
      -f "required_pull_request_reviews[required_approving_review_count]=1" \
      -f "required_pull_request_reviews[dismiss_stale_reviews]=true" \
      -f "enforce_admins=false" \
-     -f "required_status_checks=null" \
+     -f "required_status_checks[strict]=true" \
+     -f "required_status_checks[contexts][]=test" \
      -f "restrictions=null"
    ```
 
-4. **Create initialization marker:**
+6. **Create initialization marker:**
    ```bash
    mkdir -p .claude
    echo "initialized=$(date -Iseconds)" > .claude/ship-initialized
    echo "reviewer=claude-reviewer-max" >> .claude/ship-initialized
-   git add .claude/ship-initialized
+   echo "ci=true" >> .claude/ship-initialized
+   git add .claude/ship-initialized .github/workflows/ci.yml
    # Will be included in the next commit
    ```
 
 **Report setup status:**
 - [x] Added claude-reviewer-max as collaborator
-- [x] Enabled branch protection (1 required review)
+- [x] Created CI workflow with docs-skip
+- [x] Enabled branch protection (1 required review + CI)
 - [x] Created .claude/ship-initialized marker
 
 ### Step 1: Analyze Changes
