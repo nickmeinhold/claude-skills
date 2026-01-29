@@ -12,17 +12,19 @@ This repo contains two main components:
 ## Common Commands
 
 ```bash
-# Build the CLI
+# Build
 npm run build
 
-# Run auth flow
-npm run auth
+# Test
+npm run test              # Run tests
+npm run test:coverage     # Run with coverage (must be ≥50%)
 
-# Test CLI
-npx claude-slides --help
-
-# Run from source (dev)
+# CLI
+npm run auth              # Google OAuth flow
 npm run dev -- --config example.json
+
+# Ship changes (uses /ship skill)
+/ship [commit-message]    # commit → push → PR → review → merge
 ```
 
 ## Skills Development
@@ -98,7 +100,6 @@ OAuth tokens stored at `~/.claude-slides/tokens.json`.
    ```
 
 **Note:** The CLI requires environment variables to be exported (not just in `.env`). After initial auth, tokens auto-refresh from `~/.claude-slides/`.
-```
 
 ### Config Modes
 
@@ -122,5 +123,45 @@ npx claude-slides --config test.json
 
 - Skills: `*.md` in repo root
 - Source: `src/**/*.ts`
+- Tests: `src/__tests__/*.test.ts`
 - Build output: `dist/`
 - Tokens/credentials: Not committed (in `.gitignore`)
+
+## Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `/ship` | Commit, push, create PR, review, merge - full workflow |
+| `/review <pr>` | Code review a PR as claude-reviewer-max |
+| `/pm <action>` | Project management (issues, planning) |
+| `/slides` | Generate Google Slides presentations |
+| `/research` | Background research agent |
+
+## Development Workflow
+
+This repo uses `/ship` for all changes:
+
+1. **Branch protection** on `main`:
+   - 1 approving review required (from `claude-reviewer-max`)
+   - CI must pass (tests + 50% coverage)
+
+2. **First run in a new repo**: `/ship` auto-configures:
+   - Adds `claude-reviewer-max` as collaborator
+   - Sets up branch protection
+   - Creates `.claude/ship-initialized` marker
+
+3. **CI** (`.github/workflows/ci.yml`):
+   - Runs on push and PR to main
+   - Build → Test with coverage
+   - Fails if coverage < 50%
+
+## Testing
+
+Coverage threshold: **50% minimum** (enforced by CI)
+
+```bash
+npm run test              # Quick test run
+npm run test:coverage     # With coverage report
+```
+
+Current coverage: ~96% on core modules (`templates.ts`, `config-loader.ts`)
