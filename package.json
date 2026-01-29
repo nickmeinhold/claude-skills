@@ -11,7 +11,9 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "auth": "tsx src/cli.ts --auth",
-    "test": "tsx src/cli.ts --help"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "commander": "^13.0.0",
@@ -20,7 +22,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.4.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "tsx": "^4.21.0",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "vitest": "^4.0.18"
   }
 }
