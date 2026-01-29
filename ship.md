@@ -36,6 +36,7 @@ ci: none
 **Options:**
 - `ci: none` - Don't create CI workflow, no CI requirement in branch protection
 - `ci: node` - Node.js template with npm test/coverage (default if `package.json` exists)
+- `ci: flutter` - Flutter template with flutter test (default if `pubspec.yaml` exists)
 - `ci: skip` - Don't touch CI at all (keep existing or none)
 - `ci: custom` - Use custom template defined in config (see below)
 
@@ -59,8 +60,9 @@ jobs:
 ```
 
 **Defaults (no config file):**
+- If `pubspec.yaml` exists → `ci: flutter`
 - If `package.json` exists → `ci: node`
-- If no `package.json` → `ci: none`
+- If neither → `ci: none`
 - If `.github/workflows/` already has files → don't overwrite
 
 ## Prerequisites
@@ -111,8 +113,9 @@ fi
 3. **Create CI workflow** (based on config):
 
    Check `.claude/ship-config.md` for CI settings. If not specified, auto-detect:
+   - Has `pubspec.yaml` → use Flutter template
    - Has `package.json` → use Node.js template
-   - No `package.json` → skip CI creation
+   - Neither → skip CI creation
    - `.github/workflows/` already exists → don't overwrite
 
    **Node.js template** (ci: node):
@@ -176,7 +179,68 @@ fi
            run: echo "Skipping tests - documentation only changes"
    ```
 
-   Commit this file as part of the setup.
+   **Flutter template** (ci: flutter):
+
+   ```yaml
+   name: CI
+
+   on:
+     push:
+       branches: [main]
+     pull_request:
+       branches: [main]
+
+   jobs:
+     test:
+       runs-on: ubuntu-latest
+
+       steps:
+         - uses: actions/checkout@v4
+           with:
+             fetch-depth: 0
+
+         - name: Check for code changes
+           id: changes
+           run: |
+             if [ "${{ github.event_name }}" = "pull_request" ]; then
+               BASE=${{ github.event.pull_request.base.sha }}
+               HEAD=${{ github.event.pull_request.head.sha }}
+             else
+               BASE=${{ github.event.before }}
+               HEAD=${{ github.sha }}
+             fi
+             CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE' || true)
+             if [ -z "$CODE_CHANGES" ]; then
+               echo "docs_only=true" >> $GITHUB_OUTPUT
+             else
+               echo "docs_only=false" >> $GITHUB_OUTPUT
+             fi
+
+         - name: Setup Flutter
+           if: steps.changes.outputs.docs_only != 'true'
+           uses: subosito/flutter-action@v2
+           with:
+             flutter-version: '3.x'
+             channel: 'stable'
+
+         - name: Install dependencies
+           if: steps.changes.outputs.docs_only != 'true'
+           run: flutter pub get
+
+         - name: Analyze
+           if: steps.changes.outputs.docs_only != 'true'
+           run: flutter analyze
+
+         - name: Run tests
+           if: steps.changes.outputs.docs_only != 'true'
+           run: flutter test --coverage
+
+         - name: Skip tests (docs only)
+           if: steps.changes.outputs.docs_only == 'true'
+           run: echo "Skipping tests - documentation only changes"
+   ```
+
+   Commit the appropriate CI file as part of the setup.
 
 4. **Set up branch protection** (if missing):
 
