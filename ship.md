@@ -40,6 +40,58 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 ## Workflow
 
+### Step 0: Repository Setup (once per repo)
+
+Check if this repo has been initialized for `/ship`:
+
+```bash
+# Check for initialization marker
+if [ -f ".claude/ship-initialized" ]; then
+  echo "Repo already initialized"
+else
+  echo "First run - checking repo setup..."
+fi
+```
+
+**If not initialized**, set up branch protection and collaborators:
+
+1. **Check current branch protection:**
+   ```bash
+   gh api repos/$REPO/branches/$BASE_BRANCH/protection 2>/dev/null
+   ```
+
+2. **Add claude-reviewer-max as collaborator** (if not already):
+   ```bash
+   # Check if already a collaborator
+   gh api repos/$REPO/collaborators/claude-reviewer-max 2>/dev/null || \
+     gh api repos/$REPO/collaborators/claude-reviewer-max -X PUT -f permission=push
+   ```
+
+3. **Set up branch protection** (if missing):
+   ```bash
+   gh api repos/$REPO/branches/$BASE_BRANCH/protection -X PUT \
+     -H "Accept: application/vnd.github+json" \
+     -f "required_pull_request_reviews[required_approving_review_count]=1" \
+     -f "required_pull_request_reviews[dismiss_stale_reviews]=true" \
+     -f "enforce_admins=false" \
+     -f "required_status_checks=null" \
+     -f "restrictions=null"
+   ```
+
+4. **Create initialization marker:**
+   ```bash
+   mkdir -p .claude
+   echo "initialized=$(date -Iseconds)" > .claude/ship-initialized
+   echo "reviewer=claude-reviewer-max" >> .claude/ship-initialized
+   git add .claude/ship-initialized
+   # Will be included in the next commit
+   ```
+
+**Report setup status:**
+- [x] Added claude-reviewer-max as collaborator
+- [x] Enabled branch protection (1 required review)
+- [x] Created .claude/ship-initialized marker
+
 ### Step 1: Analyze Changes
 
 Check what needs to be committed:
@@ -222,6 +274,16 @@ Before proceeding at each step, verify:
 - Skip the formal review posting
 - Still analyze the code and report findings
 - Proceed to merge if self-review looks good (with warning)
+
+**Cannot set up branch protection (not repo admin):**
+- Skip the setup step
+- Warn that reviews won't be enforced
+- Still post advisory reviews and proceed
+
+**Repo already has branch protection:**
+- Don't modify existing rules
+- Just add collaborator if missing
+- Mark as initialized
 
 ## Interactive Mode
 
