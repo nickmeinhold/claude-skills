@@ -354,6 +354,35 @@ Get the PR number:
 PR_NUMBER=$(gh pr view --json number -q '.number')
 ```
 
+### Step 5.5: File Overlap Warning
+
+Check if any other open PRs touch the same files as this one. This catches potential merge conflicts early — when they're cheapest to resolve.
+
+```bash
+# Get files changed in this PR
+OUR_FILES=$(gh pr view $PR_NUMBER --json files --jq '[.files[].path] | sort | .[]')
+
+# Check all other open PRs for overlapping files
+gh pr list --state open --json number,title,headRefName,files \
+  --jq ".[] | select(.number != $PR_NUMBER)" | while IFS= read -r pr; do
+  OTHER_NUM=$(echo "$pr" | jq -r '.number')
+  OTHER_TITLE=$(echo "$pr" | jq -r '.title')
+  OTHER_FILES=$(echo "$pr" | jq -r '[.files[].path] | sort | .[]')
+  OVERLAP=$(comm -12 <(echo "$OUR_FILES") <(echo "$OTHER_FILES"))
+  if [ -n "$OVERLAP" ]; then
+    echo "⚠️  File overlap with PR #$OTHER_NUM ($OTHER_TITLE):"
+    echo "$OVERLAP" | sed 's/^/   /'
+  fi
+done
+```
+
+If overlaps are found, warn the user:
+- **If the other PR is approved/ready to merge:** suggest merging it first to avoid conflicts.
+- **If both PRs make the same change to overlapping files:** note that the conflict will be trivial.
+- **If the changes diverge:** suggest extracting the shared change into its own micro-PR.
+
+This is advisory only — do not block shipping.
+
 ### Step 6: Review the PR
 
 Wait briefly for CI to start, then determine the review approach based on change size:
@@ -497,6 +526,11 @@ Before proceeding at each step, verify:
 - Before deleting a merged branch, check if any open PRs use it as their base
 - If so: merge without `--delete-branch`, retarget downstream PRs to the base branch (e.g., `main`), then delete the branch
 - This prevents downstream PRs from being auto-closed by GitHub when their base branch disappears
+
+**Multiple open PRs with file overlap:**
+- When shipping multiple PRs that touch the same files, merge them sequentially (not in parallel) to avoid repeated merge conflicts
+- Prefer merging the smaller/simpler PR first — this minimizes the conflict surface for the larger PR
+- If both PRs make the same change (e.g., a shared bug fix), consider extracting that change into its own micro-PR, merging it first, then rebasing both feature branches
 
 **No CLAUDE_REVIEWER_PAT:**
 - Skip the formal review posting
