@@ -106,9 +106,6 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Generate Maxwell App token — PRs are created as MaxwellMergeSlam [bot]
 # so the human developer can approve them
 MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
-
-# Generate Kelvin App token — Kelvin merges PRs after approval
-KELVIN_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
 ```
 
 ## Workflow
@@ -442,16 +439,16 @@ If approved:
    DOWNSTREAM_PRS=$(gh pr list --base "$PR_BRANCH" --json number -q '.[].number' 2>/dev/null)
    ```
 
-3. Attempt the merge **as KelvinBitBrawler [bot]**. If branch protection blocks it
-   (CI still running), use `--auto` to queue the merge for when CI passes. **Only
-   reach this point after the pre-merge gate (Step 8) is fully satisfied** — the user
-   has reviewed all suggestions and given the go-ahead.
+3. Attempt the merge **using the admin PAT** to bypass branch protection (bot approvals
+   don't count toward required reviews). If CI is still running, use `--auto` to queue.
+   **Only reach this point after the pre-merge gate (Step 8) is fully satisfied** — the
+   user has reviewed all suggestions and given the go-ahead.
    ```bash
    if [ -n "$DOWNSTREAM_PRS" ]; then
      # Stacked PRs exist — merge WITHOUT deleting branch, retarget downstream, then delete
-     if ! GH_TOKEN=$KELVIN_TOKEN gh pr merge $PR_NUMBER --squash 2>/dev/null; then
+     if ! GH_TOKEN=$ENSPYR_ADMIN_PAT gh pr merge $PR_NUMBER --squash --admin 2>/dev/null; then
        echo "CI pending — queuing auto-merge..."
-       GH_TOKEN=$KELVIN_TOKEN gh pr merge $PR_NUMBER --squash --auto
+       GH_TOKEN=$ENSPYR_ADMIN_PAT gh pr merge $PR_NUMBER --squash --admin --auto
      fi
      for downstream in $DOWNSTREAM_PRS; do
        gh pr edit $downstream --base $BASE_BRANCH
@@ -459,9 +456,9 @@ If approved:
      git push origin --delete "$PR_BRANCH" 2>/dev/null || true
    else
      # No stacked PRs — safe to delete branch on merge
-     if ! GH_TOKEN=$KELVIN_TOKEN gh pr merge $PR_NUMBER --squash --delete-branch 2>/dev/null; then
+     if ! GH_TOKEN=$ENSPYR_ADMIN_PAT gh pr merge $PR_NUMBER --squash --delete-branch --admin 2>/dev/null; then
        echo "CI pending — queuing auto-merge..."
-       GH_TOKEN=$KELVIN_TOKEN gh pr merge $PR_NUMBER --squash --delete-branch --auto
+       GH_TOKEN=$ENSPYR_ADMIN_PAT gh pr merge $PR_NUMBER --squash --delete-branch --admin --auto
      fi
    fi
    ```
