@@ -93,7 +93,7 @@ Coverage thresholds are owned by the project's test runner config (e.g., `vitest
 Source environment variables:
 
 ```bash
-source ~/.enspyr-claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Get repo info and generate bot token for PR creation:
@@ -105,7 +105,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 # Generate Maxwell App token — PRs are created as MaxwellMergeSlam [bot]
 # so the human developer can approve them
-MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
+MAXWELL_TOKEN=$(~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
 ```
 
 ## Workflow
@@ -134,8 +134,8 @@ fi
 
    ```bash
    # Check that MaxwellMergeSlam and KelvinBitBrawler GitHub Apps are installed
-   MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "MaxwellMergeSlam App: installed" || echo "MaxwellMergeSlam App: NOT installed"
-   KELVIN_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "KelvinBitBrawler App: installed" || echo "KelvinBitBrawler App: NOT installed"
+   MAXWELL_TOKEN=$(~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "MaxwellMergeSlam App: installed" || echo "MaxwellMergeSlam App: NOT installed"
+   KELVIN_TOKEN=$(~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "KelvinBitBrawler App: installed" || echo "KelvinBitBrawler App: NOT installed"
    ```
 
    If either App is not installed, print the install URL and stop:

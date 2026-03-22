@@ -18,7 +18,7 @@ if [ -z "$QUESTION" ]; then
 fi
 
 # Change to the project directory where .claude/live-qa-config.md lives
-cd /Users/nick/git/orgs/enspyrco/claude-skills
+cd /Users/nick/git/individuals/nickmeinhold/claude-skills
 
 # Load environment variables (Google credentials, etc.)
 source .env 2>/dev/null

@@ -25,7 +25,7 @@ Handle review comments on PR #$ARGUMENTS (or current branch's PR if not specifie
 Source environment variables:
 
 ```bash
-source ~/.enspyr-claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Get repo and PR info:
@@ -41,7 +41,7 @@ else
 fi
 
 # Generate a short-lived installation token for MaxwellMergeSlam (used to post comment replies)
-MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
+MAXWELL_TOKEN=$(~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
 ```
 
 ## Workflow

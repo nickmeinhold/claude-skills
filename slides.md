@@ -75,7 +75,7 @@ Generate a presentation with AI-created content.
    EOF
 
    # Generate slides
-   npx --prefix ~/git/orgs/enspyrco/claude-skills claude-slides --config /tmp/slides-config.json
+   npx --prefix ~/git/individuals/nickmeinhold/claude-skills claude-slides --config /tmp/slides-config.json
    ```
 
 5. **Return the presentation URL** to the user.

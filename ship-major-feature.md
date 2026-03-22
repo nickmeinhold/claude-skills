@@ -14,13 +14,13 @@ Follow the `/ship` workflow (see ship.md) with the following overrides:
 1. **Verify both reviewer Apps are installed:**
 
 ```bash
-source ~/.enspyr-claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 BASE_BRANCH=$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')
 
 # Check that both GitHub Apps are installed on this repo
-MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "MaxwellMergeSlam App: installed" || echo "MaxwellMergeSlam App: NOT installed"
-KELVIN_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "KelvinBitBrawler App: installed" || echo "KelvinBitBrawler App: NOT installed"
+MAXWELL_TOKEN=$(~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "MaxwellMergeSlam App: installed" || echo "MaxwellMergeSlam App: NOT installed"
+KELVIN_TOKEN=$(~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" 2>/dev/null) && echo "KelvinBitBrawler App: installed" || echo "KelvinBitBrawler App: NOT installed"
 ```
 
 If either App is not installed, print the install URL and stop:

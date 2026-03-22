@@ -8,19 +8,19 @@ Four steps to get started:
 
 ```bash
 # 1. Clone the repo
-git clone git@github.com:enspyrco/claude-skills.git
+git clone git@github.com:nickmeinhold/claude-skills.git
 
 # 2. Symlink skills to Claude Code (from repo root)
 cd claude-skills
 ln -s "$(pwd)"/*.md ~/.claude/commands/
 
 # 3. Symlink the helper script
-mkdir -p ~/.enspyr-claude-skills
-ln -s "$(pwd)/scripts/github-app-token.sh" ~/.enspyr-claude-skills/github-app-token.sh
+mkdir -p ~/.claude-skills
+ln -s "$(pwd)/scripts/github-app-token.sh" ~/.claude-skills/github-app-token.sh
 
 # 4. Create .env with App credentials (get from team lead)
-cp .env.example ~/.enspyr-claude-skills/.env
-# Edit ~/.enspyr-claude-skills/.env with actual values
+cp .env.example ~/.claude-skills/.env
+# Edit ~/.claude-skills/.env with actual values
 ```
 
 Then install the reviewer GitHub Apps on your repos (one-time per repo):

@@ -14,7 +14,7 @@ Two AI reviewers enter. One PR leaves (hopefully improved).
 Source the environment:
 
 ```bash
-source ~/.enspyr-claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Get repo info:
@@ -168,8 +168,8 @@ Generate App tokens and post both reviews:
 
 ```bash
 # Generate short-lived installation tokens for both reviewer Apps
-MAXWELL_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
-KELVIN_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
+MAXWELL_TOKEN=$(~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
+KELVIN_TOKEN=$(~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
 ```
 
 Post Maxwell's review — **always as COMMENT** since Maxwell is the PR author (created the PR via `/ship`) and cannot approve its own PRs:

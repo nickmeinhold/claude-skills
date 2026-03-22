@@ -105,7 +105,7 @@ Apply any local review criteria in addition to the standard review process.
 First, source the environment file if not already loaded:
 
 ```bash
-source ~/.enspyr-claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Then generate an App token and post the review using the GitHub API:
@@ -115,7 +115,7 @@ Then generate an App token and post the review using the GitHub API:
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 
 # Generate a short-lived installation token for KelvinBitBrawler
-KELVIN_TOKEN=$(~/.enspyr-claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
+KELVIN_TOKEN=$(~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
 
 # Post review as KelvinBitBrawler [bot]
 GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
@@ -134,7 +134,7 @@ Events:
 If a stakeholder presentation is needed, generate Google Slides summarizing the review.
 
 **Prerequisites:**
-- Run `npm install` in `~/git/orgs/enspyrco/claude-skills`
+- Run `npm install` in `~/git/individuals/nickmeinhold/claude-skills`
 - Run `npm run auth` to authenticate with Google (first time only)
 - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables
 
@@ -171,7 +171,7 @@ If a stakeholder presentation is needed, generate Google Slides summarizing the 
 2. Generate the presentation:
 
 ```bash
-cat review-data.json | npx --prefix ~/git/orgs/enspyrco/claude-skills claude-slides
+cat review-data.json | npx --prefix ~/git/individuals/nickmeinhold/claude-skills claude-slides
 ```
 
 3. The command outputs a Google Slides URL that can be shared with stakeholders.
