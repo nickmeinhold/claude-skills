@@ -61,6 +61,13 @@ Apply any local review criteria in addition to the standard review process.
    - Adherence to project patterns and conventions
    - Test coverage for changed code
    - Breaking changes
+   - **Design appropriateness** — is the type signature right for the problem? Closed sets of identifiers (IDs from a known list, kinds/categories, modes, status enums) should be `enum` / `sealed class` / branded types, not `String` or `int`. Stringly-typing leaks runtime invariants the compiler should enforce. A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
+   - **Language-feature appropriateness** — is the code using current language idioms?
+     - **Dart 3+**: switch expressions over switch statements when each arm `return X;`. Pattern matching for tuple destructuring (`(a, b) || (b, a)` for order-independent algebra). Sealed classes for closed hierarchies. Records over `Map<String, dynamic>` for ad-hoc tuples.
+     - **TypeScript 5+**: `satisfies` over `as`, `const` type parameters, branded types for closed-set IDs.
+     - **Python 3.12+**: structural pattern matching, `Self` types, `TypedDict` Required/NotRequired.
+     - When the project's stack is current, *not* using the modern feature is a code smell. Flag legacy idioms in new code.
+   - **Verify before claiming compile errors.** If you see an unfamiliar API and want to flag it as broken, check the language/SDK version first. CI being green is direct evidence your hypothesis is wrong.
 
 ## Review Format
 

@@ -61,6 +61,12 @@ Your character:
 
 Review this PR and provide your verdict. Be specific with file:line references.
 
+In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
+- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
+- A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
+- **Verify before claiming bugs.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. If the build passes (CI green), your hypothesis is wrong.
+
 PR Info:
 $PR_INFO
 
@@ -105,6 +111,12 @@ Your character:
 
 Review this PR and provide your verdict. Be specific with file:line references.
 
+In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
+- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
+- A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
+- **Verify before claiming bugs.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. If the build passes (CI green), your hypothesis is wrong.
+
 PR Info:
 $PR_INFO
 
@@ -144,8 +156,16 @@ As **MaxwellMergeSlam**, perform your review with PERSONALITY:
 **Review approach:**
 1. Analyze the diff thoroughly
 2. Check for bugs, security issues, performance problems, code quality
-3. Run tests if applicable
-4. Form your verdict: APPROVE, REQUEST_CHANGES, or COMMENT
+3. **Design appropriateness** — is the type signature right for the problem? Closed sets of identifiers should be `enum` / `sealed class`, not `String`. Stringly-typing leaks runtime invariants the compiler should be enforcing. Bounded value types (positions, durations, IDs from a known set) deserve domain types, not primitives. If you see `String foo` whose values are drawn from a closed list, flag it.
+4. **Language-feature appropriateness** — is the code using current language idioms, or a previous-version dialect?
+   - **Dart 3+**: switch expressions over switch statements when each arm `return X;`. Pattern matching for tuple destructuring (especially order-independent algebra like `(a, b) || (b, a)`). Sealed classes for closed hierarchies. Records over `Map<String, dynamic>` for ad-hoc tuples. `List<T>` destructuring in patterns.
+   - **TypeScript 5+**: `satisfies` over `as`, `const` type parameters, `using`/`Symbol.dispose`, branded types for closed-set IDs.
+   - **Python 3.12+**: structural pattern matching, `Self` types, `TypedDict` Required/NotRequired, generic type aliases.
+   - Generally: when a project's stack is current, *not* using the modern feature is a code smell, not a stylistic preference.
+5. Run tests if applicable
+6. Form your verdict: APPROVE, REQUEST_CHANGES, or COMMENT
+
+A correctly-implemented feature with the wrong type signature is not "fine, ship it" — it's debt that compounds. Flag it.
 
 Write your review in this format - but make it YOURS:
 
