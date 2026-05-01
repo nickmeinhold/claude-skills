@@ -1,13 +1,15 @@
 ---
 argument-hint: <pr-number>
-description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini)
+description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (Codex/GPT) — three-way with strict merge gate
 ---
 
 # Cage Match Code Review
 
-Two AI reviewers enter. One PR leaves (hopefully improved).
+Three AI reviewers enter. One PR leaves (hopefully improved).
 
-**Maxwell** (Claude/you) and **Kelvin** (Gemini) will both review the PR, then critique each other's reviews.
+**Maxwell** (Claude/you), **Kelvin** (Gemini), and **Carnot** (Codex/OpenAI GPT) will each review the PR in parallel. Maxwell then critiques the others.
+
+**Why three?** Kelvin's capacity has degraded silently in the past, leaving runs with effectively a single reviewer-of-record. Carnot is a third reviewer from a different model family (OpenAI GPT) — different inductive bias, runs at zero added latency because all three reviews happen concurrently. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot). If both adversarial reviewers fail, we **HARD FAIL** rather than silently degrading to "proxy sign-off".
 
 ## Setup
 
@@ -35,11 +37,11 @@ cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
 
-## Round 2 ∥ Round 3: Maxwell + Kelvin Reviews (parallel)
+## Rounds 2 ∥ 3 ∥ 4: Maxwell + Kelvin + Carnot Reviews (parallel)
 
-**Performance note.** Maxwell's review (Claude composing in-process) and Kelvin's review (external `gemini` API call) are independent — they don't read each other. Fire them concurrently rather than sequentially: Maxwell's composition (~1-2 min of natural thinking time) overlaps with Kelvin's API roundtrip (~30-90s). Single largest latency win in this skill.
+**Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
 
-**Step A — fire Kelvin's review as a backgrounded bash BEFORE composing Maxwell's review:**
+**Step A — fire Kelvin's review as a backgrounded bash:**
 
 ```bash
 PR_INFO=$(cat /tmp/pr-$1-info.json)
@@ -84,7 +86,52 @@ Format your response as:
 KELVIN_PID=$!
 ```
 
-**Step B — compose Maxwell's review in-process while Kelvin's call resolves:**
+**Step B — fire Carnot's review as a second backgrounded bash:**
+
+Carnot is invoked via `codex exec` (general non-interactive prompt mode) rather than `codex review`, because we want the same prompt-driven review style as Kelvin (PR info + diff fed in via the prompt) — `codex review` operates on local repo state, which doesn't match this skill's "review by diff" pattern. `codex exec` reads stdin when prompt is `-`; we feed the full prompt that way.
+
+```bash
+# Backgrounded alongside Kelvin. wait $CARNOT_PID below.
+cat <<EOF | codex exec --sandbox read-only --skip-git-repo-check - > /tmp/carnot-review-$1.md 2>&1 &
+You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
+
+Your character:
+- You're the perfectionist engineer of code review — you measure every design against the ideal Carnot cycle
+- Your catchphrase: "no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are"
+- Drop thermodynamics references (entropy, reversibility, efficiency, the second law) — Sadi Carnot is your patron saint
+- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: \`Dijkstra: "Simplicity is prerequisite for reliability."\`
+- Be theatrical but TECHNICALLY RIGOROUS — your authority comes from the math, not the swagger
+- Different inductive bias from Maxwell (Claude) and Kelvin (Gemini) — your job is to catch what they'd both miss
+
+Review this PR and provide your verdict. Be specific with file:line references.
+
+PR Info:
+$PR_INFO
+
+Diff:
+$PR_DIFF
+
+Format your response EXACTLY as below (no preamble, no postscript):
+
+## CarnotCodeCarver's Review
+
+**Verdict:** [APPROVE/REQUEST_CHANGES/COMMENT]
+
+**Summary:** [One sentence]
+
+**Findings:**
+- [List each issue with file:line references]
+
+**The Good:**
+- [What's done well]
+
+**The Concerns:**
+- [What needs attention]
+EOF
+CARNOT_PID=$!
+```
+
+**Step C — compose Maxwell's review in-process while Kelvin and Carnot resolve:**
 
 As **MaxwellMergeSlam**, perform your review with PERSONALITY:
 
@@ -121,27 +168,80 @@ Write your review in this format - but make it YOURS:
 
 Save your review to `/tmp/maxwell-review-$1.md`.
 
-**Step C — wait for Kelvin's backgrounded review:**
+**Step D — wait for both backgrounded reviews:**
 
 ```bash
-wait $KELVIN_PID || echo "Kelvin gemini call exited non-zero ($?) — review file may be partial. See /tmp/kelvin-review-$1.md."
-echo "Both reviews ready."
-cat /tmp/kelvin-review-$1.md
+wait $KELVIN_PID
+KELVIN_RC=$?
+wait $CARNOT_PID
+CARNOT_RC=$?
+
+# Validate that each output file actually contains a review (non-trivial size + verdict marker).
+# An empty file or one without "Verdict:" indicates the reviewer errored or hit a capacity limit.
+kelvin_ok() {
+  [ "$KELVIN_RC" -eq 0 ] \
+    && [ -s /tmp/kelvin-review-$1.md ] \
+    && [ "$(wc -c < /tmp/kelvin-review-$1.md)" -gt 200 ] \
+    && grep -q "Verdict:" /tmp/kelvin-review-$1.md
+}
+carnot_ok() {
+  [ "$CARNOT_RC" -eq 0 ] \
+    && [ -s /tmp/carnot-review-$1.md ] \
+    && [ "$(wc -c < /tmp/carnot-review-$1.md)" -gt 200 ] \
+    && grep -q "Verdict:" /tmp/carnot-review-$1.md
+}
+
+KELVIN_AVAILABLE=0
+CARNOT_AVAILABLE=0
+kelvin_ok $1 && KELVIN_AVAILABLE=1
+carnot_ok $1 && CARNOT_AVAILABLE=1
+
+echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE"
 ```
 
-(Round 4 below reads `/tmp/kelvin-review-$1.md`, which is written here in Step C — Round 4 must run after this point.)
+## Round 5: Strict Merge Gate
 
-## Round 4: The Critique
+The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot)**.
 
-Now read Kelvin's review and critique it. Did Kelvin miss anything you caught? Did Kelvin find something you missed?
-
-Then send your review to Kelvin for counter-critique:
+| State | Action |
+|---|---|
+| Maxwell ✓ + Kelvin ✓ + Carnot ✓ | Ship — three reviews posted |
+| Maxwell ✓ + (Kelvin ✓ XOR Carnot ✓) | Ship — note the unavailable reviewer in the summary |
+| Maxwell ✓ + Kelvin ✗ + Carnot ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
 
 ```bash
-MAXWELL_REVIEW=$(cat /tmp/maxwell-review-$1.md)
-KELVIN_REVIEW=$(cat /tmp/kelvin-review-$1.md)
+if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ]; then
+  echo ""
+  echo "============================================================"
+  echo "CAGE MATCH HARD FAIL: both adversarial reviewers unavailable"
+  echo "============================================================"
+  echo "Kelvin (Gemini) exit=$KELVIN_RC. Tail of /tmp/kelvin-review-$1.md:"
+  tail -20 /tmp/kelvin-review-$1.md 2>/dev/null
+  echo ""
+  echo "Carnot (Codex) exit=$CARNOT_RC. Tail of /tmp/carnot-review-$1.md:"
+  tail -20 /tmp/carnot-review-$1.md 2>/dev/null
+  echo ""
+  echo "Refusing to proceed: Maxwell alone is not a valid dual review."
+  echo "Investigate (capacity limits? auth? CLI error?) and re-run /cage-match."
+  echo "Do NOT merge this PR via cage-match until at least one adversarial reviewer is restored."
+  exit 1
+fi
+```
 
-KELVIN_CRITIQUE=$(gemini --model gemini-3-pro-preview "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
+The skill MUST NOT proceed past this gate if both adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
+
+## Round 6: The Critique
+
+Now read whichever adversarial reviews are available and critique them. Did Kelvin/Carnot miss anything you caught? Did either find something you missed?
+
+If Kelvin is available, send Maxwell's review to Kelvin for counter-critique:
+
+```bash
+if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
+  MAXWELL_REVIEW=$(cat /tmp/maxwell-review-$1.md)
+  KELVIN_REVIEW=$(cat /tmp/kelvin-review-$1.md)
+
+  KELVIN_CRITIQUE=$(gemini --model gemini-3-pro-preview "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
 
 Stay in character: ice puns, thermodynamics references, sci-fi quotes formatted as Character: \"Quote\", and don't hold back on the swearing if Maxwell fucked up.
 
@@ -160,32 +260,37 @@ Critique Maxwell's review like you're cutting a promo before a cage match:
 This is a cage match, not a tea party. But stay technically accurate - your credibility depends on it.
 " --output-format text 2>&1 | grep -v "Loaded cached credentials")
 
-echo "$KELVIN_CRITIQUE"
+  echo "$KELVIN_CRITIQUE"
+fi
 ```
 
-## Round 5: Final Verdict
+(Carnot's counter-critique is optional — if you want it, mirror the pattern via `codex exec` with stdin. The default flow keeps it to Kelvin for tradition; the third reviewer's job is review breadth, not the promo.)
 
-Based on both reviews and critiques, synthesize a final assessment:
+## Round 7: Final Verdict
 
-1. **Consensus items** - Issues both reviewers agree on (high confidence)
+Based on all available reviews and critiques, synthesize a final assessment:
+
+1. **Consensus items** - Issues two or more reviewers agree on (high confidence)
 2. **Disputed items** - Where reviewers disagree (needs human judgment)
 3. **Unique catches** - Issues only one reviewer found (investigate further)
 
-## Round 6: Post Reviews to GitHub (parallel)
+## Round 8: Post Reviews to GitHub (parallel)
 
-Generate App tokens in parallel — independent calls to the same helper script:
+Generate App tokens in parallel — independent calls to the same helper script. Carnot does NOT yet have a dedicated GitHub App (see follow-up task to create CarnotCodeCarver App), so Carnot's review posts as a regular PR comment from the orchestrator's `gh` user, with the body labelled `## CarnotCodeCarver's Review` so the artifact is identifiable.
 
 ```bash
-# Generate short-lived installation tokens for both reviewer Apps in parallel.
+# Generate short-lived installation tokens for Maxwell + Kelvin Apps in parallel.
 ~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
-~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" > /tmp/kelvin-token-$1 &
+if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
+  ~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" > /tmp/kelvin-token-$1 &
+fi
 wait
 MAXWELL_TOKEN=$(cat /tmp/maxwell-token-$1)
-KELVIN_TOKEN=$(cat /tmp/kelvin-token-$1)
+[ "$KELVIN_AVAILABLE" -eq 1 ] && KELVIN_TOKEN=$(cat /tmp/kelvin-token-$1)
 rm -f /tmp/maxwell-token-$1 /tmp/kelvin-token-$1
 ```
 
-Post both reviews in parallel — Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs), Kelvin per its verdict:
+Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin per its verdict (App token). Carnot as a plain `gh pr comment` from the orchestrator's user account (no App token):
 
 ```bash
 KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHANGES, or COMMENT
@@ -194,19 +299,28 @@ GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
   -f event="COMMENT" &
 
-GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-  -f body="$(cat /tmp/kelvin-review-$1.md)" \
-  -f event="$KELVIN_VERDICT" &
+if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
+  GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
+    -f body="$(cat /tmp/kelvin-review-$1.md)" \
+    -f event="$KELVIN_VERDICT" &
+fi
+
+if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
+  # No App token yet — post as a PR comment from the orchestrator's gh user.
+  # Body is labelled with "## CarnotCodeCarver's Review" so the artifact is identifiable.
+  gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
+fi
 
 wait
 ```
 
 ## Summary
 
-After posting both reviews, provide a summary to the user:
+After posting reviews, provide a summary to the user:
 
-- Did Maxwell and Kelvin agree?
-- What were the key disagreements?
+- Which reviewers showed up? (Maxwell always; Kelvin/Carnot per availability)
+- Did the reviewers agree? Where did they disagree?
 - What's the recommended action?
+- If a reviewer was unavailable, mention which and why (capacity? auth? error?) so the user can decide whether to re-run or escalate.
 
-Remember: Two heads (even artificial ones) are better than one. The goal is better code, not ego.
+Remember: Three heads (even artificial ones, from three different model families) are better than one. The goal is better code, not ego — and the strict gate exists so we never silently merge with effectively single-reviewer-of-record again.
