@@ -39,7 +39,8 @@ Summarize the audit for Nick:
 - Files missing from index, phantom subjects, broken edges
 - Orphans count
 - Top hubs (in-degree) and top derivatives (out-degree)
-- Number and shape of connected components
+- Number of components and the size of the largest
+- If `$ARGUMENTS` was provided, also surface the matched files and their immediate neighborhoods from the `FOCUSED ON` section
 
 Then point him at the rendered files. Offer to open the HTML:
 
