@@ -29,6 +29,88 @@ Before starting, write a session summary to prime the agents. This is the critic
 
 Use `SD` as shorthand below for the full session directory path (`~/.claude/consolidation/<session-id>`).
 
+## Phase 0a: Affective marker surfacing (BEFORE the agent phases)
+
+Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: triage each ("real / autopilot"), not remember.
+
+The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each `"role":"user"` line is a Nick message. Grep that file for marker language:
+
+- **Surprise / realization**: `oh shit`, `huh`, `wait`, `actually`, `hmmm`, `dude`
+- **Pushback / corrections**: `seems excessive`, `no we need`, `not that`, `that's dumb`, `bruh`, `sheesh`, ALL-CAPS for emphasis
+- **Direction shifts**: `what about`, `should we`, `plan mode?`, sentences starting with "wait —"
+- **Energy markers**: `let's go`, `ship it`, `fire`, `dispatch`, exclamation density
+- **Length anomalies**: terse messages amid prose (`PR`, `yeah`, `ship !`) = high-conviction decisions; long messages amid terse = "I'm thinking out loud"
+- **Conversational-flow markers**: >5 min gap between user messages = Nick stopped to think; re-asking similar questions = first answer didn't click
+
+### Output format — quote-first dotpoints
+
+Recognition over recall. Nick's own words are his strongest recall trigger.
+
+```
+[time] [emoji] "<verbatim quote from Nick>"
+       → <consequence in 1 line>
+```
+
+Emoji-as-category (consistent at-a-glance scanning):
+
+- 🔥 breakthrough / phase-shift moment
+- 💡 insight / new framing
+- ⚠️ pushback / correction (Nick caught Maxwell)
+- 🛠 design directive (Nick steered the architecture)
+- 🪤 friction / process miss
+- 🎯 direction shift
+
+Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. Drop autopilot-sounding markers entirely; only surface candidates that have a plausible "so what".
+
+### Present + triage
+
+Show the dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall. The "yes" rows seed the conversation with anchored memories Nick now recognises, which feeds richer content into the session-summary above (you may want to amend it).
+
+Write the surfaced + triaged dotpoints to `<SD>/affective-highlights.md` so the Phase 1+ agents can use them.
+
+## Phase 0b: Three-pole retrospective (Maxwell + Kelvin + Carnot)
+
+A single-perspective retrospective misses what other perspectives catch. Same shape as cage-match: different model families with different inductive biases find different things. So before the agent phases, run all three reviewers cold-reading `session-summary.md` in parallel.
+
+### Fire all three concurrently
+
+```bash
+SD=~/.claude/consolidation/latest
+
+# Kelvin (Gemini) — analytical-detached vantage
+gemini --model gemini-3-pro-preview "You are KelvinBitBrawler — cold heel of code review, here doing a SESSION retrospective rather than a PR review. Read the session summary in <stdin>. Three questions: (1) What surprised you that wasn't in the 'Surprises' section — patterns hiding in the data? (2) What did Maxwell get wrong that wasn't in 'Mistakes I noticed' — cognitive biases, process failures, things Maxwell convinced themselves were fine? (3) The crux — the ONE THING that, if not addressed, makes the rest of the work less valuable? Cite section names. End with 'Efficiency assessment 0.X / Carnot ideal: <one line>'. Format: ## KelvinBitBrawler's Retrospective / ### Surprises Maxwell missed / ### Mistakes Maxwell missed / ### The crux / ### Efficiency assessment" < $SD/session-summary.md > $SD/kelvin-retro.md 2>&1 &
+KELVIN_PID=$!
+
+# Carnot (Codex) — perfectionist-against-theoretical-maximum vantage
+codex exec "You are CarnotCodeCarver — perfectionist measuring against theoretical maximum, doing a SESSION retrospective. Read the session summary in <stdin>. Same three questions as above (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: did Maxwell mis-calibrate confidence claims? Defer judgments to Nick that should have been Maxwell's call? Treat any hypothesis as confirmed too quickly? Cite section names. End with efficiency assessment 0.0-1.0 vs Carnot ideal of session productivity (1.0 = no entropy lost to misframing)." < $SD/session-summary.md > $SD/carnot-retro.md 2>&1 &
+CARNOT_PID=$!
+
+# Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
+# Compose your own surprises/mistakes/crux directly to <SD>/maxwell-retro.md.
+
+# Wait for both
+until ! ps -p $KELVIN_PID $CARNOT_PID > /dev/null 2>&1; do sleep 5; done
+```
+
+### The strict-gate analogue from cage-match
+
+Same gate as three-way cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot)** must succeed. If both Kelvin AND Carnot fail (Gemini quota exhausted + Codex unavailable), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
+
+If only one of (Kelvin, Carnot) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
+
+### Synthesise — Nick is the gating function
+
+Read all three retrospectives. Synthesise into a single **agent-side conversation seed** that Nick can engage with:
+
+- The findings each reviewer surfaced that the others didn't
+- Where they converge (high-confidence signal)
+- Where they conflict (interesting design tension worth Nick's call)
+- Direct quotes from each retrospective when sharp
+
+Present to Nick as the seed for the Phase-0-style conversation questions ("what surprised us / what did we get wrong / what's the crux"). **Nick's job is gating, not generating** — he validates which findings ring true rather than recalling cold.
+
+Write the synthesis to `<SD>/multi-perspective-retro.md`.
+
 ## Phase 1: The Goldmine Sweep
 
 Spawn a **foreground** Agent (general-purpose) with this prompt (substitute the actual SD path):
