@@ -124,10 +124,12 @@ Save your review to `/tmp/maxwell-review-$1.md`.
 **Step C — wait for Kelvin's backgrounded review:**
 
 ```bash
-wait $KELVIN_PID
+wait $KELVIN_PID || echo "Kelvin gemini call exited non-zero ($?) — review file may be partial. See /tmp/kelvin-review-$1.md."
 echo "Both reviews ready."
 cat /tmp/kelvin-review-$1.md
 ```
+
+(Round 4 below reads `/tmp/kelvin-review-$1.md`, which is written here in Step C — Round 4 must run after this point.)
 
 ## Round 4: The Critique
 
