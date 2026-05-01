@@ -12,20 +12,25 @@ interactive vis-network visualization plus a Mermaid fallback.
 ### 1. Run the audit
 
 ```bash
-python3 ~/.claude/scripts/memory_graph_audit.py
+python3 ~/.claude/scripts/memory_graph_audit.py "$ARGUMENTS"
 ```
 
 This prints a topology report and writes
-`~/.claude/scripts/output/memory_graph_audit.txt`.
+`~/.claude/scripts/output/memory_graph_audit.txt`. If `$ARGUMENTS` is non-empty
+(e.g. `/graph snes`), the report ends with a `FOCUSED ON: <arg>` section listing
+files whose names contain the substring (case-insensitive) along with their
+parents and children.
 
 ### 2. Render the visualization
 
 ```bash
-python3 ~/.claude/scripts/memory_graph_render.py
+python3 ~/.claude/scripts/memory_graph_render.py "$ARGUMENTS"
 ```
 
 This writes:
-- `~/.claude/scripts/output/memory_graph.html` — interactive vis-network graph
+- `~/.claude/scripts/output/memory_graph.html` — interactive vis-network graph.
+  When `$ARGUMENTS` is provided, matching nodes get a red border and bumped size
+  so they pop visually; the page header shows the focus term and match count.
 - `~/.claude/scripts/output/memory_graph.mmd` — Mermaid version for pasting into mermaid.live
 
 ### 3. Report
@@ -45,5 +50,9 @@ open ~/.claude/scripts/output/memory_graph.html
 ## Notes
 
 - Outputs land in `~/.claude/scripts/output/` (persistent), not `/tmp` (which gets wiped).
-- If `$ARGUMENTS` is provided, treat it as a focus filter — e.g. a filename or
-  prefix Nick wants to inspect — and highlight matching nodes in the report.
+- The `$ARGUMENTS` focus filter is matched as a case-insensitive substring against
+  filenames. Use it to zoom in on a project (`/graph snes`), a memory type
+  (`/graph concept_`), or any prefix you care about. With no argument, the full
+  graph is reported and rendered as before.
+- If you change either script's output format, update Step 3 above so the recipe
+  doesn't drift from the reality of what the scripts produce.
