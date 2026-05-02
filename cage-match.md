@@ -41,16 +41,43 @@ cat /tmp/pr-$1-diff.txt
 
 **Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
 
-**Step A — fire Kelvin's review as a backgrounded bash:**
+**Step 0 — Kelvin capability probe (avoid wasting ~30s on doomed retries).**
+
+The Pro-tier Gemini models hit "You have exhausted your capacity on this model" failure consistently across recent sessions. The full Kelvin review wraps internal retries before failing, so blindly firing it costs ~30s of wall time on every cage-match when Kelvin is down. A 1-token ping resolves in ~1-2s and tells us up front which model (if any) is actually reachable. Falling back to a Flash model is intentionally NOT done here: 2.5-flash gives shallow APPROVE-everything reviews that paper over real concerns — better to declare Kelvin unavailable than to seat a soft reviewer at the table.
+
+```bash
+KELVIN_MODEL=""
+for m in gemini-3-pro-preview gemini-2.5-pro; do
+  # Tiny prompt, short timeout. If the model responds at all, it's up;
+  # we'll use it for the full review. If both fail, KELVIN_MODEL stays
+  # empty and we skip the Kelvin call entirely.
+  if timeout 15 gemini --model "$m" "Reply PONG." --output-format text 2>/dev/null \
+       | grep -v "Loaded cached credentials" | grep -q "PONG"; then
+    KELVIN_MODEL="$m"
+    break
+  fi
+done
+
+if [ -z "$KELVIN_MODEL" ]; then
+  echo "Kelvin probe: no Pro model available (3-pro-preview and 2.5-pro both exhausted)."
+  echo "Skipping Kelvin entirely; gate will rely on Maxwell + Carnot."
+else
+  echo "Kelvin probe: $KELVIN_MODEL responsive."
+fi
+```
+
+**Step A — fire Kelvin's review as a backgrounded bash (only if probe found a Pro model):**
 
 ```bash
 PR_INFO=$(cat /tmp/pr-$1-info.json)
 PR_DIFF=$(cat /tmp/pr-$1-diff.txt)
 
+KELVIN_PID=""
+if [ -n "$KELVIN_MODEL" ]; then
 # Backgrounded so Claude can compose Maxwell's review while Gemini's
 # API call resolves in parallel. wait $KELVIN_PID below before reading
-# the output file.
-gemini --model gemini-3-pro-preview "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
+# the output file. Skipped entirely when the probe came back empty.
+gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the cold, calculating heel wrestler of code review - absolute zero tolerance for bullshit
@@ -90,6 +117,7 @@ Format your response as:
 - [What needs attention]
 " --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
 KELVIN_PID=$!
+fi
 ```
 
 **Step B — fire Carnot's review as a second backgrounded bash:**
@@ -191,8 +219,14 @@ Save your review to `/tmp/maxwell-review-$1.md`.
 **Step D — wait for both backgrounded reviews:**
 
 ```bash
-wait $KELVIN_PID
-KELVIN_RC=$?
+if [ -n "$KELVIN_PID" ]; then
+  wait $KELVIN_PID
+  KELVIN_RC=$?
+else
+  # Kelvin never fired (probe declared no Pro model available).
+  # Use a sentinel non-zero RC so kelvin_ok() returns false.
+  KELVIN_RC=99
+fi
 wait $CARNOT_PID
 CARNOT_RC=$?
 
@@ -261,7 +295,7 @@ if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   MAXWELL_REVIEW=$(cat /tmp/maxwell-review-$1.md)
   KELVIN_REVIEW=$(cat /tmp/kelvin-review-$1.md)
 
-  KELVIN_CRITIQUE=$(gemini --model gemini-3-pro-preview "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
+  KELVIN_CRITIQUE=$(gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
 
 Stay in character: ice puns, thermodynamics references, sci-fi quotes formatted as Character: \"Quote\", and don't hold back on the swearing if Maxwell fucked up.
 
