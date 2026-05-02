@@ -10,9 +10,9 @@ Phase 0 (in-context conversation + multi-perspective retrospective) followed by 
 
 Before starting, write a session summary to prime the agents. This is the critical bridge — the agents don't have the session context, so this summary IS their context.
 
-1. **Create a session-namespaced directory.** Generate a session ID from the current timestamp: `YYYY-MM-DDTHH-MM` (e.g., `2026-04-05T19-48`). Compute the absolute session-dir path *once* and reuse it everywhere — agents NEVER resolve through `latest/` (see "Cross-session safety" below).
+1. **Create a session-namespaced directory.** Generate a session ID from the current timestamp at **second granularity** (`YYYY-MM-DDTHH-MM-SS`, e.g., `2026-04-05T19-48-30`). Minute-granularity is not enough — two tabs invoking `/consolidate` within the same minute would collide on the same `$SD`. Second-granularity makes that collision rare enough to ignore (don't add a uuid/random suffix — that's over-engineering and invites its own bugs). Compute the absolute session-dir path *once* and reuse it everywhere — agents NEVER resolve through `latest/` (see "Cross-session safety" below).
    ```bash
-   SID="2026-04-05T19-48"  # ← actual timestamp
+   SID="$(date +%Y-%m-%dT%H-%M-%S)"  # absolute timestamp, second-granularity (e.g. 2026-04-05T19-48-30)
    SD="$HOME/.claude/consolidation/$SID"   # absolute path; this is what agents receive
    mkdir -p "$SD"
    # The symlink below is a WAKE-UP CONVENIENCE for the next session start
@@ -190,7 +190,13 @@ Actions:
 
    If the snapshot is empty (no pending/in_progress tasks), still create <SD>/open-tasks.md with the header line and a body of "No open tasks at consolidation time." — the file's existence is what next-session-prompter checks.
 
-6. **Pending-tasks snapshot (machine-readable, project-keyed)**: read `<SD>/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). Write `<MEMORY_DIR>/pending-tasks.json` containing the TaskList snapshot verbatim — a JSON array, one object per task, fields `subject` / `description` / `activeForm`. This is the file the wake-up protocol's auto-restore reads (CLAUDE.md step 10). Filing it under the project memory dir (not <SD>/) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. If the snapshot is empty, write `[]` (still create the file — the wake-up step's existence check is the contract). If a `pending-tasks.json` already exists at that path (e.g. from a prior session that wasn't restored), overwrite it; the most-recent consolidation wins.
+6. **Pending-tasks snapshot (machine-readable, project-keyed)** — broken into three sub-steps so each concern is explicit:
+
+   - **6a. Resolve the target path.** Read `<SD>/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). The target file is `<MEMORY_DIR>/pending-tasks.json`. Filing it under the project memory dir (not `<SD>/`) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. This is the file the wake-up protocol's auto-restore reads (CLAUDE.md step 10).
+
+   - **6b. Write the JSON snapshot.** Write the TaskList snapshot verbatim as a JSON array, one object per task, fields `subject` / `description` / `activeForm`. Schema must match exactly — the wake-up step maps these fields directly into `TaskCreate` calls.
+
+   - **6c. Empty-snapshot semantics + overwrite policy.** If the snapshot is empty, still write `[]` — the wake-up step's existence check is the contract; an absent file means "no consolidation has run", an empty array means "consolidation ran, no tasks were pending". If a `pending-tasks.json` already exists at the target path from a prior unrestored session, overwrite it: the TaskList snapshot from the most-recent consolidation is authoritative. If the prior session had pending tasks Nick still wanted, they're recoverable from MEMORY.md or that session's `<SD>/open-tasks.md` — so the last-writer-wins behavior here is bounded, not silent data loss.
 
 7. **Append wins** from this session to ~/.claude/wins.md (with today's date).
 
