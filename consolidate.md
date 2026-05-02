@@ -39,7 +39,7 @@ The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-
 - **Pushback / corrections**: `seems excessive`, `no we need`, `not that`, `that's dumb`, `bruh`, `sheesh`, ALL-CAPS for emphasis
 - **Direction shifts**: `what about`, `should we`, `plan mode?`, sentences starting with "wait —"
 - **Energy markers**: `let's go`, `ship it`, `fire`, `dispatch`, exclamation density
-- **Length anomalies**: terse messages amid prose (`PR`, `yeah`, `ship !`) = high-conviction decisions; long messages amid terse = "I'm thinking out loud"
+- **Length anomalies**: terse messages amid prose (`PR`, `yeah`, `ship`) = high-conviction decisions; long messages amid terse = "I'm thinking out loud"
 - **Conversational-flow markers**: >5 min gap between user messages = Nick stopped to think; re-asking similar questions = first answer didn't click
 
 ### Output format — quote-first dotpoints
