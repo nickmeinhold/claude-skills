@@ -100,7 +100,7 @@ OAuth tokens stored at `~/.claude-slides/tokens.json`.
    ```bash
    source .env
    export GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
-   npx claude-slides --auth
+   npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides --auth
    ```
 
 **Note:** The CLI requires environment variables to be exported (not just in `.env`). After initial auth, tokens auto-refresh from `~/.claude-slides/`.
@@ -120,7 +120,7 @@ After modifying skills:
 After modifying CLI:
 ```bash
 npm run build
-npx claude-slides --config test.json
+npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides --config test.json
 ```
 
 ## File Conventions

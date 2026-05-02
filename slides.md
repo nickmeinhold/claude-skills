@@ -9,6 +9,17 @@ Generate a presentation with AI-created content.
 
 **Arguments:** $ARGUMENTS
 
+## Prerequisites
+
+This skill invokes the [`claude-slides`](https://github.com/nickmeinhold/claude-slides) CLI from a sibling repo. Set `CLAUDE_SLIDES_PATH` in your shell rc to point to your local clone:
+
+```bash
+# In ~/.zshrc or ~/.bashrc
+export CLAUDE_SLIDES_PATH="$HOME/git/individuals/nickmeinhold/claude-slides"
+```
+
+Then `git clone https://github.com/nickmeinhold/claude-slides "$CLAUDE_SLIDES_PATH" && cd "$CLAUDE_SLIDES_PATH" && npm install && npm run build`.
+
 ## Local Configuration
 
 **Check for project-specific config:** If `.claude/slides-config.md` exists, read it first. It may specify:
@@ -75,7 +86,7 @@ Generate a presentation with AI-created content.
    EOF
 
    # Generate slides
-   npx --prefix ~/git/individuals/nickmeinhold/claude-slides claude-slides --config /tmp/slides-config.json
+   npx --prefix "${CLAUDE_SLIDES_PATH:?CLAUDE_SLIDES_PATH must be set; clone https://github.com/nickmeinhold/claude-slides and export the path}" claude-slides --config /tmp/slides-config.json
    ```
 
 5. **Return the presentation URL** to the user.
