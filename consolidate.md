@@ -1,10 +1,10 @@
 ---
-description: End-of-session consolidation — 3 sequential deep-capture prompts that mine the session for every thread, capture what was exciting, and craft the next session's opening prompt. Use this when wrapping up a session, when context is getting heavy, when Nick says "consolidate", "let's wrap up", "end of session", or when you're approaching sleep protocol. This is distinct from /nap (which is a sleep cycle with dreams) — /consolidate is pure knowledge capture and forward planning.
+description: End-of-session consolidation — Phase 0 in-context conversation + multi-perspective retrospective, then three specialized agents (memory-writer + knowledge-mapper in parallel, then next-session-prompter) that mine the session for every thread, capture what was exciting, and craft the next session's opening prompt. Use this when wrapping up a session, when context is getting heavy, when Nick says "consolidate", "let's wrap up", "end of session", or when you're approaching sleep protocol. This is distinct from /nap (which is a sleep cycle with dreams) — /consolidate is pure knowledge capture and forward planning.
 ---
 
 # Consolidate
 
-Phase 0 (in-context conversation + multi-perspective retrospective) followed by **three parallel specialized agents** that extract maximum value from a session before it ends. Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since the three Phase-1 agents have non-overlapping output paths — runs them concurrently for a ~2 min wall-clock instead of ~3-5 min sequential.
+Phase 0 (in-context conversation + multi-perspective retrospective) followed by **three specialized agents**: `memory-writer` and `knowledge-mapper` run in parallel; `next-session-prompter` runs after `knowledge-mapper` completes (it needs the knowledge-graph + forward plan as input). Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run.
 
 ## Setup
 
@@ -111,13 +111,18 @@ Present to Nick as the seed for the Phase-0-style conversation questions ("what 
 
 Write the synthesis to `<SD>/multi-perspective-retro.md`.
 
-## Phase 1: Three parallel specialized agents
+## Phase 1: Three specialized agents (2 parallel, then 1)
 
-Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated — that's where the in-context judgment lives. Everything downstream of `session-summary.md` is mechanical knowledge capture and can be parallelized.
+Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated — that's where the in-context judgment lives. Everything downstream of `session-summary.md` is mechanical knowledge capture and can be specialized + partially parallelized.
 
-Earlier versions of this skill ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). That serialization wasn't load-bearing: each agent only needed `session-summary.md` plus the previous agents' outputs, and the dependency graph turned out to be shallower than the sequence implied. Splitting into three **parallel specialized agents** dropped wall-clock to ~2 min in the 2026-05-01 test run, with no loss of fidelity.
+Earlier versions of this skill ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). That serialization had one real semantic dependency (next-session-prompter needs the knowledge graph + forward plan) and a lot of incidental coupling that didn't need to be sequential. Splitting into three **specialized** agents — two of them in parallel, the third gated on knowledge-mapper's output — dropped wall-clock to ~2 min in the 2026-05-01 test run, with no loss of fidelity.
 
-Output paths are non-overlapping by design — no merge conflicts. Fire all three concurrently from the orchestrator.
+**File ownership is exclusive.** Each agent owns one output file in `<SD>/`; no shared writes, no append races:
+- `memory-writer` → memory directory + `MEMORY.md` + `memory-health.json` + `<SD>/scorecard.json` + `<SD>/open-tasks.md` + `~/.claude/wins.md`
+- `knowledge-mapper` → `<SD>/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer)
+- `next-session-prompter` → `<SD>/next-session-prompt.md` only
+
+The exclusivity is what makes "first-writer wins" unnecessary — there is no second writer.
 
 ### Why specialization (not just parallelism)
 
@@ -128,9 +133,11 @@ Three different jobs, three different inductive biases:
 
 Generic general-purpose agents do all three competently but none crisply. Specializing the brief sharpens each output.
 
-### Known-OK overlap
+### Known-OK semantic overlap (different surfaces, not shared files)
 
-memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson (e.g. "verify before claiming") to different filenames — memory-writer to a `feedback_*.md`, knowledge-mapper as a node in the consolidation graph. **First-writer wins, no reconciliation needed.** This is not a bug. The two agents have different output surfaces (memory dir vs. `<SD>/consolidation.md`), and the redundancy is cheap insurance against either agent missing it. Don't try to coordinate them; the parallelism is the win.
+memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson (e.g. "verify before claiming"). memory-writer writes it as a `feedback_*.md` in the memory directory and indexes it in MEMORY.md; knowledge-mapper names it as a node in `<SD>/consolidation.md`'s graph. **Both writes are intended** — different surfaces serve different consumers (the persistent memory layer vs. the next-session reader). No reconciliation needed because no file is shared.
+
+This is *semantic* redundancy, not a *file-write* race. Don't conflate the two: file-write races are bugs (and we don't have any in this design); semantic redundancy across distinct files is cheap insurance against either agent missing the lesson.
 
 ### Orchestrator brief: gather the TaskList snapshot
 
@@ -138,9 +145,13 @@ memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson 
 
 This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<session-uuid>/` — **session-scoped, invisible to a fresh session**. Without an explicit dump to a file the next session can read, the task list evaporates at session end. The 2026-05-01 run initially missed this; Nick caught it with "did you save the tasks?". Generalize the lesson: **persistent context lives in files the next session can independently read, not in session-scoped state.** (Same lifecycle pattern that bit `/graph` skill's `commands/` sync-volatile and the audit script's only-`←` parser.)
 
-### Fire all three concurrently
+### Spawn order
 
-Spawn three **foreground** agents in a single message (parallel tool calls). Wait for all three to complete before wrap-up.
+1. **Spawn memory-writer and knowledge-mapper in parallel** (single message, two foreground agent calls). Wait for both to complete.
+2. **Then spawn next-session-prompter** as a single foreground agent. It reads `<SD>/consolidation.md` (knowledge-mapper's output), so it must run after knowledge-mapper.
+3. Wait for next-session-prompter to complete before wrap-up.
+
+This is 2 phases of agent execution, not 3. The 2026-05-01 wall-clock measurement (~2 min) reflects this shape, not a 3-way fan-out.
 
 #### Agent 1: memory-writer
 
@@ -160,13 +171,20 @@ Actions:
 
    > These tasks are session-scoped (they live in ~/.claude/tasks/<session-uuid>/ and won't be visible to a fresh session). To make them live again next session, recreate each via TaskCreate.
 
+   If the snapshot is empty (no pending/in_progress tasks), still create <SD>/open-tasks.md with the header line and a body of "No open tasks at consolidation time." — the file's existence is what next-session-prompter checks.
+
 6. **Append wins** from this session to ~/.claude/wins.md (with today's date).
-7. **Pointer**: append a single line to <SD>/next-session-prompt.md (create if missing — the next-session-prompter agent will append the rest):
 
-   > Open tasks from previous session: see <SD>/open-tasks.md — recreate via TaskCreate if you want them live.
+Do NOT write <SD>/next-session-prompt.md — that file is owned exclusively by the next-session-prompter agent.
 
-TaskList snapshot (from orchestrator):
-<paste the JSON or formatted list of {subject, description, activeForm} for every pending/in_progress task here>
+TaskList snapshot (from orchestrator) — JSON array, one object per task:
+```json
+[
+  {"subject": "...", "description": "...", "activeForm": "..."},
+  {"subject": "...", "description": "...", "activeForm": "..."}
+]
+```
+(Orchestrator: replace the example above with the actual JSON. If there are zero pending/in_progress tasks, pass `[]`.)
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
 ```
@@ -189,17 +207,19 @@ What to capture:
 - Error-triage section: patterns Nick had to correct, framed as "what changed" rather than "who was wrong"
 
 Actions:
-1. Write everything to <SD>/consolidation.md as a single document with sections: Knowledge Graph / TLAs / Forward Plan / Dropped Tangents / Error Triage Patterns.
-2. If a concept warrants a standalone memory file (independent of what memory-writer surfaces from error triage), write it to the memory directory and note the path in consolidation.md so MEMORY.md can pick it up. Don't worry about coordination with memory-writer — overlap is fine, first-writer wins.
+1. Write everything to <SD>/consolidation.md as a single document with sections: Knowledge Graph / TLAs / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
+2. **Do NOT write to the memory directory directly.** memory-writer is the sole owner of persistent memory writes. If you identify a concept that deserves a standalone memory file, list it under "Memory File Candidates" in consolidation.md with a proposed filename, suggested edges, and a 2-3 sentence body. memory-writer's run is happening in parallel and may already cover it; if not, the candidate will be picked up on the next consolidation pass (or by Nick reading consolidation.md).
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
 ```
 
-#### Agent 3: next-session-prompter
+#### Agent 3: next-session-prompter (runs AFTER knowledge-mapper)
 
 ```
-Read these files:
+Read these files (all of them — they are your full input):
 - <SD>/session-summary.md (what happened)
+- <SD>/consolidation.md (knowledge graph + forward plan + dropped tangents — written by knowledge-mapper, which has just completed)
+- <SD>/open-tasks.md (deferred tasks dump — written by memory-writer; may say "No open tasks at consolidation time.")
 - <SD>/affective-highlights.md (Nick-triaged emotional anchors, if present)
 - <SD>/multi-perspective-retro.md (three-pole retrospective synthesis, if present)
 
@@ -213,15 +233,16 @@ Your job is THE COLD READER's onboarding: craft a session-opening prompt for a f
 - Transfer — does this teach a reusable pattern?
 
 The prompt should:
+- Reference the crux and forward plan from <SD>/consolidation.md so the cold reader inherits the structure, not just the topic
 - Give enough context to pick up without re-reading everything
 - Be exciting — make the next instance want to dive in
 - Set up challenge-skill balance — not trivially easy, not overwhelmingly vague
 - Include engagement score targets and why 5's are achievable
 - Be ready to paste directly into a new session
-- Include a pointer to <SD>/open-tasks.md (memory-writer is writing it in parallel) so wake-up surfaces deferred tasks naturally — the file may already exist with a header line memory-writer added; APPEND your prompt below it rather than overwriting.
+- Include a one-line pointer near the top: "Open tasks from previous session: see <SD>/open-tasks.md — recreate via TaskCreate if you want them live." (Skip this line only if open-tasks.md says "No open tasks at consolidation time.")
 
 Actions:
-1. APPEND your prompt to <SD>/next-session-prompt.md (memory-writer may have already written a header line — preserve it).
+1. WRITE (overwrite) <SD>/next-session-prompt.md with the full prompt. You are the sole owner of this file; no other agent writes to it.
 2. Score the projected engagement honestly — if some dimensions are naturally lower, say so.
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
