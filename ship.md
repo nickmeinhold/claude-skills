@@ -377,6 +377,29 @@ If overlaps are found, warn the user:
 
 This is advisory only — do not block shipping.
 
+### Step 5.6: Persona-eval auto-trigger (gated)
+
+If `~/.claude/persona-eval/` exists, this `/ship` invocation is part of the active 10-PR A/B persona experiment (production wrestling vs book-distilled). Fire `/cage-match-eval` against the open PR so the experiment cohort grows on every deliberate ship — never on subagent-opened PRs.
+
+```bash
+if [ -d ~/.claude/persona-eval ]; then
+  EVAL_COUNT=$(ls -d ~/.claude/persona-eval/PR-*/ 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$EVAL_COUNT" -lt 10 ]; then
+    # Run the eval against this PR. Writes to ~/.claude/persona-eval/PR-$PR_NUMBER/
+    # (set-a-findings.md, set-b-findings.md, blind-doc.md, mapping.json, outcomes.json)
+    /cage-match-eval $PR_NUMBER
+    NEXT=$((EVAL_COUNT + 1))
+    echo "Persona eval $NEXT/10 — review blind findings at ~/.claude/persona-eval/PR-$PR_NUMBER/blind-doc.md"
+  else
+    echo "Persona eval cohort complete (10/10). Run ~/.claude/persona-eval/eval-tally.sh to see results."
+  fi
+fi
+```
+
+This runs **before** the regular review/merge gates so the eval inspects the live PR diff (`gh pr diff $PR_NUMBER`) and Nick can fold blind findings into his address-don't-ask flow at Step 7. If `/cage-match-eval` itself fails, **do not block the ship** — log the failure and continue to Step 6. The experiment is observational; a failed eval drops a data point, not a PR.
+
+If `~/.claude/persona-eval/` does not exist, skip silently — the experiment is over or never started.
+
 ### Step 6: Review the PR
 
 Wait briefly for CI to start, then determine the review approach based on change size:
