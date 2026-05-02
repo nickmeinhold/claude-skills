@@ -8,25 +8,16 @@ Guidance for Claude Code when working on this repository.
 
 ## Project Overview
 
-This repo contains two main components:
+This repo contains **Claude Code Skills** — markdown files that define custom slash commands.
 
-1. **Claude Code Skills** - Markdown files that define custom slash commands
-2. **Claude Slides CLI** - Node.js tool for generating Google Slides
+The Google Slides build that powers `/slides` and `/live-qa` lives in the sibling repo
+[`nickmeinhold/claude-slides`](https://github.com/nickmeinhold/claude-slides). See that
+repo's `CLAUDE.md` for CLI architecture, OAuth setup, EMU/layout details, and build/test
+commands. Skills in this repo invoke it via `npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides ...`.
 
 ## Common Commands
 
 ```bash
-# Build
-npm run build
-
-# Test
-npm run test              # Run tests
-npm run test:coverage     # Run with coverage (thresholds in vitest.config.ts)
-
-# CLI
-npm run auth              # Google OAuth flow
-npm run dev -- --config example.json
-
 # Ship changes (uses /ship skill)
 /ship [commit-message]    # commit → push → PR → review → merge
 ```
@@ -62,73 +53,15 @@ To install skills globally (from repo root):
 ln -s "$(pwd)"/*.md ~/.claude/commands/
 ```
 
-## Claude Slides CLI
-
-### Architecture
-
-```
-src/
-├── cli.ts              # Entry point, argument parsing
-├── auth/
-│   ├── oauth.ts        # OAuth2 flow with browser redirect
-│   └── token-store.ts  # Token persistence (~/.claude-slides/tokens.json)
-└── slides/
-    ├── types.ts        # SlideConfig, SlideElement interfaces
-    ├── config-loader.ts # Load JSON configs, interpolate variables
-    ├── generator.ts    # Google Slides API calls
-    └── templates.ts    # Color helpers, status emoji
-```
-
-### Key Concepts
-
-- **EMU (English Metric Units)**: Google Slides uses EMU for positioning. Convert points: `points * 12700`
-- **Slide dimensions**: Standard 16:9 is ~720 x 405 points
-- **Color references**: Configs can use color names that resolve to RGB via theme.colors
-- **Batch requests**: API limits ~100 requests per batch, code uses 50 for safety
-
-### Authentication
-
-OAuth tokens stored at `~/.claude-slides/tokens.json`.
-
-**Setup (one-time):**
-1. Add credentials to `.env`:
-   ```
-   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=your-client-secret
-   ```
-2. Run authentication:
-   ```bash
-   source .env
-   export GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
-   npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides --auth
-   ```
-
-**Note:** The CLI requires environment variables to be exported (not just in `.env`). After initial auth, tokens auto-refresh from `~/.claude-slides/`.
-
-### Config Modes
-
-1. **Static** (`--config`): Direct JSON with slide content
-2. **Template** (`--template` + `--data`): JSON with `{{variables}}` interpolated from data file
-3. **Legacy** (stdin): ReviewData JSON for PR review slides
-
 ## Testing Changes
 
 After modifying skills:
-1. Skills are loaded fresh each invocation - no restart needed
+1. Skills are loaded fresh each invocation — no restart needed
 2. Test with `/skillname` in Claude Code
-
-After modifying CLI:
-```bash
-npm run build
-npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides --config test.json
-```
 
 ## File Conventions
 
 - Skills: `*.md` in repo root
-- Source: `src/**/*.ts`
-- Tests: `src/__tests__/*.test.ts`
-- Build output: `dist/`
 - Tokens/credentials: Not committed (in `.gitignore`)
 
 ## Environment Variables
@@ -148,12 +81,13 @@ ENSPYR_ADMIN_PAT=ghp_...
 # For /pm skill - GitHub PAT for project management bot
 CLAUDE_PM_PAT=ghp_...
 
-# For /slides skill - Google OAuth credentials
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
+# For /slides + /live-qa - path to the sibling claude-slides repo
+CLAUDE_SLIDES_PATH=/path/to/claude-slides
 ```
 
 Skills source this file from `.env` in the repo root (or `~/.claude-skills/.env`). App tokens are generated on-the-fly via `scripts/github-app-token.sh` (short-lived, 1-hour TTL).
+
+Google OAuth credentials for `/slides` (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) live in the `claude-slides` repo's `.env`. See that repo's `CLAUDE.md`.
 
 ## Available Skills
 
@@ -165,7 +99,7 @@ Skills source this file from `.env` in the repo root (or `~/.claude-skills/.env`
 | `/cage-match <pr>` | Adversarial review: Maxwell (Claude) vs Kelvin (Gemini) |
 | `/review-respond [pr]` | Respond to PR review comments with user input |
 | `/pm <action>` | Project management (issues, planning) |
-| `/slides` | Generate Google Slides presentations |
+| `/slides` | Generate Google Slides presentations (delegates to sibling `claude-slides` build) |
 | `/research` | Background research agent |
 | `/live-qa <question>` | Research a question and append a Q&A slide to a live presentation |
 
@@ -193,23 +127,7 @@ This repo uses `/ship` for all changes:
 1. **Branch protection** on `main`:
    - 1 approving review required (2 when using `/ship-major-feature`)
    - `dismiss_stale_reviews` enforced (ensures new commits invalidate old approvals)
-   - CI must pass (tests + coverage thresholds)
-
 2. **First run in a new repo**: `/ship` auto-configures:
    - Verifies MaxwellMergeSlam and KelvinBitBrawler Apps are installed
    - Sets up branch protection
    - Creates `.claude/ship-initialized` marker
-
-3. **CI** (`.github/workflows/ci.yml`):
-   - Runs on push and PR to main
-   - Build → Test with coverage
-   - Fails if coverage below thresholds (see `vitest.config.ts`)
-
-## Testing
-
-Coverage thresholds are defined in `vitest.config.ts` and enforced by both CI and `/ship`.
-
-```bash
-npm run test              # Quick test run
-npm run test:coverage     # With coverage report
-```
