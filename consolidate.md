@@ -21,7 +21,7 @@ Before starting, write a session summary to prime the agents. This is the critic
 
 3. **Write the session summary** to `<session-dir>/session-summary.md`:
    - Everything that happened this session: topics, decisions, code written, problems solved
-   - Every TLA (Three Letter Acronym) used — define each one
+   - Domain-specific or session-specific terms — only those that need defining (skip standard developer vocabulary the reading agent already knows). Bar: would a competent dev assistant cold-reading this need the definition? If no, omit it.
    - Key threads and how they connect
    - Open questions, dropped tangents, half-formed ideas
    - Emotional highlights — what was exciting, surprising, frustrating
@@ -128,7 +128,7 @@ The exclusivity is what makes "first-writer wins" unnecessary — there is no se
 
 Three different jobs, three different inductive biases:
 - **memory-writer** thinks in *files and indexes* — error triage, memory writes, MEMORY.md edits, scorecard, open-tasks dump
-- **knowledge-mapper** thinks in *graphs* — concepts, edges, TLAs, dropped tangents, the Kolmogorov-minimal description
+- **knowledge-mapper** thinks in *graphs* — concepts, edges, domain-specific terms, dropped tangents, the Kolmogorov-minimal description
 - **next-session-prompter** thinks in *the cold reader* — what context does a fresh instance need to land in flow?
 
 Generic general-purpose agents do all three competently but none crisply. Specializing the brief sharpens each output.
@@ -199,7 +199,7 @@ Nick says: "Are you really really sure you got everything... this context is a f
 Your job is the GRAPH side of consolidation: knowledge map, hierarchical forward plan, dropped tangents, and an error-triage section that names patterns (the FILES side of error triage is handled by the memory-writer agent — your job here is to surface the patterns in graph form, not to write feedback memory files).
 
 What to capture:
-- Every TLA in the session — define them explicitly
+- Domain-specific or session-specific terms — only those that need defining (skip standard developer vocabulary the reading agent already knows). Bar: would a competent dev assistant cold-reading this need the definition? If no, omit it.
 - The graph structure of concepts — what binds to what? Name the edges, not just the nodes
 - Kolmogorov-minimal description that preserves ALL threads — intelligent compression, not lossy
 - Tangents dropped, ideas not followed up, things tabled — each one as a pullable thread
@@ -207,7 +207,7 @@ What to capture:
 - Error-triage section: patterns Nick had to correct, framed as "what changed" rather than "who was wrong"
 
 Actions:
-1. Write everything to <SD>/consolidation.md as a single document with sections: Knowledge Graph / TLAs / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
+1. Write everything to <SD>/consolidation.md as a single document with sections: Knowledge Graph / Domain Terms / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
 2. **Do NOT write to the memory directory directly.** memory-writer is the sole owner of persistent memory writes. If you identify a concept that deserves a standalone memory file, list it under "Memory File Candidates" in consolidation.md with a proposed filename, suggested edges, and a 2-3 sentence body. memory-writer's run is happening in parallel and may already cover it; if not, the candidate will be picked up on the next consolidation pass (or by Nick reading consolidation.md).
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
