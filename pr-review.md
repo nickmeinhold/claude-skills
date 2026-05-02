@@ -61,6 +61,13 @@ Apply any local review criteria in addition to the standard review process.
    - Adherence to project patterns and conventions
    - Test coverage for changed code
    - Breaking changes
+   - **Design appropriateness** — is the type signature right for the problem? Closed sets of identifiers (IDs from a known list, kinds/categories, modes, status enums) should be `enum` / `sealed class` / branded types, not `String` or `int`. Stringly-typing leaks runtime invariants the compiler should enforce. A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
+   - **Language-feature appropriateness** — is the code using current language idioms?
+     - **Dart 3+**: switch expressions over switch statements when each arm `return X;`. Pattern matching for tuple destructuring (`(a, b) || (b, a)` for order-independent algebra). Sealed classes for closed hierarchies. Records over `Map<String, dynamic>` for ad-hoc tuples.
+     - **TypeScript 5+**: `satisfies` over `as`, `const` type parameters, branded types for closed-set IDs.
+     - **Python 3.12+**: structural pattern matching, `Self` types, `TypedDict` Required/NotRequired.
+     - When the project's stack is current, *not* using the modern feature is a code smell. Flag legacy idioms in new code.
+   - **Verify before claiming compile errors.** If you see an unfamiliar API and want to flag it as broken, check the language/SDK version first. CI being green is direct evidence your hypothesis is wrong.
 
 ## Review Format
 
@@ -128,50 +135,3 @@ Events:
 - `APPROVE` - No blocking issues found
 - `REQUEST_CHANGES` - Blocking issues that must be fixed
 - `COMMENT` - Feedback without explicit approval/rejection
-
-## Generate Stakeholder Slides (Optional)
-
-If a stakeholder presentation is needed, generate Google Slides summarizing the review.
-
-**Prerequisites:**
-- Run `npm install` in `~/git/individuals/nickmeinhold/claude-slides`
-- Run `npm run auth` to authenticate with Google (first time only)
-- Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables
-
-**Generate slides:**
-
-1. Create a JSON file with the review data:
-
-```json
-{
-  "prNumber": 123,
-  "prTitle": "PR title here",
-  "prAuthor": "author-username",
-  "prDate": "2024-01-15",
-  "repository": "owner/repo",
-  "summary": "One sentence summary of the changes",
-  "changes": ["Change 1", "Change 2", "Change 3"],
-  "qualityAssessment": {
-    "codeQuality": { "status": "pass", "notes": "Clean code" },
-    "tests": { "status": "pass", "notes": "Good coverage" },
-    "security": { "status": "pass", "notes": "No issues" },
-    "performance": { "status": "pass", "notes": "No concerns" }
-  },
-  "issuesFound": [],
-  "suggestions": ["Optional improvement 1"],
-  "verdict": "APPROVE",
-  "verdictExplanation": "This PR is ready to merge.",
-  "businessImpact": "Improves user experience for feature X",
-  "riskLevel": "low",
-  "riskFactors": [],
-  "affectedAreas": ["User authentication", "Dashboard"]
-}
-```
-
-2. Generate the presentation:
-
-```bash
-cat review-data.json | npx --prefix ~/git/individuals/nickmeinhold/claude-slides claude-slides
-```
-
-3. The command outputs a Google Slides URL that can be shared with stakeholders.
