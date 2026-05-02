@@ -73,5 +73,6 @@ That's expected graceful degradation, not a bug — the full-graph path is the
 floor.
 
 If the divergence ever bites (e.g. focus filtering becomes load-bearing on a
-machine without it), the deferred option is to bring the scripts into this
-repo under a generalized form (path A). For now the ceremony isn't worth it.
+machine without it), the deferred option is to generalize the scripts and
+bring them into this repo. For now the ceremony isn't worth it — the
+scripts reference local memory paths that shouldn't leave the machine.
