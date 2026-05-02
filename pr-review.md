@@ -134,7 +134,7 @@ Events:
 If a stakeholder presentation is needed, generate Google Slides summarizing the review.
 
 **Prerequisites:**
-- Run `npm install` in `~/git/individuals/nickmeinhold/claude-skills`
+- Run `npm install` in `~/git/individuals/nickmeinhold/claude-slides`
 - Run `npm run auth` to authenticate with Google (first time only)
 - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables
 
@@ -171,7 +171,7 @@ If a stakeholder presentation is needed, generate Google Slides summarizing the 
 2. Generate the presentation:
 
 ```bash
-cat review-data.json | npx --prefix ~/git/individuals/nickmeinhold/claude-skills claude-slides
+cat review-data.json | npx --prefix ~/git/individuals/nickmeinhold/claude-slides claude-slides
 ```
 
 3. The command outputs a Google Slides URL that can be shared with stakeholders.
