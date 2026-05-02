@@ -59,7 +59,7 @@ The audience is waiting. Before doing any research, generate a unique temp path 
 
 Run immediately:
 ```bash
-npx claude-slides --config $SLIDE_CONFIG --presentation-id <ID> --update-slide last
+npx --prefix "${CLAUDE_SLIDES_PATH:?CLAUDE_SLIDES_PATH must be set; clone https://github.com/nickmeinhold/claude-slides and export the path}" claude-slides --config $SLIDE_CONFIG --presentation-id <ID> --update-slide last
 ```
 
 This updates the last slide in-place. The audience sees "Researching..." appear within seconds.
@@ -103,7 +103,7 @@ Write the final slide config to the same temp file (`$SLIDE_CONFIG`):
 
 Run:
 ```bash
-npx claude-slides --config $SLIDE_CONFIG --presentation-id <ID> --update-slide last
+npx --prefix "${CLAUDE_SLIDES_PATH:?CLAUDE_SLIDES_PATH must be set; clone https://github.com/nickmeinhold/claude-slides and export the path}" claude-slides --config $SLIDE_CONFIG --presentation-id <ID> --update-slide last
 ```
 
 The audience sees "Researching..." morph into the actual answer — live, no interaction.
@@ -170,4 +170,5 @@ To trigger `/live-qa` from an iPhone (audience asks question, presenter speaks i
 - **SSH enabled on Mac**: System Settings > General > Sharing > Remote Login
 - **claude CLI** accessible via SSH (may need full path, e.g., `/usr/local/bin/claude`)
 - **iPhone and Mac on same network** (or use Tailscale/VPN)
-- **Google OAuth tokens** already set up (`npx claude-slides --auth`)
+- **`CLAUDE_SLIDES_PATH`** env var pointing to a local clone of [claude-slides](https://github.com/nickmeinhold/claude-slides) (see `/slides` skill for setup)
+- **Google OAuth tokens** already set up (`npx --prefix "$CLAUDE_SLIDES_PATH" claude-slides --auth`)
