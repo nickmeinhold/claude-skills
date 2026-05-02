@@ -57,3 +57,22 @@ open ~/.claude/scripts/output/memory_graph.html
   graph is reported and rendered as before.
 - If you change either script's output format, update Step 3 above so the recipe
   doesn't drift from the reality of what the scripts produce.
+
+## Contract with the audit/render scripts
+
+The two scripts at `~/.claude/scripts/memory_graph_audit.py` and
+`memory_graph_render.py` are intentionally personal infrastructure and are
+**not** synced through this repo — they reference local memory paths that
+shouldn't leave the machine.
+
+This skill assumes both scripts accept an optional positional `$ARGUMENTS`
+for focus filtering. On a machine where the scripts predate the `$ARGUMENTS`
+wiring (or are missing the focus feature entirely), the focus argument is
+silently ignored and the skill still produces a full-graph audit and render.
+That's expected graceful degradation, not a bug — the full-graph path is the
+floor.
+
+If the divergence ever bites (e.g. focus filtering becomes load-bearing on a
+machine without it), the deferred option is to generalize the scripts and
+bring them into this repo. For now the ceremony isn't worth it — the
+scripts reference local memory paths that shouldn't leave the machine.
