@@ -16,10 +16,35 @@
 
 set -euo pipefail
 
+# Bash 4+ required for associative arrays (declare -A). macOS ships with
+# bash 3.2 by default; install a current bash via Homebrew (`brew install
+# bash`) and either run this script via `/opt/homebrew/bin/bash` or update
+# the shebang locally. We re-exec under a 4+ shell when one is available.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+  for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [ -x "$candidate" ]; then
+      exec "$candidate" "$0" "$@"
+    fi
+  done
+  echo "ERROR: bash 4+ required (found ${BASH_VERSION:-unknown}). Install via 'brew install bash'." >&2
+  exit 1
+fi
+
 EVAL_ROOT="${HOME}/.claude/persona-eval"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
 
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
+
+# Validate action vocabulary: any value outside the documented enum is a
+# silent skew on the tally (e.g. a typo of "accepted" for "inline" would
+# count toward {a,b}_total but not toward any of the per-action buckets,
+# pulling the accept-rate down). Fail loud instead.
+validate_action() {
+  case "$1" in
+    inline|deferred|rejected) return 0 ;;
+    *) echo "ERROR: unknown action '$1' in outcomes (expected: inline|deferred|rejected)" >&2; return 1 ;;
+  esac
+}
 
 complete_prs=()
 incomplete_prs=()
@@ -67,6 +92,7 @@ for pr in "${complete_prs[@]}"; do
 done
 
 while IFS=$'\t' read -r pr id set reviewer action; do
+  validate_action "$action" || exit 1
   counts["${set}_total"]=$((counts["${set}_total"] + 1))
   counts["${set}_${action}"]=$((counts["${set}_${action}"] + 1))
 done < "$joined"
