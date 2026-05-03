@@ -32,6 +32,9 @@ fi
 
 EVAL_ROOT="${HOME}/.claude/persona-eval"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
+# Cohort prefix for the claude-skills 10-PR experiment. Cross-repo dirs
+# (e.g. tech_world-PR-310/) deliberately don't match this prefix.
+readonly COHORT_PREFIX="claude-skills-PR-"
 
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
 
@@ -49,10 +52,10 @@ validate_action() {
 complete_prs=()
 incomplete_prs=()
 
-for outcomes in "${EVAL_ROOT}"/claude-skills-PR-*/outcomes.json; do
+for outcomes in "${EVAL_ROOT}/${COHORT_PREFIX}"*/outcomes.json; do
   [ -f "$outcomes" ] || continue
   dir=$(dirname "$outcomes")
-  pr=$(basename "$dir" | sed 's/^claude-skills-PR-//')
+  pr=$(basename "$dir" | sed "s/^${COHORT_PREFIX}//")
   mapping="${dir}/mapping.json"
   [ -f "$mapping" ] || { echo "WARN: $dir missing mapping.json — skipping" >&2; continue; }
 
@@ -67,9 +70,9 @@ done
 
 # Aggregate per-set stats over complete PRs
 declare -A counts
-for set in a b; do
+for eval_set in a b; do
   for action in inline deferred rejected total; do
-    counts["${set}_${action}"]=0
+    counts["${eval_set}_${action}"]=0
   done
 done
 
@@ -81,7 +84,7 @@ joined=$(mktemp)
 trap 'rm -f "$joined"' EXIT
 
 for pr in "${complete_prs[@]}"; do
-  dir="${EVAL_ROOT}/claude-skills-PR-${pr}"
+  dir="${EVAL_ROOT}/${COHORT_PREFIX}${pr}"
   jq -r --slurpfile m "${dir}/mapping.json" '
     (.findings | map({(.id|tostring): .action}) | add) as $a
     | $m[0].findings
@@ -91,21 +94,24 @@ for pr in "${complete_prs[@]}"; do
   ' "${dir}/outcomes.json" | awk -v pr="$pr" '{print pr"\t"$0}' >> "$joined"
 done
 
-while IFS=$'\t' read -r pr id set reviewer action; do
+while IFS=$'\t' read -r pr id eval_set reviewer action; do
   validate_action "$action" || exit 1
-  counts["${set}_total"]=$((counts["${set}_total"] + 1))
-  counts["${set}_${action}"]=$((counts["${set}_${action}"] + 1))
+  counts["${eval_set}_total"]=$((counts["${eval_set}_total"] + 1))
+  counts["${eval_set}_${action}"]=$((counts["${eval_set}_${action}"] + 1))
 done < "$joined"
 
 # Per-PR unique findings: a finding is "unique to its set" if no finding from
 # the OTHER set in the same PR shares the same source_line (cheap heuristic;
 # refines if/when we add semantic dedup).
 for pr in "${complete_prs[@]}"; do
-  dir="${EVAL_ROOT}/claude-skills-PR-${pr}"
+  dir="${EVAL_ROOT}/${COHORT_PREFIX}${pr}"
   a_lines=$(jq -r '.findings[] | select(.set=="a") | .source_line' "${dir}/mapping.json" 2>/dev/null | sort -u)
   b_lines=$(jq -r '.findings[] | select(.set=="b") | .source_line' "${dir}/mapping.json" 2>/dev/null | sort -u)
-  ua=$(comm -23 <(echo "$a_lines") <(echo "$b_lines") | grep -cv '^$' || true)
-  ub=$(comm -13 <(echo "$a_lines") <(echo "$b_lines") | grep -cv '^$' || true)
+  # awk handles the zero-non-empty case cleanly: it always exits 0 and prints
+  # n+0. A naive `grep -v '^$' | wc -l` pipeline would trip set -euo pipefail
+  # when both sets share all source_lines (grep exits 1 on zero matches).
+  ua=$(comm -23 <(echo "$a_lines") <(echo "$b_lines") | awk 'NF { n++ } END { print n+0 }')
+  ub=$(comm -13 <(echo "$a_lines") <(echo "$b_lines") | awk 'NF { n++ } END { print n+0 }')
   unique_a=$((unique_a + ua))
   unique_b=$((unique_b + ub))
 done
@@ -137,12 +143,12 @@ pct() {
   echo
   echo "| Set | Total | Inline (accept) | Deferred | Rejected | Accept rate | Defer rate | Reject rate |"
   echo "|-----|-------|-----------------|----------|----------|-------------|------------|-------------|"
-  for set in a b; do
-    label=$([ "$set" = "a" ] && echo "A (wrestling)" || echo "B (book)")
-    t=${counts["${set}_total"]}
-    i=${counts["${set}_inline"]}
-    d=${counts["${set}_deferred"]}
-    r=${counts["${set}_rejected"]}
+  for eval_set in a b; do
+    label=$([ "$eval_set" = "a" ] && echo "A (wrestling)" || echo "B (book)")
+    t=${counts["${eval_set}_total"]}
+    i=${counts["${eval_set}_inline"]}
+    d=${counts["${eval_set}_deferred"]}
+    r=${counts["${eval_set}_rejected"]}
     echo "| $label | $t | $i | $d | $r | $(pct $i $t) | $(pct $d $t) | $(pct $r $t) |"
   done
   echo
