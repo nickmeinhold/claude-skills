@@ -1,0 +1,8 @@
+{
+  "pr": 2,
+  "seed": 2000000002,
+  "findings": [
+    {"id": 1, "set": "a", "reviewer": "maxwell", "source_line": "src/bar.rs:5 identical line both sets"},
+    {"id": 2, "set": "b", "reviewer": "beck", "source_line": "src/bar.rs:5 identical line both sets"}
+  ]
+}
