@@ -394,7 +394,7 @@ if [ -d ~/.claude/persona-eval ]; then
     NEXT=$((EVAL_COUNT + 1))
     echo "Persona eval $NEXT/10 — review blind findings at ~/.claude/persona-eval/claude-skills-PR-$PR_NUMBER/blind-doc.md"
   else
-    echo "Persona eval cohort complete (10/10). Run ~/.claude/persona-eval/eval-tally.sh to see results."
+    echo "Persona eval cohort complete (10/10). Run scripts/eval-tally.sh from the claude-skills repo (or the symlinked ~/.claude/persona-eval/eval-tally.sh) for the verdict."
   fi
 fi
 ```
