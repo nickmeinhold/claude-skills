@@ -30,7 +30,10 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
   exit 1
 fi
 
-EVAL_ROOT="${HOME}/.claude/persona-eval"
+# EVAL_DIR_OVERRIDE: optional env var to point at an alternate cohort root
+# (used by tests/eval-tally/run.sh to redirect the script at a fixture
+# directory). Defaults to ~/.claude/persona-eval for production use.
+EVAL_ROOT="${EVAL_DIR_OVERRIDE:-${HOME}/.claude/persona-eval}"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
 # Cohort prefix for the claude-skills 10-PR experiment. Cross-repo dirs
 # (e.g. tech_world-PR-310/) deliberately don't match this prefix.
@@ -55,7 +58,8 @@ incomplete_prs=()
 for outcomes in "${EVAL_ROOT}/${COHORT_PREFIX}"*/outcomes.json; do
   [ -f "$outcomes" ] || continue
   dir=$(dirname "$outcomes")
-  pr=$(basename "$dir" | sed "s/^${COHORT_PREFIX}//")
+  base=$(basename "$dir")
+  pr=${base#"$COHORT_PREFIX"}
   mapping="${dir}/mapping.json"
   [ -f "$mapping" ] || { echo "WARN: $dir missing mapping.json — skipping" >&2; continue; }
 

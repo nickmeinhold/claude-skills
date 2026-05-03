@@ -1,0 +1,7 @@
+{
+  "pr": 2,
+  "findings": [
+    {"id": 1, "action": "inline", "notes": "fixture: zero-unique case — both sets caught the same line"},
+    {"id": 2, "action": "inline", "notes": "fixture: zero-unique case — both sets caught the same line"}
+  ]
+}

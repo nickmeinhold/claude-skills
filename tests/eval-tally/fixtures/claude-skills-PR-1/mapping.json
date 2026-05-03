@@ -1,0 +1,10 @@
+{
+  "pr": 1,
+  "seed": 1000000001,
+  "findings": [
+    {"id": 1, "set": "a", "reviewer": "maxwell", "source_line": "src/foo.rs:10 unique-to-A finding"},
+    {"id": 2, "set": "a", "reviewer": "carnot", "source_line": "src/foo.rs:20 shared finding both sets caught"},
+    {"id": 3, "set": "b", "reviewer": "beck", "source_line": "src/foo.rs:30 unique-to-B finding"},
+    {"id": 4, "set": "b", "reviewer": "sage", "source_line": "src/foo.rs:20 shared finding both sets caught"}
+  ]
+}

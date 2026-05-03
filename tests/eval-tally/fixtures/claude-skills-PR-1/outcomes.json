@@ -1,0 +1,9 @@
+{
+  "pr": 1,
+  "findings": [
+    {"id": 1, "action": "inline", "notes": "fixture: set A unique catch, accepted"},
+    {"id": 2, "action": "deferred", "notes": "fixture: set A deferred"},
+    {"id": 3, "action": "inline", "notes": "fixture: set B unique catch, accepted"},
+    {"id": 4, "action": "rejected", "notes": "fixture: set B rejected"}
+  ]
+}
