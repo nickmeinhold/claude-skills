@@ -39,7 +39,7 @@ Before starting, write a session summary to prime the agents. This is the critic
    - Emotional highlights — what was exciting, surprising, frustrating
    - Be exhaustive. The agents only know what you write here.
 
-Use `<SD>` as a literal placeholder below for the full session directory path. **The orchestrator MUST substitute `<SD>` with the actual absolute path (`/Users/nick/.claude/consolidation/<session-id>/`) before sending any agent brief.** Never send `~/.claude/consolidation/latest/` or the literal string `<SD>` to an agent — both fail under parallel-tab consolidation, the first because the symlink can move, the second because agents will faithfully look for a file named `<SD>`.
+Use `{{SESSION_DIR}}` as a literal placeholder below for the full session directory path. **The orchestrator MUST substitute `{{SESSION_DIR}}` with the actual absolute path (`/Users/nick/.claude/consolidation/<session-id>/`) before sending any agent brief.** Never send `~/.claude/consolidation/latest/` or an unsubstituted `{{SESSION_DIR}}` token to an agent — the symlink can move under parallel-tab consolidation, and an unsubstituted placeholder fails as a path because agents will faithfully look for a file named `{{SESSION_DIR}}`.
 
 ## Phase 0a: Affective marker surfacing (BEFORE the agent phases)
 
@@ -78,7 +78,7 @@ Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. D
 
 Show the dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall. The "yes" rows seed the conversation with anchored memories Nick now recognises, which feeds richer content into the session-summary above (you may want to amend it).
 
-Write the surfaced + triaged dotpoints to `<SD>/affective-highlights.md` so the Phase 1+ agents can use them.
+Write the surfaced + triaged dotpoints to `{{SESSION_DIR}}/affective-highlights.md` so the Phase 1+ agents can use them.
 
 ## Phase 0b: Three-pole retrospective (Maxwell + Kelvin + Carnot)
 
@@ -101,7 +101,7 @@ codex exec "You are CarnotCodeCarver — perfectionist measuring against theoret
 CARNOT_PID=$!
 
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
-# Compose your own surprises/mistakes/crux directly to <SD>/maxwell-retro.md.
+# Compose your own surprises/mistakes/crux directly to $SD/maxwell-retro.md.
 
 # Wait for both
 until ! ps -p $KELVIN_PID $CARNOT_PID > /dev/null 2>&1; do sleep 5; done
@@ -124,7 +124,7 @@ Read all three retrospectives. Synthesise into a single **agent-side conversatio
 
 Present to Nick as the seed for the Phase-0-style conversation questions ("what surprised us / what did we get wrong / what's the crux"). **Nick's job is gating, not generating** — he validates which findings ring true rather than recalling cold.
 
-Write the synthesis to `<SD>/multi-perspective-retro.md`.
+Write the synthesis to `{{SESSION_DIR}}/multi-perspective-retro.md`.
 
 ## Phase 1: Three specialized agents (2 parallel, then 1)
 
@@ -132,10 +132,10 @@ Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated
 
 Earlier versions of this skill ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). That serialization had one real semantic dependency (next-session-prompter needs the knowledge graph + forward plan) and a lot of incidental coupling that didn't need to be sequential. Splitting into three **specialized** agents — two of them in parallel, the third gated on knowledge-mapper's output — dropped wall-clock to ~2 min in the 2026-05-01 test run, with no loss of fidelity.
 
-**File ownership is exclusive.** Each agent owns one output file in `<SD>/`; no shared writes, no append races:
-- `memory-writer` → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `<SD>/scorecard.json` + `<SD>/open-tasks.md` + `~/.claude/wins.md`
-- `knowledge-mapper` → `<SD>/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer)
-- `next-session-prompter` → `<SD>/next-session-prompt.md` only
+**File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
+- `memory-writer` → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `~/.claude/wins.md`
+- `knowledge-mapper` → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer)
+- `next-session-prompter` → `{{SESSION_DIR}}/next-session-prompt.md` only
 
 The exclusivity is what makes "first-writer wins" unnecessary — there is no second writer.
 
@@ -150,7 +150,7 @@ Generic general-purpose agents do all three competently but none crisply. Specia
 
 ### Known-OK semantic overlap (different surfaces, not shared files)
 
-memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson (e.g. "verify before claiming"). memory-writer writes it as a `feedback_*.md` in the memory directory and indexes it in MEMORY.md; knowledge-mapper names it as a node in `<SD>/consolidation.md`'s graph. **Both writes are intended** — different surfaces serve different consumers (the persistent memory layer vs. the next-session reader). No reconciliation needed because no file is shared.
+memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson (e.g. "verify before claiming"). memory-writer writes it as a `feedback_*.md` in the memory directory and indexes it in MEMORY.md; knowledge-mapper names it as a node in `{{SESSION_DIR}}/consolidation.md`'s graph. **Both writes are intended** — different surfaces serve different consumers (the persistent memory layer vs. the next-session reader). No reconciliation needed because no file is shared.
 
 This is *semantic* redundancy, not a *file-write* race. Don't conflate the two: file-write races are bugs (and we don't have any in this design); semantic redundancy across distinct files is cheap insurance against either agent missing the lesson.
 
@@ -163,7 +163,7 @@ This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<se
 ### Spawn order
 
 1. **Spawn memory-writer and knowledge-mapper in parallel** (single message, two foreground agent calls). Wait for both to complete.
-2. **Then spawn next-session-prompter** as a single foreground agent. It reads `<SD>/consolidation.md` (knowledge-mapper's output), so it must run after knowledge-mapper.
+2. **Then spawn next-session-prompter** as a single foreground agent. It reads `{{SESSION_DIR}}/consolidation.md` (knowledge-mapper's output), so it must run after knowledge-mapper.
 3. Wait for next-session-prompter to complete before wrap-up.
 
 This is 2 phases of agent execution, not 3. The 2026-05-01 wall-clock measurement (~2 min) reflects this shape, not a 3-way fan-out.
@@ -171,9 +171,9 @@ This is 2 phases of agent execution, not 3. The 2026-05-01 wall-clock measuremen
 #### Agent 1: memory-writer
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `<SD>` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes.
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes.
 
-Read <SD>/memory-path.txt to get the correct memory directory path. Then read <SD>/session-summary.md — this is a summary of a session that just happened.
+Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md — this is a summary of a session that just happened.
 
 Your job is the FILE-AND-INDEX side of consolidation: error triage, memory file writes/updates, MEMORY.md index maintenance, memory-health.json updates, scorecard, and the open-tasks dump.
 
@@ -183,24 +183,24 @@ Actions:
 1. **Error triage**: scan the session for mistakes, corrections from Nick, and process misses. For each TRANSFORM-worthy lesson (the kind that should change future behavior), write or update a feedback_*.md memory file.
 2. **Memory writes**: for every concept, project, or reference worth keeping, write/update a memory file. Update MEMORY.md to index new files with appropriate edges (`←` derives_from, `⊕` extends, `~` analogous_to, `↔` contrasts, `⊗` joint_synthesis).
 3. **memory-health.json**: update access counts and decay-class entries for any memory files touched this session.
-4. **Scorecard**: write <SD>/scorecard.json with your own counts — files written, files updated, MEMORY.md edits, errors triaged. You know your own work; no reason to defer this to a separate pass.
-5. **Open-tasks dump (human-readable)**: write <SD>/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
+4. **Scorecard**: write {{SESSION_DIR}}/scorecard.json with your own counts — files written, files updated, MEMORY.md edits, errors triaged. You know your own work; no reason to defer this to a separate pass.
+5. **Open-tasks dump (human-readable)**: write {{SESSION_DIR}}/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
 
    > These tasks are session-scoped (they live in ~/.claude/tasks/<session-uuid>/ and won't be visible to a fresh session). To make them live again next session, recreate each via TaskCreate.
 
-   If the snapshot is empty (no pending/in_progress tasks), still create <SD>/open-tasks.md with the header line and a body of "No open tasks at consolidation time." — the file's existence is what next-session-prompter checks.
+   If the snapshot is empty (no pending/in_progress tasks), still create {{SESSION_DIR}}/open-tasks.md with the header line and a body of "No open tasks at consolidation time." — the file's existence is what next-session-prompter checks.
 
 6. **Pending-tasks snapshot (machine-readable, project-keyed)** — broken into three sub-steps so each concern is explicit:
 
-   - **6a. Resolve the target path.** Read `<SD>/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). The target file is `<MEMORY_DIR>/pending-tasks.json`. Filing it under the project memory dir (not `<SD>/`) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. This is the file the wake-up protocol's auto-restore reads (CLAUDE.md step 10).
+   - **6a. Resolve the target path.** Read `{{SESSION_DIR}}/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). The target file is `<MEMORY_DIR>/pending-tasks.json`. Filing it under the project memory dir (not `{{SESSION_DIR}}/`) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. This is the file the wake-up protocol's auto-restore reads (CLAUDE.md step 10).
 
    - **6b. Write the JSON snapshot.** Write the TaskList snapshot verbatim as a JSON array, one object per task, fields `subject` / `description` / `activeForm`. Schema must match exactly — the wake-up step maps these fields directly into `TaskCreate` calls.
 
-   - **6c. Empty-snapshot semantics + overwrite policy.** If the snapshot is empty, still write `[]` — the wake-up step's existence check is the contract; an absent file means "no consolidation has run", an empty array means "consolidation ran, no tasks were pending". If a `pending-tasks.json` already exists at the target path from a prior unrestored session, overwrite it: the TaskList snapshot from the most-recent consolidation is authoritative. If the prior session had pending tasks Nick still wanted, they're recoverable from MEMORY.md or that session's `<SD>/open-tasks.md` — so the last-writer-wins behavior here is bounded, not silent data loss.
+   - **6c. Empty-snapshot semantics + overwrite policy.** If the snapshot is empty, still write `[]` — the wake-up step's existence check is the contract; an absent file means "no consolidation has run", an empty array means "consolidation ran, no tasks were pending". If a `pending-tasks.json` already exists at the target path from a prior unrestored session, overwrite it: the TaskList snapshot from the most-recent consolidation is authoritative. If the prior session had pending tasks Nick still wanted, they're recoverable from MEMORY.md or that session's `{{SESSION_DIR}}/open-tasks.md` — so the last-writer-wins behavior here is bounded, not silent data loss.
 
 7. **Append wins** from this session to ~/.claude/wins.md (with today's date).
 
-Do NOT write <SD>/next-session-prompt.md — that file is owned exclusively by the next-session-prompter agent.
+Do NOT write {{SESSION_DIR}}/next-session-prompt.md — that file is owned exclusively by the next-session-prompter agent.
 
 TaskList snapshot (from orchestrator) — JSON array, one object per task:
 ```json
@@ -217,9 +217,9 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 #### Agent 2: knowledge-mapper
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `<SD>` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes (this is exactly how knowledge-mapper lost its first-pass output on 2026-05-02→03).
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes (this is exactly how knowledge-mapper lost its first-pass output on 2026-05-02→03).
 
-Read <SD>/memory-path.txt to get the correct memory directory path. Then read <SD>/session-summary.md.
+Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md.
 
 Nick says: "Are you really really sure you got everything... this context is a frickin goldmine! Remember to check for TLAs (Three Letter Acronyms). Are there any concepts that bind each other together? What's the Kolmogorov complexity here? Don't compress to the point of extinction but let's make sure all of the threads are available to pull on next session."
 
@@ -234,7 +234,7 @@ What to capture:
 - Error-triage section: patterns Nick had to correct, framed as "what changed" rather than "who was wrong"
 
 Actions:
-1. Write everything to <SD>/consolidation.md as a single document with sections: Knowledge Graph / Domain Terms / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
+1. Write everything to {{SESSION_DIR}}/consolidation.md as a single document with sections: Knowledge Graph / Domain Terms / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
 2. **Do NOT write to the memory directory directly.** memory-writer is the sole owner of persistent memory writes. If you identify a concept that deserves a standalone memory file, list it under "Memory File Candidates" in consolidation.md with a proposed filename, suggested edges, and a 2-3 sentence body. memory-writer's run is happening in parallel and may already cover it; if not, the candidate will be picked up on the next consolidation pass (or by Nick reading consolidation.md).
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
@@ -243,14 +243,14 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 #### Agent 3: next-session-prompter (runs AFTER knowledge-mapper)
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `<SD>` reference below. Do NOT resolve through `~/.claude/consolidation/latest/`.
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/`.
 
 Read these files (all of them — they are your full input):
-- <SD>/session-summary.md (what happened)
-- <SD>/consolidation.md (knowledge graph + forward plan + dropped tangents — written by knowledge-mapper, which has just completed)
-- <SD>/open-tasks.md (deferred tasks dump — written by memory-writer; may say "No open tasks at consolidation time.")
-- <SD>/affective-highlights.md (Nick-triaged emotional anchors, if present)
-- <SD>/multi-perspective-retro.md (three-pole retrospective synthesis, if present)
+- {{SESSION_DIR}}/session-summary.md (what happened)
+- {{SESSION_DIR}}/consolidation.md (knowledge graph + forward plan + dropped tangents — written by knowledge-mapper, which has just completed)
+- {{SESSION_DIR}}/open-tasks.md (deferred tasks dump — written by memory-writer; may say "No open tasks at consolidation time.")
+- {{SESSION_DIR}}/affective-highlights.md (Nick-triaged emotional anchors, if present)
+- {{SESSION_DIR}}/multi-perspective-retro.md (three-pole retrospective synthesis, if present)
 
 Nick says: "Ok what's the prompt for the next session? Let's aim for 5's across the board."
 
@@ -262,16 +262,16 @@ Your job is THE COLD READER's onboarding: craft a session-opening prompt for a f
 - Transfer — does this teach a reusable pattern?
 
 The prompt should:
-- Reference the crux and forward plan from <SD>/consolidation.md so the cold reader inherits the structure, not just the topic
+- Reference the crux and forward plan from {{SESSION_DIR}}/consolidation.md so the cold reader inherits the structure, not just the topic
 - Give enough context to pick up without re-reading everything
 - Be exciting — make the next instance want to dive in
 - Set up challenge-skill balance — not trivially easy, not overwhelmingly vague
 - Include engagement score targets and why 5's are achievable
 - Be ready to paste directly into a new session
-- Include a one-line pointer near the top: "Open tasks from previous session: see <SD>/open-tasks.md — recreate via TaskCreate if you want them live." (Skip this line only if open-tasks.md says "No open tasks at consolidation time.")
+- Include a one-line pointer near the top: "Open tasks from previous session: see {{SESSION_DIR}}/open-tasks.md — recreate via TaskCreate if you want them live." (Skip this line only if open-tasks.md says "No open tasks at consolidation time.")
 
 Actions:
-1. WRITE (overwrite) <SD>/next-session-prompt.md with the full prompt. You are the sole owner of this file; no other agent writes to it.
+1. WRITE (overwrite) {{SESSION_DIR}}/next-session-prompt.md with the full prompt. You are the sole owner of this file; no other agent writes to it.
 2. Score the projected engagement honestly — if some dimensions are naturally lower, say so.
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
@@ -279,13 +279,13 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 
 ### After all three return
 
-Show Nick a **one-line** status per agent (3 lines total). Read `<SD>/next-session-prompt.md` back into context and present it — that's the one deliverable Nick needs to copy-paste. Don't read `consolidation.md` or `open-tasks.md` back; Nick can review `<SD>/` directly if he wants detail.
+Show Nick a **one-line** status per agent (3 lines total). Read `{{SESSION_DIR}}/next-session-prompt.md` back into context and present it — that's the one deliverable Nick needs to copy-paste. Don't read `consolidation.md` or `open-tasks.md` back; Nick can review `{{SESSION_DIR}}/` directly if he wants detail.
 
 ## Wrap-up
 
 After Phase 1 completes:
 - Confirm memory files were written (memory-writer's status line)
 - Show Nick the final next-session prompt
-- Mention `<SD>/open-tasks.md` exists if there were any open tasks — call it out so Nick knows it's there
-- Let him know the full consolidation is at `<SD>/` if he wants to review any artifact
+- Mention `{{SESSION_DIR}}/open-tasks.md` exists if there were any open tasks — call it out so Nick knows it's there
+- Let him know the full consolidation is at `{{SESSION_DIR}}/` if he wants to review any artifact
 - Previous runs are preserved in `~/.claude/consolidation/` with their timestamps
