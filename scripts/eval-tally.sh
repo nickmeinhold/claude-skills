@@ -34,7 +34,7 @@ EVAL_ROOT="${HOME}/.claude/persona-eval"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
 # Cohort prefix for the claude-skills 10-PR experiment. Cross-repo dirs
 # (e.g. tech_world-PR-310/) deliberately don't match this prefix.
-COHORT_PREFIX="claude-skills-PR-"
+readonly COHORT_PREFIX="claude-skills-PR-"
 
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
 
