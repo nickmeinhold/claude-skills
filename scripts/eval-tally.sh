@@ -107,8 +107,11 @@ for pr in "${complete_prs[@]}"; do
   dir="${EVAL_ROOT}/${COHORT_PREFIX}${pr}"
   a_lines=$(jq -r '.findings[] | select(.set=="a") | .source_line' "${dir}/mapping.json" 2>/dev/null | sort -u)
   b_lines=$(jq -r '.findings[] | select(.set=="b") | .source_line' "${dir}/mapping.json" 2>/dev/null | sort -u)
-  ua=$(comm -23 <(echo "$a_lines") <(echo "$b_lines") | grep -v '^$' | wc -l | tr -d ' ')
-  ub=$(comm -13 <(echo "$a_lines") <(echo "$b_lines") | grep -v '^$' | wc -l | tr -d ' ')
+  # awk handles the zero-non-empty case cleanly: it always exits 0 and prints
+  # n+0. A naive `grep -v '^$' | wc -l` pipeline would trip set -euo pipefail
+  # when both sets share all source_lines (grep exits 1 on zero matches).
+  ua=$(comm -23 <(echo "$a_lines") <(echo "$b_lines") | awk 'NF { n++ } END { print n+0 }')
+  ub=$(comm -13 <(echo "$a_lines") <(echo "$b_lines") | awk 'NF { n++ } END { print n+0 }')
   unique_a=$((unique_a + ua))
   unique_b=$((unique_b + ub))
 done
