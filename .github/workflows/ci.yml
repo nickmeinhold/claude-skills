@@ -35,9 +35,12 @@ jobs:
           # It's irrelevant to changes that touch only:
           #   - Markdown / text / LICENSE (docs)
           #   - Shell scripts (*.sh) and anything under scripts/ (no JS to build/test)
+          #   - Bats test files (*.bats) and shell-test fixtures under tests/
+          #     install-symlinks/ or tests/eval-tally/
+          #   - GitHub Actions workflow YAML under .github/workflows/ (no JS)
           # Skipping these PRs avoids spurious failures from setup-node@v4
-          # looking for a non-existent package-lock.json (see PRs #24, #27).
-          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh)$|^LICENSE|^\.github/.*\.md$|^scripts/' || true)
+          # looking for a non-existent package-lock.json (see PRs #24, #27, #35).
+          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh|bats)$|^LICENSE|^\.github/(.*\.md|workflows/.*\.ya?ml)$|^scripts/|^tests/(install-symlinks|eval-tally)/' || true)
 
           if [ -z "$CODE_CHANGES" ]; then
             echo "skip_npm_pipeline=true" >> $GITHUB_OUTPUT
