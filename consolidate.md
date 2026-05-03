@@ -101,7 +101,7 @@ codex exec "You are CarnotCodeCarver — perfectionist measuring against theoret
 CARNOT_PID=$!
 
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
-# Compose your own surprises/mistakes/crux directly to {{SESSION_DIR}}/maxwell-retro.md.
+# Compose your own surprises/mistakes/crux directly to $SD/maxwell-retro.md.
 
 # Wait for both
 until ! ps -p $KELVIN_PID $CARNOT_PID > /dev/null 2>&1; do sleep 5; done
