@@ -7,7 +7,8 @@ description: A/B cage-match — runs both persona sets (production wrestling vs 
 
 Forward A/B experiment: run cage-match TWICE against the same diff, with two
 persona sets, and present the merged findings blind so Nick's accept / defer /
-reject tagging is unbiased. After 10 PRs, `~/.claude/persona-eval/eval-tally.sh`
+reject tagging is unbiased. After 10 PRs, `scripts/eval-tally.sh` in this repo
+(also reachable via the symlinked `~/.claude/persona-eval/eval-tally.sh`)
 settles the design question empirically.
 
 The cage-match *structure* is held constant — three reviewers, parallel,
@@ -315,4 +316,4 @@ Print to Nick:
 
 ## After PR 10
 
-Run `~/.claude/persona-eval/eval-tally.sh` for the verdict.
+Run `scripts/eval-tally.sh` from the claude-skills repo (or the symlinked `~/.claude/persona-eval/eval-tally.sh`) for the verdict.
