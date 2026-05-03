@@ -26,45 +26,50 @@ jobs:
             HEAD=${{ github.sha }}
           fi
 
-          # Get changed files, excluding docs
-          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE|^\.github/.*\.md$' || true)
+          # Determine whether to skip the npm pipeline (setup-node/npm ci/build/test).
+          # It's irrelevant to changes that touch only:
+          #   - Markdown / text / LICENSE (docs)
+          #   - Shell scripts (*.sh) and anything under scripts/ (no JS to build/test)
+          # Skipping these PRs avoids spurious failures from setup-node@v4
+          # looking for a non-existent package-lock.json (see PRs #24, #27).
+          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh)$|^LICENSE|^\.github/.*\.md$|^scripts/' || true)
 
           if [ -z "$CODE_CHANGES" ]; then
-            echo "docs_only=true" >> $GITHUB_OUTPUT
-            echo "Only documentation changes detected - skipping tests"
+            echo "skip_npm_pipeline=true" >> $GITHUB_OUTPUT
+            echo "Only documentation/shell changes detected - skipping tests"
           else
-            echo "docs_only=false" >> $GITHUB_OUTPUT
+            echo "skip_npm_pipeline=false" >> $GITHUB_OUTPUT
             echo "Code changes detected:"
             echo "$CODE_CHANGES"
           fi
 
       - name: Setup Node.js
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.skip_npm_pipeline != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.skip_npm_pipeline != 'true'
         run: npm ci
 
       - name: Build
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.skip_npm_pipeline != 'true'
         run: npm run build
 
       - name: Run tests with coverage
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.skip_npm_pipeline != 'true'
         run: npm run test:coverage
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
-        if: steps.changes.outputs.docs_only != 'true' && always()
+        if: steps.changes.outputs.skip_npm_pipeline != 'true' && always()
         with:
           name: coverage-report
           path: coverage/
           retention-days: 7
 
-      - name: Skip tests (docs only)
-        if: steps.changes.outputs.docs_only == 'true'
-        run: echo "Skipping tests - documentation only changes"
+      - name: Skip tests (docs/shell only)
+        if: steps.changes.outputs.skip_npm_pipeline == 'true'
+        run: echo "Skipping tests - documentation/shell-only changes"
