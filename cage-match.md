@@ -124,7 +124,28 @@ fi
 
 Carnot is invoked via `codex exec` (general non-interactive prompt mode) rather than `codex review`, because we want the same prompt-driven review style as Kelvin (PR info + diff fed in via the prompt) — `codex review` operates on local repo state, which doesn't match this skill's "review by diff" pattern. `codex exec` reads stdin when prompt is `-`; we feed the full prompt that way.
 
+**Why the JSON schema?** Carnot (Codex `gpt-5.5` at `xhigh` reasoning) defaults to tool-exploration when handed a free-form review prompt, even when the brief says "trust build/test claims, don't run tools." The exploration-transcript-with-unfilled-template-at-end was the failure mode that triggered claude-skills #25 (brief tightening) and recurred on 2026-05-03 anyway. The fix that *actually* works is `--output-schema`: the OpenAI API enforces structured output server-side, so Carnot literally cannot return an unfilled template. Pair with `--output-last-message` to get only the structured JSON in the output file (no preamble, no tool transcript). Then `jq` reshapes the JSON into the same markdown the rest of the skill expects.
+
+OpenAI strict-mode schemas require **every** property listed in `required`. The schema below lists `verdict`, `summary`, `findings`, `good`, `concerns` — all five — so the call won't be rejected at validation.
+
 ```bash
+# Schema written per-PR so concurrent /cage-match invocations on different PRs don't collide.
+cat > /tmp/carnot-schema-$1.json <<'SCHEMA_EOF'
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"]},
+    "summary": {"type": "string"},
+    "findings": {"type": "array", "items": {"type": "string"}},
+    "good": {"type": "array", "items": {"type": "string"}},
+    "concerns": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["verdict", "summary", "findings", "good", "concerns"]
+}
+SCHEMA_EOF
+
 # Backgrounded alongside Kelvin. wait $CARNOT_PID below.
 # Disable Dart/Flutter unified-analytics so any incidental `dart` invocation
 # inside Carnot's review doesn't trip the read-only sandbox by trying to
@@ -132,7 +153,7 @@ Carnot is invoked via `codex exec` (general non-interactive prompt mode) rather 
 # update-notifier (npm logs an update banner to ~/.npm). Belt-and-braces
 # for the "trust build/test claims" rule above — if Carnot runs a tool
 # despite the rule, at least the failure mode isn't a sandbox panic.
-cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check - > /tmp/carnot-review-$1.md 2>&1 &
+cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 &
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
@@ -143,38 +164,39 @@ Your character:
 - Be theatrical but TECHNICALLY RIGOROUS — your authority comes from the math, not the swagger
 - Different inductive bias from Maxwell (Claude) and Kelvin (Gemini) — your job is to catch what they'd both miss
 
-Review this PR and provide your verdict. Be specific with file:line references.
+Review this PR. The output schema enforces structured JSON — fill every field. \`findings\`, \`good\`, and \`concerns\` are arrays of strings; each string can be a full bullet point including file:line references and quoted code where useful. The personality voice belongs in the prose of those bullets, not in extra fields. Be specific.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
 - Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
-- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
+- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or \`pubspec.yaml\`/\`package.json\` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like \`dart test\` / \`flutter test\` / \`npm test\` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
 $PR_INFO
 
 Diff:
 $PR_DIFF
-
-Format your response EXACTLY as below (no preamble, no postscript):
-
-## CarnotCodeCarver's Review
-
-**Verdict:** [APPROVE/REQUEST_CHANGES/COMMENT]
-
-**Summary:** [One sentence]
-
-**Findings:**
-- [List each issue with file:line references]
-
-**The Good:**
-- [What's done well]
-
-**The Concerns:**
-- [What needs attention]
 EOF
 CARNOT_PID=$!
+```
+
+After Carnot resolves (in Step D below), reshape the structured JSON into the markdown format the rest of the skill expects (`/tmp/carnot-review-$1.md`). The conversion is a single `jq` filter:
+
+```bash
+# Run after `wait $CARNOT_PID`. If the JSON output file doesn't exist or
+# is empty, the carnot_ok() check downstream will catch it and the gate
+# will refuse to proxy-sign-off.
+if [ -s /tmp/carnot-output-$1.json ]; then
+  jq -r '
+    "## CarnotCodeCarver'\''s Review\n\n" +
+    "**Verdict:** \(.verdict)\n\n" +
+    "**Summary:** \(.summary)\n\n" +
+    "**Findings:**\n" + ((.findings // []) | map("- \(.)") | join("\n")) + "\n\n" +
+    "**The Good:**\n" + ((.good // []) | map("- \(.)") | join("\n")) + "\n\n" +
+    "**The Concerns:**\n" + ((.concerns // []) | map("- \(.)") | join("\n"))
+  ' /tmp/carnot-output-$1.json > /tmp/carnot-review-$1.md
+fi
 ```
 
 **Step C — compose Maxwell's review in-process while Kelvin and Carnot resolve:**
@@ -236,6 +258,20 @@ fi
 wait $CARNOT_PID
 CARNOT_RC=$?
 
+# Convert Carnot's structured JSON output to the markdown format the rest
+# of the skill expects. Skipped silently if the JSON file is missing or
+# empty — `carnot_ok` below will catch those failure modes.
+if [ -s /tmp/carnot-output-$1.json ]; then
+  jq -r '
+    "## CarnotCodeCarver'\''s Review\n\n" +
+    "**Verdict:** \(.verdict)\n\n" +
+    "**Summary:** \(.summary)\n\n" +
+    "**Findings:**\n" + ((.findings // []) | map("- \(.)") | join("\n")) + "\n\n" +
+    "**The Good:**\n" + ((.good // []) | map("- \(.)") | join("\n")) + "\n\n" +
+    "**The Concerns:**\n" + ((.concerns // []) | map("- \(.)") | join("\n"))
+  ' /tmp/carnot-output-$1.json > /tmp/carnot-review-$1.md
+fi
+
 # Validate that each output file actually contains a review (non-trivial size + verdict marker).
 # An empty file or one without "Verdict:" indicates the reviewer errored or hit a capacity limit.
 kelvin_ok() {
@@ -244,11 +280,17 @@ kelvin_ok() {
     && [ "$(wc -c < /tmp/kelvin-review-$1.md)" -gt 200 ] \
     && grep -q "Verdict:" /tmp/kelvin-review-$1.md
 }
+# Carnot validates against the structured JSON (the source of truth)
+# rather than the rendered markdown, so a botched jq filter doesn't
+# silently demote a good review to "unavailable". The JSON must parse
+# AND have a non-empty verdict matching one of the schema's enum
+# values.
 carnot_ok() {
   [ "$CARNOT_RC" -eq 0 ] \
-    && [ -s /tmp/carnot-review-$1.md ] \
-    && [ "$(wc -c < /tmp/carnot-review-$1.md)" -gt 200 ] \
-    && grep -q "Verdict:" /tmp/carnot-review-$1.md
+    && [ -s /tmp/carnot-output-$1.json ] \
+    && jq -e '.verdict | IN("APPROVE", "REQUEST_CHANGES", "COMMENT")' \
+         /tmp/carnot-output-$1.json >/dev/null 2>&1 \
+    && [ -s /tmp/carnot-review-$1.md ]
 }
 
 KELVIN_AVAILABLE=0
@@ -278,8 +320,10 @@ if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ]; then
   echo "Kelvin (Gemini) exit=$KELVIN_RC. Tail of /tmp/kelvin-review-$1.md:"
   tail -20 /tmp/kelvin-review-$1.md 2>/dev/null
   echo ""
-  echo "Carnot (Codex) exit=$CARNOT_RC. Tail of /tmp/carnot-review-$1.md:"
-  tail -20 /tmp/carnot-review-$1.md 2>/dev/null
+  echo "Carnot (Codex) exit=$CARNOT_RC. Tail of /tmp/carnot-stdout-$1.log:"
+  tail -20 /tmp/carnot-stdout-$1.log 2>/dev/null
+  echo "Structured-output JSON (if any) at /tmp/carnot-output-$1.json:"
+  cat /tmp/carnot-output-$1.json 2>/dev/null
   echo ""
   echo "Refusing to proceed: Maxwell alone is not a valid dual review."
   echo "Investigate (capacity limits? auth? CLI error?) and re-run /cage-match."
