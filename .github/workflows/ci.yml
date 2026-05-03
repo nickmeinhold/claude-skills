@@ -26,12 +26,17 @@ jobs:
             HEAD=${{ github.sha }}
           fi
 
-          # Get changed files, excluding docs
-          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt)$|^LICENSE|^\.github/.*\.md$' || true)
+          # Get changed files, excluding docs and shell-only changes.
+          # The npm pipeline (setup-node/npm ci/build/test) is irrelevant to:
+          #   - Markdown / text / LICENSE (docs)
+          #   - Shell scripts (*.sh) and anything under scripts/ (no JS to build/test)
+          # Skipping shell-only PRs avoids spurious failures from setup-node@v4
+          # looking for a non-existent package-lock.json (see PRs #24, #27).
+          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh)$|^LICENSE|^\.github/.*\.md$|^scripts/' || true)
 
           if [ -z "$CODE_CHANGES" ]; then
             echo "docs_only=true" >> $GITHUB_OUTPUT
-            echo "Only documentation changes detected - skipping tests"
+            echo "Only documentation/shell changes detected - skipping tests"
           else
             echo "docs_only=false" >> $GITHUB_OUTPUT
             echo "Code changes detected:"
@@ -65,6 +70,6 @@ jobs:
           path: coverage/
           retention-days: 7
 
-      - name: Skip tests (docs only)
+      - name: Skip tests (docs/shell only)
         if: steps.changes.outputs.docs_only == 'true'
-        run: echo "Skipping tests - documentation only changes"
+        run: echo "Skipping tests - documentation/shell-only changes"
