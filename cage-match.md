@@ -124,7 +124,9 @@ fi
 
 Carnot is invoked via `codex exec` (general non-interactive prompt mode) rather than `codex review`, because we want the same prompt-driven review style as Kelvin (PR info + diff fed in via the prompt) — `codex review` operates on local repo state, which doesn't match this skill's "review by diff" pattern. `codex exec` reads stdin when prompt is `-`; we feed the full prompt that way.
 
-**Why the JSON schema?** Carnot (Codex `gpt-5.5` at `xhigh` reasoning) defaults to tool-exploration when handed a free-form review prompt, even when the brief says "trust build/test claims, don't run tools." The exploration-transcript-with-unfilled-template-at-end was the failure mode that triggered claude-skills #25 (brief tightening) and recurred on 2026-05-03 anyway. The fix that *actually* works is `--output-schema`: the OpenAI API enforces structured output server-side, so Carnot literally cannot return an unfilled template. Pair with `--output-last-message` to get only the structured JSON in the output file (no preamble, no tool transcript). Then `jq` reshapes the JSON into the same markdown the rest of the skill expects.
+**Why the JSON schema?** Carnot (Codex `gpt-5.5`) defaults to tool-exploration when handed a free-form review prompt, even when the brief says "trust build/test claims, don't run tools." The exploration-transcript-with-unfilled-template-at-end was the failure mode that triggered claude-skills #25 (brief tightening) and recurred on 2026-05-03 anyway. The fix that *actually* works is `--output-schema`: the OpenAI API enforces structured output server-side, so Carnot literally cannot return an unfilled template. Pair with `--output-last-message` to get only the structured JSON in the output file (no preamble, no tool transcript). Then `jq` reshapes the JSON into the same markdown the rest of the skill expects.
+
+**Why `model_reasoning_effort=medium`?** The schema enforces output *format* but not whether the model produces a final message at all. At Codex's default `xhigh` reasoning, full-diff cage-match prompts (~70KB) trip the model into deep tool-call exploration that exhausts the timeout before the structured-output stage is reached — so the JSON file ends up missing despite the schema being valid. Empirically, `medium` reasoning on the same diff completes in ~60s with a real review. `low` gives shallow APPROVE-everything reviews; `xhigh` exploration-loops. Medium is the working setting validated 2026-05-03 against `nickmeinhold/downstream` PR #122 (where Carnot caught a real architectural finding — `MediaKey(mediaKey)` lookup paired with `mediaKey: mediaKey` raw insert in two `bin/` scripts — that Maxwell missed).
 
 OpenAI strict-mode schemas require **every** property listed in `required`. The schema below lists `verdict`, `summary`, `findings`, `good`, `concerns` — all five — so the call won't be rejected at validation.
 
@@ -153,7 +155,7 @@ SCHEMA_EOF
 # update-notifier (npm logs an update banner to ~/.npm). Belt-and-braces
 # for the "trust build/test claims" rule above — if Carnot runs a tool
 # despite the rule, at least the failure mode isn't a sandbox panic.
-cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 &
+cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 &
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
