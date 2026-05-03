@@ -92,7 +92,7 @@ In addition to bugs, security issues, performance, and code quality, evaluate **
 - Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
-- **Verify before claiming bugs.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. If the build passes (CI green), your hypothesis is wrong.
+- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
 $PR_INFO
@@ -126,7 +126,13 @@ Carnot is invoked via `codex exec` (general non-interactive prompt mode) rather 
 
 ```bash
 # Backgrounded alongside Kelvin. wait $CARNOT_PID below.
-cat <<EOF | codex exec --sandbox read-only --skip-git-repo-check - > /tmp/carnot-review-$1.md 2>&1 &
+# Disable Dart/Flutter unified-analytics so any incidental `dart` invocation
+# inside Carnot's review doesn't trip the read-only sandbox by trying to
+# write `~/.dart-tool/dart-flutter-telemetry-session.json`. Same for npm
+# update-notifier (npm logs an update banner to ~/.npm). Belt-and-braces
+# for the "trust build/test claims" rule above — if Carnot runs a tool
+# despite the rule, at least the failure mode isn't a sandbox panic.
+cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check - > /tmp/carnot-review-$1.md 2>&1 &
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
@@ -143,7 +149,7 @@ In addition to bugs, security issues, performance, and code quality, evaluate **
 - Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
-- **Verify before claiming bugs.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. If the build passes (CI green), your hypothesis is wrong.
+- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
 $PR_INFO
