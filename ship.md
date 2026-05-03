@@ -383,13 +383,16 @@ If `~/.claude/persona-eval/` exists, this `/ship` invocation is part of the acti
 
 ```bash
 if [ -d ~/.claude/persona-eval ]; then
-  EVAL_COUNT=$(ls -d ~/.claude/persona-eval/PR-*/ 2>/dev/null | wc -l | tr -d ' ')
+  # Cohort is claude-skills-scoped: only count eval dirs from this repo so a
+  # cross-repo eval invocation (e.g. tech_world-PR-310) doesn't consume an
+  # experiment slot. cage-match-eval namespaces dirs as <repo>-PR-<num>/.
+  EVAL_COUNT=$(ls -d ~/.claude/persona-eval/claude-skills-PR-*/ 2>/dev/null | wc -l | tr -d ' ')
   if [ "$EVAL_COUNT" -lt 10 ]; then
-    # Run the eval against this PR. Writes to ~/.claude/persona-eval/PR-$PR_NUMBER/
+    # Run the eval against this PR. Writes to ~/.claude/persona-eval/claude-skills-PR-$PR_NUMBER/
     # (set-a-findings.md, set-b-findings.md, blind-doc.md, mapping.json, outcomes.json)
     /cage-match-eval $PR_NUMBER
     NEXT=$((EVAL_COUNT + 1))
-    echo "Persona eval $NEXT/10 — review blind findings at ~/.claude/persona-eval/PR-$PR_NUMBER/blind-doc.md"
+    echo "Persona eval $NEXT/10 — review blind findings at ~/.claude/persona-eval/claude-skills-PR-$PR_NUMBER/blind-doc.md"
   else
     echo "Persona eval cohort complete (10/10). Run ~/.claude/persona-eval/eval-tally.sh to see results."
   fi

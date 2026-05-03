@@ -19,11 +19,16 @@ strict merge gate. Only the *persona prompts* swap. See
 
 ```bash
 PR=$1
-EVAL_DIR=~/.claude/persona-eval/PR-$PR
-mkdir -p $EVAL_DIR
 
 source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
+REPO_NAME=$(basename "$REPO")
+
+# Namespace eval dirs by repo so cross-repo invocations (e.g. running this
+# against a non-claude-skills PR) don't collide with the claude-skills-scoped
+# experiment cohort gated in /ship Step 5.6.
+EVAL_DIR=~/.claude/persona-eval/$REPO_NAME-PR-$PR
+mkdir -p $EVAL_DIR
 
 # Sanity-check Set B prompts are present
 [ -f ~/.claude/persona-eval/personas-b.md ] || {
