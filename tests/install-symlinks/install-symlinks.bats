@@ -99,7 +99,11 @@ teardown() {
   # the real repo: copy the real script into a tempdir and let it resolve
   # REPO_ROOT relative to that copy (so $REPO_ROOT/scripts/eval-tally.sh
   # genuinely doesn't exist).
-  FAKE_REPO="$(mktemp -d)"
+  #
+  # Rooted under $TEST_HOME so teardown's `rm -rf "$TEST_HOME"` always
+  # cleans it up, even if an assertion below fails before we reach the
+  # explicit rm at end-of-test.
+  FAKE_REPO="$(mktemp -d "$TEST_HOME/fakerepo.XXXXXX")"
   mkdir -p "$FAKE_REPO/scripts"
   cp "$SCRIPT" "$FAKE_REPO/scripts/install-symlinks.sh"
   # Deliberately do NOT create $FAKE_REPO/scripts/eval-tally.sh.
@@ -110,8 +114,6 @@ teardown() {
   [[ "$output" == *"refusing to create a dangling symlink"* ]]
   [ ! -e "$TARGET" ]
   [ ! -L "$TARGET" ]
-
-  rm -rf "$FAKE_REPO"
 }
 
 @test "repeated --force runs do not clobber prior backups" {

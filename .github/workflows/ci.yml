@@ -34,12 +34,17 @@ jobs:
           # Determine whether to skip the npm pipeline (setup-node/npm ci/build/test).
           # It's irrelevant to changes that touch only:
           #   - Markdown / text / LICENSE (docs)
-          #   - Shell scripts (*.sh) and anything under scripts/ (no JS to build/test)
-          #   - Bats test files (*.bats) and shell-test fixtures under tests/
-          #     install-symlinks/ or tests/eval-tally/
+          #   - Shell scripts (*.sh) — anywhere — and anything under scripts/
+          #   - Bats test files (*.bats) — anywhere — and the named shell-test
+          #     fixture trees under tests/install-symlinks/ or tests/eval-tally/.
+          #     New shell-test trees should be added to this alternation
+          #     (or, better, the *.bats match covers them automatically).
           #   - GitHub Actions workflow YAML under .github/workflows/ (no JS)
           # Skipping these PRs avoids spurious failures from setup-node@v4
           # looking for a non-existent package-lock.json (see PRs #24, #27, #35).
+          # When a future tests/unit/ tree lands with TS/JS tests, those files
+          # will still trip CODE_CHANGES (no .ts/.js exemption here) and the
+          # full npm pipeline runs as expected.
           CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh|bats)$|^LICENSE|^\.github/(.*\.md|workflows/.*\.ya?ml)$|^scripts/|^tests/(install-symlinks|eval-tally)/' || true)
 
           if [ -z "$CODE_CHANGES" ]; then
