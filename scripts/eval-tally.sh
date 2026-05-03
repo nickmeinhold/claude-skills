@@ -30,10 +30,11 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
   exit 1
 fi
 
-# EVAL_DIR_OVERRIDE: optional env var to point at an alternate cohort root
+# EVAL_ROOT_OVERRIDE: optional env var to point at an alternate cohort root
 # (used by tests/eval-tally/run.sh to redirect the script at a fixture
-# directory). Defaults to ~/.claude/persona-eval for production use.
-EVAL_ROOT="${EVAL_DIR_OVERRIDE:-${HOME}/.claude/persona-eval}"
+# directory). Defaults to ~/.claude/persona-eval for production use. Named
+# to mirror EVAL_ROOT itself so the override↔destination mapping is obvious.
+EVAL_ROOT="${EVAL_ROOT_OVERRIDE:-${HOME}/.claude/persona-eval}"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
 # Cohort prefix for the claude-skills 10-PR experiment. Cross-repo dirs
 # (e.g. tech_world-PR-310/) deliberately don't match this prefix.
@@ -185,5 +186,7 @@ pct() {
   fi
 } | tee "$TALLY_FILE"
 
-echo
-echo "Wrote $TALLY_FILE"
+# Status message goes to stderr — it's progress info, not output. Keeping
+# it on stdout coupled the eval-tally golden test (tests/eval-tally/run.sh)
+# to the exact wording of this line. stderr decouples the test from the UX.
+echo "Wrote $TALLY_FILE" >&2

@@ -24,14 +24,18 @@ EXPECTED="${TEST_DIR}/expected/tally.md"
 # fixture tree stays pristine between runs.
 trap 'rm -f "${FIXTURES}/tally.md"' EXIT
 
-# Run the script against the fixture cohort. Strip the timestamp line so
-# the diff is deterministic. Capture stdout (script also writes to
-# $EVAL_DIR_OVERRIDE/tally.md, which we ignore for the diff).
-actual=$(EVAL_DIR_OVERRIDE="$FIXTURES" "$SCRIPT" \
-  | grep -v '^_Generated ' \
-  | grep -v '^Wrote ')
+# Strip the only non-deterministic line in the script's output before
+# diffing. Defined once so expected and actual go through the same filter
+# (was duplicated previously — DRY violation). The script's "Wrote ..."
+# status line is now on stderr (eval-tally.sh), so it doesn't appear here.
+strip_nondeterminism() { grep -v '^_Generated '; }
 
-if diff -u <(grep -v '^_Generated ' "$EXPECTED") <(echo "$actual"); then
+# Run the script against the fixture cohort and capture stdout. The script
+# also writes its tally to $EVAL_ROOT_OVERRIDE/tally.md; we ignore that
+# file for the diff (cleaned up by the trap above).
+actual=$(EVAL_ROOT_OVERRIDE="$FIXTURES" "$SCRIPT" 2>/dev/null | strip_nondeterminism)
+
+if diff -u <(strip_nondeterminism < "$EXPECTED") <(echo "$actual"); then
   echo "PASS: tests/eval-tally output matches golden."
   exit 0
 else
