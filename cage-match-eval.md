@@ -23,12 +23,15 @@ PR=$1
 
 source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
-REPO_NAME=$(basename "$REPO")
+# Use full owner__repo slug, not basename, so two repos with the same basename
+# under different owners (e.g. nickmeinhold/claude-skills vs other/claude-skills)
+# don't collide. Bash builtin substitution: slash → __ keeps it filesystem-safe.
+REPO_SLUG=${REPO/\//__}
 
 # Namespace eval dirs by repo so cross-repo invocations (e.g. running this
 # against a non-claude-skills PR) don't collide with the claude-skills-scoped
 # experiment cohort gated in /ship Step 5.6.
-EVAL_DIR=~/.claude/persona-eval/$REPO_NAME-PR-$PR
+EVAL_DIR=~/.claude/persona-eval/$REPO_SLUG-PR-$PR
 mkdir -p $EVAL_DIR
 
 # Sanity-check Set B prompts are present
