@@ -34,6 +34,19 @@ done
 # link <target> <source>
 #   target: absolute path where the symlink should live (may contain ~)
 #   source: absolute path inside the repo that target should point to
+# Move an existing file/symlink aside to a non-clobbering backup path.
+# Picks the first available `.bak`, `.bak.1`, `.bak.2`, ... so repeated
+# --force runs don't lose previous backups.
+move_aside() {
+  local path="$1" backup="$1.bak" n=1
+  while [[ -e "$backup" || -L "$backup" ]]; do
+    backup="$1.bak.$n"
+    n=$((n + 1))
+  done
+  mv "$path" "$backup"
+  echo "$backup"
+}
+
 link() {
   local target source target_expanded parent
   target="$1"
@@ -41,6 +54,14 @@ link() {
   # expand leading ~ without invoking eval
   target_expanded="${target/#\~/$HOME}"
   parent="$(dirname "$target_expanded")"
+
+  # Refuse to install a dangling symlink — the whole point of this script is
+  # preventing silently-stale local state, which a broken symlink would be.
+  if [[ ! -e "$source" ]]; then
+    echo "✗ source missing: $source" >&2
+    echo "  refusing to create a dangling symlink at $target" >&2
+    return 1
+  fi
 
   mkdir -p "$parent"
 
@@ -52,20 +73,22 @@ link() {
       return 0
     fi
     if [[ "$FORCE" -eq 1 ]]; then
-      mv "$target_expanded" "${target_expanded}.bak"
-      echo "  moved stale symlink -> ${target}.bak"
+      local moved
+      moved="$(move_aside "$target_expanded")"
+      echo "  moved stale symlink -> $moved"
     else
       echo "✗ $target is a symlink to '$current' (expected '$source')" >&2
-      echo "  re-run with --force to replace (existing file moved to .bak)" >&2
+      echo "  re-run with --force to replace (existing file moved aside)" >&2
       return 1
     fi
   elif [[ -e "$target_expanded" ]]; then
     if [[ "$FORCE" -eq 1 ]]; then
-      mv "$target_expanded" "${target_expanded}.bak"
-      echo "  moved existing file -> ${target}.bak"
+      local moved
+      moved="$(move_aside "$target_expanded")"
+      echo "  moved existing file -> $moved"
     else
-      echo "✗ $target exists as a regular file" >&2
-      echo "  re-run with --force to replace (existing file moved to .bak)" >&2
+      echo "✗ $target exists (not a symlink to expected source)" >&2
+      echo "  re-run with --force to replace (existing file moved aside)" >&2
       return 1
     fi
   fi
