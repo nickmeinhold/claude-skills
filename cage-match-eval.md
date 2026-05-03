@@ -167,6 +167,9 @@ voice blocks defined there verbatim as the system text for each reviewer.
 and `$PR_DIFF` where appropriate. Route to `$EVAL_DIR/set-b-sage.md`.
 
 ```bash
+# Cooldown to avoid Gemini per-minute rate-limit on consecutive calls (PR #24 incident)
+sleep 8
+
 SAGE_PROMPT=$(awk '/^## Sage \(Gemini/,/^---$/' ~/.claude/persona-eval/personas-b.md \
   | sed -n '/^```$/,/^```$/p' | sed '1d;$d')
 
