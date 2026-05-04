@@ -23,12 +23,26 @@ jobs:
   shell-validation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Install shellcheck and bats
+      # Pin shellcheck + bats to known versions instead of whatever
+      # ubuntu-latest happens to ship — version drift on the runner
+      # could silently change CI behavior (new SC checks firing, bats
+      # output format changes, etc.). Bumping these is now an explicit
+      # PR rather than a surprise.
+      - name: Install shellcheck (pinned)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck bats
+          SHELLCHECK_VERSION=v0.11.0
+          wget -qO- "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJ
+          sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
+          shellcheck --version
+
+      - name: Install bats (pinned)
+        run: |
+          BATS_VERSION=1.13.0
+          git clone --depth 1 --branch "v${BATS_VERSION}" https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+          bats --version
 
       # -S error matches the previous shell-validation job's gate: stylistic
       # warnings (SC2034/SC2086) on existing scripts are pre-existing noise;
