@@ -1,128 +1,58 @@
 name: CI
 
+# This repo is a collection of skill definitions (Markdown) plus Bash helpers
+# in scripts/. There is no Node code, no package.json, no lockfile. The
+# previous CI was a leftover Node template that immediately failed on every
+# branch touching scripts/*.sh because actions/setup-node@v4 with cache:'npm'
+# requires a lockfile to compute its cache key.
+#
+# Current CI: shellcheck the scripts and run the existing bats / regression
+# tests under tests/. That's it. If JS/TS ever lands here, add a Node job
+# back — but only with a real lockfile in the repo.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    # Surface the docs/shell skip flag so downstream jobs (shell-validation)
-    # can fire as the inverse of the npm-pipeline skip — i.e. exactly the
-    # PRs that get no coverage from the `test` job above.
-    outputs:
-      skip_npm_pipeline: ${{ steps.changes.outputs.skip_npm_pipeline }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for code changes
-        id: changes
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE=${{ github.event.pull_request.base.sha }}
-            HEAD=${{ github.event.pull_request.head.sha }}
-          else
-            BASE=${{ github.event.before }}
-            HEAD=${{ github.sha }}
-          fi
-
-          # Determine whether to skip the npm pipeline (setup-node/npm ci/build/test).
-          # It's irrelevant to changes that touch only:
-          #   - Markdown / text / LICENSE (docs)
-          #   - Shell scripts (*.sh) — anywhere — and anything under scripts/
-          #   - Bats test files (*.bats) — anywhere — and the named shell-test
-          #     fixture trees under tests/install-symlinks/ or tests/eval-tally/.
-          #     New shell-test trees should be added to this alternation
-          #     (or, better, the *.bats match covers them automatically).
-          #   - GitHub Actions workflow YAML under .github/workflows/ (no JS)
-          # Skipping these PRs avoids spurious failures from setup-node@v4
-          # looking for a non-existent package-lock.json (see PRs #24, #27, #35).
-          # When a future tests/unit/ tree lands with TS/JS tests, those files
-          # will still trip CODE_CHANGES (no .ts/.js exemption here) and the
-          # full npm pipeline runs as expected.
-          CODE_CHANGES=$(git diff --name-only $BASE $HEAD | grep -vE '\.(md|txt|sh|bats)$|^LICENSE|^\.github/(.*\.md|workflows/.*\.ya?ml)$|^scripts/|^tests/(install-symlinks|eval-tally)/' || true)
-
-          if [ -z "$CODE_CHANGES" ]; then
-            echo "skip_npm_pipeline=true" >> $GITHUB_OUTPUT
-            echo "Only documentation/shell changes detected - skipping tests"
-          else
-            echo "skip_npm_pipeline=false" >> $GITHUB_OUTPUT
-            echo "Code changes detected:"
-            echo "$CODE_CHANGES"
-          fi
-
-      - name: Setup Node.js
-        if: steps.changes.outputs.skip_npm_pipeline != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        if: steps.changes.outputs.skip_npm_pipeline != 'true'
-        run: npm ci
-
-      - name: Build
-        if: steps.changes.outputs.skip_npm_pipeline != 'true'
-        run: npm run build
-
-      - name: Run tests with coverage
-        if: steps.changes.outputs.skip_npm_pipeline != 'true'
-        run: npm run test:coverage
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        if: steps.changes.outputs.skip_npm_pipeline != 'true' && always()
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 7
-
-      - name: Skip tests (docs/shell only)
-        if: steps.changes.outputs.skip_npm_pipeline == 'true'
-        run: echo "Skipping tests - documentation/shell-only changes"
-
-  # ---------------------------------------------------------------------------
-  # shell-validation — inverse of the `test` job's npm-pipeline gate.
-  #
-  # When PR #31 taught the npm pipeline to skip on shell-only PRs, those PRs
-  # ended up with effectively no CI coverage. This job fills that gap: any PR
-  # whose scope is a superset of "shell scripts and docs" runs shellcheck and
-  # bats over the repo's scripts/ tree.
-  #
-  # Mirrors PR #31's `skip_npm_pipeline` output condition (the inverse mode):
-  # we run when the npm pipeline skipped. Mixed PRs (src/ + scripts/) still
-  # get the npm pipeline because that gate evaluates to false there. Cheap
-  # enough that we also let it run on pure docs PRs; catches accidental
-  # script regressions even when the PR didn't touch them directly.
-  # ---------------------------------------------------------------------------
   shell-validation:
     runs-on: ubuntu-latest
-    needs: test
-    if: needs.test.outputs.skip_npm_pipeline == 'true'
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install shellcheck and bats
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck bats
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck bats
 
-      # SC2034/SC2086 (unused-var, unquoted-expansion) are stylistic and
-      # noisy on this codebase's existing scripts; -S error gates only on
-      # findings shellcheck flags as actual errors. Tighten later if/when
-      # the pre-existing warnings get cleaned up.
+      # -S error matches the previous shell-validation job's gate: stylistic
+      # warnings (SC2034/SC2086) on existing scripts are pre-existing noise;
+      # tighten later if/when those get cleaned up.
       - name: Run shellcheck
-        run: shellcheck -S error scripts/*.sh
+        run: |
+          if compgen -G 'scripts/*.sh' > /dev/null; then
+            shellcheck -S error scripts/*.sh
+          else
+            echo "No shell scripts to check."
+          fi
 
       - name: Run bats — install-symlinks
-        run: bats tests/install-symlinks/
+        run: |
+          if [ -d tests/install-symlinks ]; then
+            bats tests/install-symlinks/
+          else
+            echo "No install-symlinks bats tests."
+          fi
 
       - name: Run eval-tally regression test
-        run: bash tests/eval-tally/run.sh
+        run: |
+          if [ -f tests/eval-tally/run.sh ]; then
+            bash tests/eval-tally/run.sh
+          else
+            echo "No eval-tally regression test."
+          fi
