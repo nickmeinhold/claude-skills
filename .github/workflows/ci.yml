@@ -70,3 +70,11 @@ jobs:
           else
             echo "No eval-tally regression test."
           fi
+
+      - name: Run bats — eval-tally writer/reader contract
+        run: |
+          if compgen -G 'tests/eval-tally/*.bats' > /dev/null; then
+            bats tests/eval-tally/*.bats
+          else
+            echo "No eval-tally bats tests."
+          fi
