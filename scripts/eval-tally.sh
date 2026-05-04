@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # eval-tally.sh — settle the cage-match persona A/B experiment.
 #
-# Walks ~/.claude/persona-eval/claude-skills-PR-*/outcomes.json, joins each
-# with its sibling mapping.json, and computes per-set accept / defer / reject
-# rates plus unique-finding counts. Writes ~/.claude/persona-eval/tally.md and
-# prints to stdout.
+# Walks ~/.claude/persona-eval/nickmeinhold__claude-skills-PR-*/outcomes.json,
+# joins each with its sibling mapping.json, and computes per-set accept / defer /
+# reject rates plus unique-finding counts. Writes ~/.claude/persona-eval/tally.md
+# and prints to stdout.
 #
 # Cohort scope: claude-skills only. Cross-repo eval dirs (e.g.
 # tech_world-PR-310/) are intentionally excluded — they're observational data
@@ -36,9 +36,13 @@ fi
 # to mirror EVAL_ROOT itself so the override↔destination mapping is obvious.
 EVAL_ROOT="${EVAL_ROOT_OVERRIDE:-${HOME}/.claude/persona-eval}"
 TALLY_FILE="${EVAL_ROOT}/tally.md"
-# Cohort prefix for the claude-skills 10-PR experiment. Cross-repo dirs
-# (e.g. tech_world-PR-310/) deliberately don't match this prefix.
-readonly COHORT_PREFIX="claude-skills-PR-"
+# Cohort prefix for the claude-skills 10-PR experiment. MUST match the
+# writer-side formula in cage-match-eval.md (`${REPO_SLUG}-PR-` where
+# REPO_SLUG=${REPO/\//__}) and ship.md Step 5.6's gate glob. PR #30 switched
+# from bare `claude-skills-PR-` to the owner-prefixed form to avoid cross-fork
+# collisions; this script must follow. Cross-repo dirs (e.g. tech_world-PR-310/)
+# deliberately don't match this prefix.
+readonly COHORT_PREFIX="nickmeinhold__claude-skills-PR-"
 
 command -v jq >/dev/null || { echo "ERROR: jq required" >&2; exit 1; }
 
