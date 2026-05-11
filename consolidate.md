@@ -10,24 +10,25 @@ Phase 0 (in-context conversation + multi-perspective retrospective) followed by 
 
 Before starting, write a session summary to prime the agents. This is the critical bridge — the agents don't have the session context, so this summary IS their context.
 
-1. **Create a session-namespaced directory.** Generate a session ID from the current timestamp at **second granularity** (`YYYY-MM-DDTHH-MM-SS`, e.g., `2026-04-05T19-48-30`). Minute-granularity is not enough — two tabs invoking `/consolidate` within the same minute would collide on the same `$SD`. Second-granularity makes that collision rare enough to ignore (don't add a uuid/random suffix — that's over-engineering and invites its own bugs). Compute the absolute session-dir path *once* and reuse it everywhere — agents NEVER resolve through `latest/` (see "Cross-session safety" below).
+1. **Create a session-namespaced directory.** Generate a session ID from the current timestamp at **second granularity** (`YYYY-MM-DDTHH-MM-SS`, e.g., `2026-04-05T19-48-30`). Minute-granularity is not enough — two tabs invoking `/consolidate` within the same minute would collide on the same `$SD`. Second-granularity makes that collision rare enough to ignore (don't add a uuid/random suffix — that's over-engineering and invites its own bugs). Compute the absolute session-dir path *once* and reuse it everywhere — there is **no** `latest/` symlink.
    ```bash
    SID="$(date +%Y-%m-%dT%H-%M-%S)"  # absolute timestamp, second-granularity (e.g. 2026-04-05T19-48-30)
    SD="$HOME/.claude/consolidation/$SID"   # absolute path; this is what agents receive
    mkdir -p "$SD"
-   # The symlink below is a WAKE-UP CONVENIENCE for the next session start
-   # (the wake-up hook reads `latest/next-session-prompt.md` on demand). Agents
-   # NEVER use it — under parallel-tab consolidation it can move between an
-   # agent's read and write operations. Pass $SD literally into agent prompts.
-   ln -sfn "$SD" "$HOME/.claude/consolidation/latest"
    ```
-   All files for this run go into `$SD`. Parallel sessions get their own dated directories and never collide *as long as agents use absolute paths*, not `latest/`.
+   All files for this run go into `$SD`. Parallel sessions get their own dated directories and never collide.
 
    ### Cross-session safety
 
-   `latest` is a single shared mutable pointer. When two tabs run `/consolidate` concurrently, both call `ln -sfn` and last-writer wins. Within a single agent's run, an agent that reads `latest/session-summary.md` (resolves to one target) and later writes `latest/consolidation.md` (resolves to a *different* target if the other tab's setup ran in between) will silently write into the wrong session's directory. This was demonstrated 2026-05-02→03 — knowledge-mapper trusted `latest/` and lost its output to a parallel tab's overwrite; memory-writer detected the drift and recovered to the absolute dated dir.
+   The skill used to maintain a `~/.claude/consolidation/latest` symlink as a "wake-up convenience". It is no longer created. The symlink was a single shared mutable pointer — when two tabs ran `/consolidate` concurrently it caused real data loss (2026-05-02→03: knowledge-mapper's output was overwritten by a parallel tab's setup moving the symlink between read and write). Every consumer that used to follow `latest/` (the wake-up protocol's prompt handoff, the readtime-check SessionStart hook, the heartbeat scorecard read) now resolves the newest consolidation directly by mtime, e.g.:
 
-   The structural fix: **agents never see `latest/`.** The orchestrator substitutes the absolute `$SD` path into every agent brief before sending. `latest` is for the wake-up hook only.
+   ```bash
+   NEWEST_PROMPT="$(ls -t "$HOME"/.claude/consolidation/2*/next-session-prompt.md 2>/dev/null | head -1)"
+   ```
+
+   This per-file mtime resolver is strictly better than the symlink: each consumer finds the newest dir that actually contains the file *it* cares about, even if a parallel tab produced a partial consolidation that has some files but not others.
+
+   **Do not reintroduce `ln -sfn` anywhere in this skill** — that's the bug that brought us here.
 
 2. **Resolve the memory path.** Find the correct project memory directory by looking for the MEMORY.md that matches the current working directory. It will be under `~/.claude/projects/` with the path encoded (e.g., `~/git` → `-Users-nick-git`). Write this resolved path into the session directory as `memory-path.txt` so agents can read it instead of guessing.
 
@@ -39,7 +40,7 @@ Before starting, write a session summary to prime the agents. This is the critic
    - Emotional highlights — what was exciting, surprising, frustrating
    - Be exhaustive. The agents only know what you write here.
 
-Use `{{SESSION_DIR}}` as a literal placeholder below for the full session directory path. **The orchestrator MUST substitute `{{SESSION_DIR}}` with the actual absolute path (`/Users/nick/.claude/consolidation/<session-id>/`) before sending any agent brief.** Never send `~/.claude/consolidation/latest/` or an unsubstituted `{{SESSION_DIR}}` token to an agent — the symlink can move under parallel-tab consolidation, and an unsubstituted placeholder fails as a path because agents will faithfully look for a file named `{{SESSION_DIR}}`.
+Use `{{SESSION_DIR}}` as a literal placeholder below for the full session directory path. **The orchestrator MUST substitute `{{SESSION_DIR}}` with the actual absolute path (`/Users/nick/.claude/consolidation/<session-id>/`) before sending any agent brief.** An unsubstituted `{{SESSION_DIR}}` token fails as a path because agents will faithfully look for a file named `{{SESSION_DIR}}`. (Earlier versions of this skill warned against routing through a `latest/` symlink; the symlink no longer exists — see "Cross-session safety" above.)
 
 ## Phase 0a: Affective marker surfacing (BEFORE the agent phases)
 
@@ -87,9 +88,8 @@ A single-perspective retrospective misses what other perspectives catch. Same sh
 ### Fire all three concurrently
 
 ```bash
-# Use the absolute session dir, NOT `~/.claude/consolidation/latest` —
-# under parallel-tab consolidation the symlink can move between the read
-# and write of any single agent's run.
+# Use the absolute session dir from setup (the `latest` symlink no
+# longer exists — see "Cross-session safety").
 SD="$HOME/.claude/consolidation/$SID"
 
 # Kelvin (Gemini) — analytical-detached vantage
@@ -171,7 +171,7 @@ This is 2 phases of agent execution, not 3. The 2026-05-01 wall-clock measuremen
 #### Agent 1: memory-writer
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes.
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
 
 Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md — this is a summary of a session that just happened.
 
@@ -217,7 +217,7 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 #### Agent 2: knowledge-mapper
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/` — under parallel-tab consolidation the symlink may move between your reads and writes (this is exactly how knowledge-mapper lost its first-pass output on 2026-05-02→03).
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly. (Historical note: routing through a `latest/` symlink caused data loss on 2026-05-02→03 — knowledge-mapper's first-pass output was overwritten by a parallel tab. The symlink no longer exists; absolute paths are the only path.)
 
 Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md.
 
@@ -243,7 +243,7 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 #### Agent 3: next-session-prompter (runs AFTER knowledge-mapper)
 
 ```
-ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below. Do NOT resolve through `~/.claude/consolidation/latest/`.
+ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
 
 Read these files (all of them — they are your full input):
 - {{SESSION_DIR}}/session-summary.md (what happened)
