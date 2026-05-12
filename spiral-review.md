@@ -1,6 +1,6 @@
 ---
 argument-hint: <pr-number>
-description: Spiral a code review's findings — for each finding, descend through five termini (cold fix, warm principle, engineering mechanism, cross-finding chord, audience oh) and let the audit trail compound. Use when a /cage-match or /pr-review returns 3+ findings that look like they rhyme — the spiral discipline pulls one principle out of the bouquet and ships fixes that teach the next builder. Born from PR #41 (/consolidate v6); see ~/.claude/consolidation/2026-05-12T19-51-spiral/spiral-audit-PR41.md for the lived demo.
+description: Spiral a PR's review findings — descend each finding through five termini (cold fix, warm principle, engineering mechanism, cross-finding chord, audience oh) and let the audit trail compound. Use after /cage-match or /pr-review returns 3+ findings that look like they rhyme; the spiral pulls one principle out of the bouquet.
 ---
 
 # /spiral-review — descend through five termini per finding, then chord
