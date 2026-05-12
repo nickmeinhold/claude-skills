@@ -430,11 +430,17 @@ Show Nick a **one-line** status per agent (3 lines total). Read `{{SESSION_DIR}}
 ## Wrap-up
 
 After Phase 1 completes:
-- **Merge session wins to global log.** If `{{SESSION_DIR}}/wins.md` exists and is non-empty, append it to `~/.claude/wins.md`:
+- **Merge session wins to global log.** If `{{SESSION_DIR}}/wins.md` exists and is non-empty, append it to `~/.claude/wins.md` under an exclusive `flock` to prevent interleave from parallel `/consolidate` orchestrators:
   ```bash
-  cat "{{SESSION_DIR}}/wins.md" >> "$HOME/.claude/wins.md"
+  # Wrap-up step: append session-local wins to global wins file under exclusive lock.
+  # flock serializes across all parallel /consolidate orchestrators on this machine
+  # — fd 200 holds the lock from open until the cat completes, then releases.
+  {
+    flock 200
+    cat "$SD/wins.md" >> ~/.claude/wins.md
+  } 200>~/.claude/wins.md.lock
   ```
-  The orchestrator is the sole writer to `~/.claude/wins.md` — memory-writer wrote only to the session-scoped file, so this single-append is race-free even across parallel /consolidate sessions.
+  The `flock` on `~/.claude/wins.md.lock` is the POSIX standard answer to the multi-byte-append race: two orchestrators running concurrently both block on the lock file; the second waits for the first to complete before writing. This is the same class of bug as the `latest/` symlink (PR #40 fix) — a shared mutable resource without a writer-serialization mechanism.
 - Confirm memory files were written (memory-writer's status line)
 - Show Nick the final next-session prompt
 - Mention `{{SESSION_DIR}}/open-tasks.md` exists if there were any open tasks — call it out so Nick knows it's there
