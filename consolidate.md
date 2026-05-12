@@ -14,7 +14,7 @@ Not every sub-job benefits from Haiku-fanout. Subagent spawn has real overhead (
 - **Stays inside Sonnet synth (NOT a separate Haiku spawn)**: small formatting jobs like `open-tasks.md`, `pending-tasks.json`, `scorecard.json`, `wins.md` append. These are cheap enough that the spawn cost would exceed the savings; they ride along with `memory-writer`.
 - **Opus-only**: `next-session-prompter`. Voice, challenge-skill calibration, and "make the next instance want to dive in" determine whether tomorrow's session lands in flow. Don't cheap out.
 
-**Verification gate.** Sonnet synth agents MUST spot-check Haiku outputs before consuming them — Haiku will occasionally hallucinate a TLA or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes this explicitly.
+**Verification gate.** Sonnet synth agents MUST validate Haiku outputs before consuming them — Haiku will occasionally hallucinate a TLA or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes a mechanically-applicable two-pass rule: (1) for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md` — if not, drop it and note the drop; (2) scan `session-summary.md` for TLAs / domain-terms / dropped-tangents not in the raw lists and add them with the same one-line definition format. Both passes are auditable — a reviewer can re-run the procedure and check compliance.
 
 ## Setup
 
@@ -58,7 +58,7 @@ Use `{{SESSION_DIR}}` as a literal placeholder below for the full session direct
 
 Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: triage each ("real / autopilot"), not remember.
 
-The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each `"role":"user"` line is a Nick message. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the grep.
+The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each line is a JSON object — parse it with `jq` or equivalent; do NOT substring-grep the raw line. For each object, select those where `.role == "user"` (or `.type == "user"` — verify the field in the actual JSONL), and within those, extract only text-type content blocks: `.content[] | select(.type=="text") | .text`. Ignore `tool_use` and `tool_result` content blocks — substring-grepping the raw line produces false positives from nested tool content. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the read.
 
 ### Spawn: marker-extractor (Haiku)
 
@@ -68,7 +68,9 @@ Agent({
   subagent_type: "general-purpose",
   model: "haiku",
   prompt: `
-Read the session transcript at <JSONL_PATH>. Every line with "role":"user" is a Nick message; ignore other lines.
+Read the session transcript at <JSONL_PATH>. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
+  jq -r 'select(.role == "user") | .content[] | select(.type == "text") | .text' <JSONL_PATH>
+(If the field is `.type == "user"` instead of `.role == "user"`, try both — verify against the actual JSONL structure.) Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
 
 Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
 
@@ -303,7 +305,11 @@ ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute sessi
 
 MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal description, hierarchical forward plan. Haiku pre-extractors have already produced raw candidate lists at {{SESSION_DIR}}/raw/tla-candidates.md, {{SESSION_DIR}}/raw/domain-terms.md, and {{SESSION_DIR}}/raw/dropped-tangents.md.
 
-**Verification gate.** Treat the raw/* files as CANDIDATES, not ground truth. Spot-check each list against session-summary.md: drop entries that don't appear in the summary, add entries the Haiku pass missed, sharpen vague definitions. This verification is the price of admission for using the Haiku pre-pass — skip it and you ship hallucinations.
+**Verification gate.** Treat the raw/* files as CANDIDATES, not ground truth. Apply this two-pass validation against session-summary.md:
+1. **Candidate check (per entry)**: for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md`. If no supporting span exists, drop the entry and note the drop (e.g., "Dropped: XYZ — no mention in summary"). Sharpen vague definitions where the summary contains more precision.
+2. **Coverage scan**: scan `session-summary.md` independently for TLAs / domain-terms / dropped-tangents not captured in the raw lists. Add any missing entries with the same one-line format.
+
+Both passes are mechanically applicable — a reviewer can re-run the procedure and check your compliance. This is the price of admission for using the Haiku pre-pass — skip it and you ship hallucinations.
 
 Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md and the three raw/* files.
 
