@@ -11,7 +11,7 @@ Phase 0 (in-context conversation + multi-perspective retrospective) followed by 
 Not every sub-job benefits from Haiku-fanout. Subagent spawn has real overhead (context priming, network round-trips, file handoff verification). Use Haiku where it earns its cost:
 
 - **Haiku-worthy**: read-context-and-extract-patterns jobs. Phase 0a marker grep (whole-JSONL scan), knowledge-mapper's TLA / domain-term / dropped-tangent extraction. Each reads a sizeable input and produces a small structured output.
-- **Stays inside Sonnet synth (NOT a separate Haiku spawn)**: small formatting jobs like `open-tasks.md`, `pending-tasks.json`, `scorecard.json`, `wins.md` append. These are cheap enough that the spawn cost would exceed the savings; they ride along with `memory-writer`.
+- **Stays inside Sonnet synth (NOT a separate Haiku spawn)**: small formatting jobs like `open-tasks.md`, `pending-tasks.json`, `scorecard.json`, `$SD/wins.md` (session-local write). These are cheap enough that the spawn cost would exceed the savings; they ride along with `memory-writer`. The global append to `~/.claude/wins.md` is the orchestrator's job in Wrap-up, under mkdir-trap lock — NOT memory-writer's job.
 - **Opus-only**: `next-session-prompter`. Voice, challenge-skill calibration, and "make the next instance want to dive in" determine whether tomorrow's session lands in flow. Don't cheap out.
 
 **Verification gate.** Sonnet synth agents MUST validate Haiku outputs before consuming them — Haiku will occasionally hallucinate a TLA or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes a mechanically-applicable two-pass rule: (1) for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md` — if not, drop it and note the drop; (2) scan `session-summary.md` for TLAs / domain-terms / dropped-tangents not in the raw lists and add them with the same one-line definition format. Both passes are auditable — a reviewer can re-run the procedure and check compliance.
@@ -275,7 +275,7 @@ Agent({
   prompt: `
 ABSOLUTE PATHS ONLY. All paths below use $SD — the orchestrator has already substituted the literal absolute session-dir path at heredoc-expansion time. Use these paths directly; no substitution needed.
 
-MODEL: sonnet. Most of your work (open-tasks formatting, pending-tasks.json, scorecard, wins append, memory-health bumps) is mechanical, but the TRANSFORM-worthiness judgment for feedback memories and the edge-type choices for MEMORY.md need Sonnet-level reasoning. The mechanical sub-jobs ride along inline rather than spawning a Haiku sub-burst — their cost is too small to justify subagent overhead.
+MODEL: sonnet. Most of your work (open-tasks formatting, pending-tasks.json, scorecard, $SD/wins.md session-local write, memory-health bumps) is mechanical, but the TRANSFORM-worthiness judgment for feedback memories and the edge-type choices for MEMORY.md need Sonnet-level reasoning. The mechanical sub-jobs ride along inline rather than spawning a Haiku sub-burst — their cost is too small to justify subagent overhead. Note: you write ONLY $SD/wins.md (session-local); the orchestrator appends it to ~/.claude/wins.md under mkdir-trap lock in Wrap-up — never write to the global file directly.
 
 Read $SD/memory-path.txt to get the correct memory directory path. Then read $SD/session-summary.md — this is a summary of a session that just happened.
 
