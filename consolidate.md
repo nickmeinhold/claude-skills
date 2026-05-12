@@ -115,9 +115,28 @@ Output 10-20 candidates max — over-include rather than over-filter; Maxwell wi
 
 The orchestrator resolves `$JSONL_PATH` using the derivation block above and passes it to the Haiku agent. `$SD/raw/marker-candidates.md` is the output path — `$SD/raw/` is created by the orchestrator in Setup (see `mkdir -p "$SD/raw"`; agents must not create directories).
 
+### Maxwell: validate Haiku quotes before presenting
+
+Haiku-extracted marker candidates are CANDIDATES, not ground truth — Haiku will occasionally fabricate or misattribute a quote. Before presenting any candidate to Nick, Maxwell MUST verify each `"verbatim quote"` appears in the JSONL transcript by simple substring match. Candidates that don't match get dropped with a log line; candidates that match with whitespace variance get the timestamp from the JSONL, not Haiku's reconstruction.
+
+```bash
+# Pseudo-validation for each candidate (orchestrator runs this before
+# composing the present-to-Nick dotpoints):
+while IFS= read -r line; do
+  quote=$(echo "$line" | grep -o '"[^"]*"' | head -1)
+  if [ -n "$quote" ] && jq -r '.message.content[]? | select(.type=="text") | .text' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
+    echo "$line"  # keep
+  else
+    echo "DROPPED (no JSONL match): $line" >&2
+  fi
+done < "$SD/raw/marker-candidates.md" > "$SD/raw/marker-candidates-verified.md"
+```
+
+Maxwell then composes the dotpoints from `$SD/raw/marker-candidates-verified.md`. If `$JSONL_PATH` is unavailable (session hasn't flushed), skip validation and present raw candidates with an explicit "(unverified — JSONL not available)" prefix on each dotpoint.
+
 ### Maxwell: filter + triage
 
-When the Haiku agent returns, Maxwell reads `$SD/raw/marker-candidates.md` and applies the "so what" filter — Haiku will over-include autopilot markers. Cut to 7±2 dotpoints (cognitive chunking limit), drop anything without a plausible consequence, sharpen the "→" line where Haiku was vague.
+When the Haiku agent returns and validation is complete, Maxwell reads `$SD/raw/marker-candidates-verified.md` and applies the "so what" filter — Haiku will over-include autopilot markers. Cut to 7±2 dotpoints (cognitive chunking limit), drop anything without a plausible consequence, sharpen the "→" line where Haiku was vague.
 
 Marker categories Haiku is told to look for (kept here for the editing record, in case the Haiku brief needs tuning):
 
@@ -220,7 +239,7 @@ Agent({ description: "...", subagent_type: "general-purpose", model: "sonnet", p
 The `{{SESSION_DIR}}` placeholders in the brief specifications below are **documentation conventions**. The orchestrator's job is to produce briefs in which they no longer appear — replaced by the absolute `$SD` path at heredoc-expansion time. By the time `Agent({prompt: ...})` is called, no `{{SESSION_DIR}}` token remains in the string. Cold readers: `$SD` is the heredoc variable; `{{SESSION_DIR}}` is how the spec writes it before substitution. They refer to the same path — the difference is pre- vs post-expansion.
 
 **File ownership is exclusive.** Each agent owns one output file in `$SD/`; no shared writes, no append races:
-- Phase 0a marker-extractor (Haiku) → `$SD/raw/marker-candidates.md` only
+- Phase 0a marker-extractor (Haiku) → `$SD/raw/marker-candidates.md` only; Maxwell validation pass produces `$SD/raw/marker-candidates-verified.md` (orchestrator-side, not a separate agent)
 - knowledge-mapper Haiku trio → `$SD/raw/tla-candidates.md`, `$SD/raw/domain-terms.md`, `$SD/raw/dropped-tangents.md` (one file each, distinct)
 - `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `$SD/scorecard.json` + `$SD/open-tasks.md` + `$SD/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via mkdir-trap lock — `$HOME/.claude/wins.md.lock.d` is the lock directory; see Wrap-up section)
 - `knowledge-mapper` synth (Sonnet) → `$SD/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
