@@ -254,6 +254,12 @@ This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<se
 
 This is 3 phases of agent execution. The 2026-05-01 wall-clock measurement (~2 min, v5) reflects the older 2-burst shape; v6 adds one more synchronization barrier but moves the heaviest extraction reads to Haiku running in parallel with memory-writer. Net expectation: similar or slightly better wall-clock, materially lower token cost.
 
+**Burst 1 join mechanism.** The orchestrator dispatches all four Agent({}) calls in a single message — Claude Code's harness blocks the orchestrator's next turn until all four return. No explicit wait primitive is needed; it is a tool-call concurrency property of the harness. The orchestrator's next substantive action (dispatching Burst 2) simply cannot happen until all Burst 1 responses are available.
+
+**Haiku failure gate.** If any Burst 1 Haiku call returns a failure status or produces an empty `$SD/raw/*.md` file, the orchestrator MUST log the failure (one line to the session log, naming which extractor failed) and continue without that extractor's output. The Burst 2 Sonnet synth is responsible for noting the absent input in `consolidation.md` — it should either degrade gracefully (proceed without the missing dimension, noting the gap) or, if the missing extractor's output is load-bearing for the run (unlikely but possible), stop and surface the issue to Nick before writing `consolidation.md`.
+
+**Amendment fence.** Nick may amend `$SD/session-summary.md` at any point before Burst 1 dispatch — agents read the file at dispatch time and will see the amended version. Once Burst 1 dispatches, the file is effectively frozen for that run; subsequent edits won't propagate to the already-dispatched agents. The orchestrator's confirmation prompt to Nick before dispatching Burst 1 should explicitly invite amendments: "Does the session summary look right? Amend `$SD/session-summary.md` now if needed, then confirm to dispatch agents."
+
 #### Agent 1: memory-writer
 
 ```
