@@ -200,10 +200,24 @@ Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated
 
 **Evolution.** v4 ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). v5 split them into three **specialized** agents — memory-writer + knowledge-mapper in parallel, next-session-prompter gated on knowledge-mapper — and dropped wall-clock to ~2 min in the 2026-05-01 test run. v6 (this version) goes one further: it splits the extraction work *inside* knowledge-mapper into a Haiku pre-pass (TLAs / domain-terms / dropped-tangents) running parallel to memory-writer in Burst 1, then a Sonnet synth in Burst 2 that consumes those raw candidates, then Opus for the next-session prompt in Burst 3. Three bursts instead of two; the extra synchronization is paid for by moving the heaviest reads to Haiku.
 
+**Substitution mechanism.** The orchestrator composes each agent brief as a bash heredoc with `$SD` interpolated, NOT as a templated string substituted post-hoc. Example:
+
+```bash
+MEMORY_WRITER_BRIEF="$(cat <<EOF
+Read $SD/memory-path.txt to get the correct memory directory path.
+Then read $SD/session-summary.md — this is a summary of a session that just happened.
+... (rest of brief, with \$SD already substituted by the time Agent() is called)
+EOF
+)"
+Agent({ description: "...", subagent_type: "general-purpose", model: "sonnet", prompt: $MEMORY_WRITER_BRIEF })
+```
+
+The `{{SESSION_DIR}}` placeholders in the brief specifications below are **documentation conventions**. The orchestrator's job is to produce briefs in which they no longer appear — replaced by the absolute `$SD` path at heredoc-expansion time. By the time `Agent({prompt: ...})` is called, no `{{SESSION_DIR}}` token remains in the string. Cold readers: `$SD` is the heredoc variable; `{{SESSION_DIR}}` is how the spec writes it before substitution. They refer to the same path — the difference is pre- vs post-expansion.
+
 **File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `{{SESSION_DIR}}/raw/marker-candidates.md` only
 - knowledge-mapper Haiku trio → `{{SESSION_DIR}}/raw/tla-candidates.md`, `{{SESSION_DIR}}/raw/domain-terms.md`, `{{SESSION_DIR}}/raw/dropped-tangents.md` (one file each, distinct)
-- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `{{SESSION_DIR}}/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up)
+- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `{{SESSION_DIR}}/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via `flock` — `~/.claude/wins.md.lock` is the lock file; see Wrap-up section)
 - `knowledge-mapper` synth (Sonnet) → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
 - `next-session-prompter` (Opus) → `{{SESSION_DIR}}/next-session-prompt.md` only
 
