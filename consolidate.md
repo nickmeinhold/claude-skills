@@ -1,10 +1,20 @@
 ---
-description: End-of-session consolidation — Phase 0 in-context conversation + multi-perspective retrospective, then three specialized agents (memory-writer + knowledge-mapper in parallel, then next-session-prompter) that mine the session for every thread, capture what was exciting, and craft the next session's opening prompt. Use this when wrapping up a session, when context is getting heavy, when Nick says "consolidate", "let's wrap up", "end of session", or when you're approaching sleep protocol. This is distinct from /nap (which is a sleep cycle with dreams) — /consolidate is pure knowledge capture and forward planning.
+description: End-of-session consolidation — Phase 0 in-context conversation + multi-perspective retrospective, then tier-aware specialized agents (Haiku pre-extractors feeding Sonnet synthesizers, with Opus reserved for the next-session prompt) that mine the session for every thread, capture what was exciting, and craft the next session's opening prompt. Use this when wrapping up a session, when context is getting heavy, when Nick says "consolidate", "let's wrap up", "end of session", or when you're approaching sleep protocol. This is distinct from /nap (which is a sleep cycle with dreams) — /consolidate is pure knowledge capture and forward planning.
 ---
 
 # Consolidate
 
-Phase 0 (in-context conversation + multi-perspective retrospective) followed by **three specialized agents**: `memory-writer` and `knowledge-mapper` run in parallel; `next-session-prompter` runs after `knowledge-mapper` completes (it needs the knowledge-graph + forward plan as input). Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run.
+Phase 0 (in-context conversation + multi-perspective retrospective) followed by **tier-aware specialized agents**: Haiku pre-extractors do mechanical pattern-mining; Sonnet synthesizers turn those raw extractions into the durable artifacts (`memory-writer` + `knowledge-mapper` in parallel); Opus crafts the next-session prompt (`next-session-prompter`, gated on `knowledge-mapper`). Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run; tier-aware decomposition (v6) is expected to drop further by moving the read-and-extract passes to Haiku.
+
+## Tiering rationale (read before editing)
+
+Not every sub-job benefits from Haiku-fanout. Subagent spawn has real overhead (context priming, network round-trips, file handoff verification). Use Haiku where it earns its cost:
+
+- **Haiku-worthy**: read-context-and-extract-patterns jobs. Phase 0a marker grep (whole-JSONL scan), knowledge-mapper's TLA / domain-term / dropped-tangent extraction. Each reads a sizeable input and produces a small structured output.
+- **Stays inside Sonnet synth (NOT a separate Haiku spawn)**: small formatting jobs like `open-tasks.md`, `pending-tasks.json`, `scorecard.json`, `wins.md` append. These are cheap enough that the spawn cost would exceed the savings; they ride along with `memory-writer`.
+- **Opus-only**: `next-session-prompter`. Voice, challenge-skill calibration, and "make the next instance want to dive in" determine whether tomorrow's session lands in flow. Don't cheap out.
+
+**Verification gate.** Sonnet synth agents MUST spot-check Haiku outputs before consuming them — Haiku will occasionally hallucinate a TLA or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes this explicitly.
 
 ## Setup
 
@@ -46,7 +56,46 @@ Use `{{SESSION_DIR}}` as a literal placeholder below for the full session direct
 
 Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: triage each ("real / autopilot"), not remember.
 
-The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each `"role":"user"` line is a Nick message. Grep that file for marker language:
+The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each `"role":"user"` line is a Nick message. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the grep.
+
+### Spawn: marker-extractor (Haiku)
+
+```
+Agent({
+  description: "Extract affective markers from session JSONL",
+  subagent_type: "general-purpose",
+  model: "haiku",
+  prompt: `
+Read the session transcript at <JSONL_PATH>. Every line with "role":"user" is a Nick message; ignore other lines.
+
+Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
+
+- 🔥 Breakthrough / phase-shift: explicit "oh shit", "holy", "no way", strong realization signals
+- 💡 Insight / new framing: "wait —", "actually", "what about", reframes
+- ⚠️ Pushback / corrections: "no we need", "not that", "that's dumb", "seems excessive", "bruh", "sheesh", ALL-CAPS for emphasis
+- 🛠 Design directive: "let's do X", "should be Y", architectural steering
+- 🪤 Friction / process miss: "did you", "why didn't", complaints about the workflow
+- 🎯 Direction shift: "what about", "should we", "plan mode?"
+- Length anomalies: terse messages amid prose (high-conviction decisions); long messages amid terse (thinking out loud)
+- Conversational-flow markers: >5 min gap between user messages (stopped to think); re-asking similar questions (first answer didn't click)
+
+For EACH candidate, output one dotpoint in this exact format (one per line):
+
+[HH:MM] [emoji] "<verbatim quote, ≤120 chars; truncate with … if longer>"
+       → <one-line guess at what this signals>
+
+Output 10-20 candidates max — over-include rather than over-filter; Maxwell will downselect. Write to <OUTPUT_PATH> (overwrite). Return a 1-sentence status only.
+  `
+})
+```
+
+The orchestrator substitutes `<JSONL_PATH>` with the actual transcript path and `<OUTPUT_PATH>` with `{{SESSION_DIR}}/raw/marker-candidates.md` before spawning. Create `{{SESSION_DIR}}/raw/` if it doesn't exist.
+
+### Maxwell: filter + triage
+
+When the Haiku agent returns, Maxwell reads `{{SESSION_DIR}}/raw/marker-candidates.md` and applies the "so what" filter — Haiku will over-include autopilot markers. Cut to 7±2 dotpoints (cognitive chunking limit), drop anything without a plausible consequence, sharpen the "→" line where Haiku was vague.
+
+Marker categories Haiku is told to look for (kept here for the editing record, in case the Haiku brief needs tuning):
 
 - **Surprise / realization**: `oh shit`, `huh`, `wait`, `actually`, `hmmm`, `dude`
 - **Pushback / corrections**: `seems excessive`, `no we need`, `not that`, `that's dumb`, `bruh`, `sheesh`, ALL-CAPS for emphasis
@@ -133,9 +182,11 @@ Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated
 Earlier versions of this skill ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). That serialization had one real semantic dependency (next-session-prompter needs the knowledge graph + forward plan) and a lot of incidental coupling that didn't need to be sequential. Splitting into three **specialized** agents — two of them in parallel, the third gated on knowledge-mapper's output — dropped wall-clock to ~2 min in the 2026-05-01 test run, with no loss of fidelity.
 
 **File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
-- `memory-writer` → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `~/.claude/wins.md`
-- `knowledge-mapper` → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer)
-- `next-session-prompter` → `{{SESSION_DIR}}/next-session-prompt.md` only
+- Phase 0a marker-extractor (Haiku) → `{{SESSION_DIR}}/raw/marker-candidates.md` only
+- knowledge-mapper Haiku trio → `{{SESSION_DIR}}/raw/tla-candidates.md`, `{{SESSION_DIR}}/raw/domain-terms.md`, `{{SESSION_DIR}}/raw/dropped-tangents.md` (one file each, distinct)
+- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `~/.claude/wins.md`
+- `knowledge-mapper` synth (Sonnet) → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
+- `next-session-prompter` (Opus) → `{{SESSION_DIR}}/next-session-prompt.md` only
 
 The exclusivity is what makes "first-writer wins" unnecessary — there is no second writer.
 
@@ -162,16 +213,18 @@ This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<se
 
 ### Spawn order
 
-1. **Spawn memory-writer and knowledge-mapper in parallel** (single message, two foreground agent calls). Wait for both to complete.
-2. **Then spawn next-session-prompter** as a single foreground agent. It reads `{{SESSION_DIR}}/consolidation.md` (knowledge-mapper's output), so it must run after knowledge-mapper.
-3. Wait for next-session-prompter to complete before wrap-up.
+1. **Burst 1 (parallel, single message)**: memory-writer (Sonnet) + knowledge-mapper's three Haiku pre-extractors (TLAs / domain-terms / dropped-tangents). Four agent calls in one message. Wait for ALL FOUR to complete before Burst 2.
+2. **Burst 2 (single agent)**: knowledge-mapper synth (Sonnet) reads `{{SESSION_DIR}}/raw/*.md` and writes `consolidation.md`. Gated on Burst 1's Haiku trio.
+3. **Burst 3 (single agent)**: next-session-prompter (Opus). Reads `consolidation.md` + everything else, writes `next-session-prompt.md`.
 
-This is 2 phases of agent execution, not 3. The 2026-05-01 wall-clock measurement (~2 min) reflects this shape, not a 3-way fan-out.
+This is 3 phases of agent execution. The 2026-05-01 wall-clock measurement (~2 min, v5) reflects the older 2-burst shape; v6 adds one more synchronization barrier but moves the heaviest extraction reads to Haiku running in parallel with memory-writer. Net expectation: similar or slightly better wall-clock, materially lower token cost.
 
 #### Agent 1: memory-writer
 
 ```
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
+
+MODEL: sonnet. Most of your work (open-tasks formatting, pending-tasks.json, scorecard, wins append, memory-health bumps) is mechanical, but the TRANSFORM-worthiness judgment for feedback memories and the edge-type choices for MEMORY.md need Sonnet-level reasoning. The mechanical sub-jobs ride along inline rather than spawning a Haiku sub-burst — their cost is too small to justify subagent overhead.
 
 Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md — this is a summary of a session that just happened.
 
@@ -214,12 +267,43 @@ TaskList snapshot (from orchestrator) — JSON array, one object per task:
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
 ```
 
+#### Pre-pass: knowledge-mapper Haiku extractors (parallel burst, spawned alongside memory-writer)
+
+Before knowledge-mapper synthesizes, three Haiku subagents read `session-summary.md` in parallel and produce raw candidate lists. The synth agent consumes these as input rather than re-doing the extraction. **Spawn these three in the same message as memory-writer** — four parallel agents total in this burst (memory-writer + three Haiku extractors). They write to distinct files under `{{SESSION_DIR}}/raw/`, so no shared-write risk.
+
+```
+Agent({
+  description: "Extract TLA candidates from session summary",
+  subagent_type: "general-purpose",
+  model: "haiku",
+  prompt: `Read {{SESSION_DIR}}/session-summary.md. Find every Three-Letter Acronym (or 2-5 letter all-caps token) used as a domain term — e.g. CLS, SECI, MPFB, FSRS. For each, output one line: \`TLA — short expansion or "unknown"\`. Skip common English (USA, API, CLI, HTTP, JSON, etc.) unless used in a non-obvious sense. Write to {{SESSION_DIR}}/raw/tla-candidates.md (overwrite). Return 1-sentence status.`
+})
+
+Agent({
+  description: "Extract domain-term candidates",
+  subagent_type: "general-purpose",
+  model: "haiku",
+  prompt: `Read {{SESSION_DIR}}/session-summary.md. List session-specific or domain-specific terms that a competent dev assistant cold-reading the next session would need defined. SKIP standard developer vocabulary (git, branch, PR, JSONL, etc.). One line per term: \`term — one-sentence definition\`. Aim for 5-20 terms. Write to {{SESSION_DIR}}/raw/domain-terms.md (overwrite). Return 1-sentence status.`
+})
+
+Agent({
+  description: "Extract dropped tangents",
+  subagent_type: "general-purpose",
+  model: "haiku",
+  prompt: `Read {{SESSION_DIR}}/session-summary.md. Find tangents that were raised but not pursued — phrases like "we should also", "tabled", "parked", "not pursuing", "would be nice", "follow-up". For each, output one bullet: \`<tangent in ≤2 lines> — why dropped (if stated)\`. Write to {{SESSION_DIR}}/raw/dropped-tangents.md (overwrite). Return 1-sentence status.`
+})
+```
+
 #### Agent 2: knowledge-mapper
 
 ```
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly. (Historical note: routing through a `latest/` symlink caused data loss on 2026-05-02→03 — knowledge-mapper's first-pass output was overwritten by a parallel tab. The symlink no longer exists; absolute paths are the only path.)
 
-Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md.
+MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal description, hierarchical forward plan. Haiku pre-extractors have already produced raw candidate lists at {{SESSION_DIR}}/raw/tla-candidates.md, {{SESSION_DIR}}/raw/domain-terms.md, and {{SESSION_DIR}}/raw/dropped-tangents.md.
+
+**Verification gate.** Treat the raw/* files as CANDIDATES, not ground truth. Spot-check each list against session-summary.md: drop entries that don't appear in the summary, add entries the Haiku pass missed, sharpen vague definitions. This verification is the price of admission for using the Haiku pre-pass — skip it and you ship hallucinations.
+
+Read {{SESSION_DIR}}/memory-path.txt to get the correct memory directory path. Then read {{SESSION_DIR}}/session-summary.md and the three raw/* files.
 
 Nick says: "Are you really really sure you got everything... this context is a frickin goldmine! Remember to check for TLAs (Three Letter Acronyms). Are there any concepts that bind each other together? What's the Kolmogorov complexity here? Don't compress to the point of extinction but let's make sure all of the threads are available to pull on next session."
 
@@ -244,6 +328,8 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 
 ```
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
+
+MODEL: opus. This is the one deliverable Nick copy-pastes into the next session — its voice, challenge-skill calibration, and ability to "make the next instance want to dive in" set whether tomorrow lands in flow. Don't cheap out; Opus earns its cost here.
 
 Read these files (all of them — they are your full input):
 - {{SESSION_DIR}}/session-summary.md (what happened)
