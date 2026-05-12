@@ -429,7 +429,7 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 })
 ```
 
-### After all three return
+### After all agents return
 
 Show Nick a **one-line** status per top-level agent (one line per agent). Read `$SD/next-session-prompt.md` back into context and present it — that's the one deliverable Nick needs to copy-paste. Don't read `consolidation.md` or `open-tasks.md` back; Nick can review `$SD/` directly if he wants detail.
 
