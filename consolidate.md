@@ -66,14 +66,19 @@ The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-
 # Resolve the current session's JSONL transcript path.
 # Claude Code stores transcripts at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
 # where encoded-cwd replaces every `/` in the absolute cwd with `-`.
+#
+# Authoritative: Claude Code exposes the current session ID as CLAUDE_CODE_SESSION_ID
+# (verified 2026-05-12). Use it directly — this eliminates the multi-tab ambiguity
+# where the newest JSONL by mtime could belong to a concurrent tab in the same cwd.
 ENCODED_CWD="${PWD//\//-}"
-JSONL_PATH="$(ls -t "$HOME/.claude/projects/$ENCODED_CWD"/*.jsonl 2>/dev/null | head -1)"
-# Newest by mtime = current session. If empty, the session hasn't yet flushed
-# to disk and the marker-extractor pass should be skipped (Nick may have just
-# started; nothing to triage).
+JSONL_PATH="$HOME/.claude/projects/$ENCODED_CWD/${CLAUDE_CODE_SESSION_ID}.jsonl"
+# If the env var is unset or the file doesn't exist yet (session hasn't flushed),
+# JSONL_PATH will point to a non-existent file — the emptiness check below handles it.
+# DO NOT fall back to ls -t mtime ordering: that is a latest/-shape workaround that
+# picks the wrong session in two-tab scenarios (same failure class as PR #40).
 ```
 
-If `$JSONL_PATH` is empty after this step, skip the marker-extractor spawn entirely and proceed to Phase 0b. Do not pass an empty path to the Haiku agent.
+If `$JSONL_PATH` does not resolve to an existing file (session hasn't flushed yet, or `CLAUDE_CODE_SESSION_ID` is unset), skip the marker-extractor spawn entirely and proceed to Phase 0b. Check with `[ -f "$JSONL_PATH" ]` before spawning. Do not pass a non-existent path to the Haiku agent.
 
 ### Spawn: marker-extractor (Haiku)
 
