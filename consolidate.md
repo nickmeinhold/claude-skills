@@ -4,7 +4,7 @@ description: End-of-session consolidation — Phase 0 in-context conversation + 
 
 # Consolidate
 
-Phase 0 (in-context conversation + multi-perspective retrospective) followed by **tier-aware specialized agents**: Haiku pre-extractors do mechanical pattern-mining; Sonnet synthesizers turn those raw extractions into the durable artifacts (`memory-writer` + `knowledge-mapper` in parallel); Opus crafts the next-session prompt (`next-session-prompter`, gated on `knowledge-mapper`). Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run; tier-aware decomposition (v6) is expected to drop further by moving the read-and-extract passes to Haiku.
+Phase 0 (in-context conversation + multi-perspective retrospective) followed by **tier-aware specialized agents** organized as a **three-burst DAG**: Burst 1 runs `memory-writer` (Sonnet) in parallel with the knowledge-mapper Haiku pre-extractor trio (TLAs / domain-terms / dropped-tangents); Burst 2 runs `knowledge-mapper` synth (Sonnet) gated on the Haiku trio's `raw/*.md` outputs; Burst 3 runs `next-session-prompter` (Opus) gated on `knowledge-mapper`. Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run; tier-aware decomposition (v6) is expected to drop further by moving the read-and-extract passes to Haiku.
 
 ## Tiering rationale (read before editing)
 
@@ -24,9 +24,11 @@ Before starting, write a session summary to prime the agents. This is the critic
    ```bash
    SID="$(date +%Y-%m-%dT%H-%M-%S)"  # absolute timestamp, second-granularity (e.g. 2026-04-05T19-48-30)
    SD="$HOME/.claude/consolidation/$SID"   # absolute path; this is what agents receive
-   mkdir -p "$SD"
+   mkdir -p "$SD/raw"                       # orchestrator-owned precondition for Burst 1's Haiku writers
    ```
    All files for this run go into `$SD`. Parallel sessions get their own dated directories and never collide.
+
+   **Coordination invariant.** The orchestrator owns directory creation. By the time any agent is spawned, `$SD/` and `$SD/raw/` both exist. Agents MUST NOT create directories — if a write fails because a parent dir is missing, that is an orchestrator bug, not an agent recovery case. (Earlier drafts told individual agent prompts to "create if it doesn't exist"; that diffused the precondition across N writers and is exactly the kind of coordination bug Carnot flagged on PR #41 — same anti-pattern as the old `latest/` symlink.)
 
    ### Cross-session safety
 
@@ -89,7 +91,7 @@ Output 10-20 candidates max — over-include rather than over-filter; Maxwell wi
 })
 ```
 
-The orchestrator substitutes `<JSONL_PATH>` with the actual transcript path and `<OUTPUT_PATH>` with `{{SESSION_DIR}}/raw/marker-candidates.md` before spawning. Create `{{SESSION_DIR}}/raw/` if it doesn't exist.
+The orchestrator substitutes `<JSONL_PATH>` with the actual transcript path and `<OUTPUT_PATH>` with `{{SESSION_DIR}}/raw/marker-candidates.md` before spawning. (`{{SESSION_DIR}}/raw/` is created by the orchestrator in Setup — see the `mkdir -p "$SD/raw"` step. Agents must not create directories.)
 
 ### Maxwell: filter + triage
 
@@ -184,7 +186,7 @@ Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated
 **File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `{{SESSION_DIR}}/raw/marker-candidates.md` only
 - knowledge-mapper Haiku trio → `{{SESSION_DIR}}/raw/tla-candidates.md`, `{{SESSION_DIR}}/raw/domain-terms.md`, `{{SESSION_DIR}}/raw/dropped-tangents.md` (one file each, distinct)
-- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `~/.claude/wins.md`
+- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `{{SESSION_DIR}}/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up)
 - `knowledge-mapper` synth (Sonnet) → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
 - `next-session-prompter` (Opus) → `{{SESSION_DIR}}/next-session-prompt.md` only
 
@@ -251,7 +253,7 @@ Actions:
 
    - **6c. Empty-snapshot semantics + overwrite policy.** If the snapshot is empty, still write `[]` — the wake-up step's existence check is the contract; an absent file means "no consolidation has run", an empty array means "consolidation ran, no tasks were pending". If a `pending-tasks.json` already exists at the target path from a prior unrestored session, overwrite it: the TaskList snapshot from the most-recent consolidation is authoritative. If the prior session had pending tasks Nick still wanted, they're recoverable from MEMORY.md or that session's `{{SESSION_DIR}}/open-tasks.md` — so the last-writer-wins behavior here is bounded, not silent data loss.
 
-7. **Append wins** from this session to ~/.claude/wins.md (with today's date).
+7. **Write wins** from this session to `{{SESSION_DIR}}/wins.md` (with today's date). Do NOT write to `~/.claude/wins.md` directly — the orchestrator appends this file to the global wins log in the Wrap-up step, ensuring a single writer even when parallel /consolidate sessions are running.
 
 Do NOT write {{SESSION_DIR}}/next-session-prompt.md — that file is owned exclusively by the next-session-prompter agent.
 
@@ -370,6 +372,11 @@ Show Nick a **one-line** status per agent (3 lines total). Read `{{SESSION_DIR}}
 ## Wrap-up
 
 After Phase 1 completes:
+- **Merge session wins to global log.** If `{{SESSION_DIR}}/wins.md` exists and is non-empty, append it to `~/.claude/wins.md`:
+  ```bash
+  cat "{{SESSION_DIR}}/wins.md" >> "$HOME/.claude/wins.md"
+  ```
+  The orchestrator is the sole writer to `~/.claude/wins.md` — memory-writer wrote only to the session-scoped file, so this single-append is race-free even across parallel /consolidate sessions.
 - Confirm memory files were written (memory-writer's status line)
 - Show Nick the final next-session prompt
 - Mention `{{SESSION_DIR}}/open-tasks.md` exists if there were any open tasks — call it out so Nick knows it's there
