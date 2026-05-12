@@ -60,6 +60,21 @@ Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's
 
 The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each line is a JSON object — parse it with `jq` or equivalent; do NOT substring-grep the raw line. For each object, select those where `.role == "user"` (or `.type == "user"` — verify the field in the actual JSONL), and within those, extract only text-type content blocks: `.content[] | select(.type=="text") | .text`. Ignore `tool_use` and `tool_result` content blocks — substring-grepping the raw line produces false positives from nested tool content. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the read.
 
+**Resolve the JSONL path before spawning.** The orchestrator computes `$JSONL_PATH` from cwd, then passes the resolved path to the Haiku agent. Claude Code stores transcripts at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` where `encoded-cwd` replaces every `/` in the absolute cwd with `-`:
+
+```bash
+# Resolve the current session's JSONL transcript path.
+# Claude Code stores transcripts at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
+# where encoded-cwd replaces every `/` in the absolute cwd with `-`.
+ENCODED_CWD="${PWD//\//-}"
+JSONL_PATH="$(ls -t "$HOME/.claude/projects/$ENCODED_CWD"/*.jsonl 2>/dev/null | head -1)"
+# Newest by mtime = current session. If empty, the session hasn't yet flushed
+# to disk and the marker-extractor pass should be skipped (Nick may have just
+# started; nothing to triage).
+```
+
+If `$JSONL_PATH` is empty after this step, skip the marker-extractor spawn entirely and proceed to Phase 0b. Do not pass an empty path to the Haiku agent.
+
 ### Spawn: marker-extractor (Haiku)
 
 ```
@@ -68,8 +83,8 @@ Agent({
   subagent_type: "general-purpose",
   model: "haiku",
   prompt: `
-Read the session transcript at <JSONL_PATH>. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
-  jq -r 'select(.role == "user") | .content[] | select(.type == "text") | .text' <JSONL_PATH>
+Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
+  jq -r 'select(.role == "user") | .content[] | select(.type == "text") | .text' "$JSONL_PATH"
 (If the field is `.type == "user"` instead of `.role == "user"`, try both — verify against the actual JSONL structure.) Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
 
 Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
@@ -88,12 +103,12 @@ For EACH candidate, output one dotpoint in this exact format (one per line):
 [HH:MM] [emoji] "<verbatim quote, ≤120 chars; truncate with … if longer>"
        → <one-line guess at what this signals>
 
-Output 10-20 candidates max — over-include rather than over-filter; Maxwell will downselect. Write to <OUTPUT_PATH> (overwrite). Return a 1-sentence status only.
+Output 10-20 candidates max — over-include rather than over-filter; Maxwell will downselect. Write to $SD/raw/marker-candidates.md (overwrite). Return a 1-sentence status only.
   `
 })
 ```
 
-The orchestrator substitutes `<JSONL_PATH>` with the actual transcript path and `<OUTPUT_PATH>` with `{{SESSION_DIR}}/raw/marker-candidates.md` before spawning. (`{{SESSION_DIR}}/raw/` is created by the orchestrator in Setup — see the `mkdir -p "$SD/raw"` step. Agents must not create directories.)
+The orchestrator resolves `$JSONL_PATH` using the derivation block above and passes it to the Haiku agent. `$SD/raw/marker-candidates.md` is the output path — `$SD/raw/` is created by the orchestrator in Setup (see `mkdir -p "$SD/raw"`; agents must not create directories).
 
 ### Maxwell: filter + triage
 
