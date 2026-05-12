@@ -194,6 +194,8 @@ Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated
 
 The exclusivity is what makes "first-writer wins" unnecessary — there is no second writer.
 
+**Model tier is a spawn parameter, not advisory prose.** The orchestrator MUST pass `model: "sonnet"` or `model: "opus"` in the Agent spawn call for memory-writer, knowledge-mapper synth, and next-session-prompter — the `MODEL:` line in each brief is documentation, not an executable parameter. The Haiku spawn examples already include `model: "haiku"` in their `Agent({...})` call; the Sonnet and Opus spawn examples below include the equivalent. Omitting the model parameter lets the harness default to whatever tier is cheapest, which is not the right call here.
+
 ### Why specialization (not just parallelism)
 
 Three different jobs, three different inductive biases:
@@ -226,6 +228,11 @@ This is 3 phases of agent execution. The 2026-05-01 wall-clock measurement (~2 m
 #### Agent 1: memory-writer
 
 ```
+Agent({
+  description: "memory-writer — file-and-index side of consolidation",
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  prompt: `
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
 
 MODEL: sonnet. Most of your work (open-tasks formatting, pending-tasks.json, scorecard, wins append, memory-health bumps) is mechanical, but the TRANSFORM-worthiness judgment for feedback memories and the edge-type choices for MEMORY.md need Sonnet-level reasoning. The mechanical sub-jobs ride along inline rather than spawning a Haiku sub-burst — their cost is too small to justify subagent overhead.
@@ -269,6 +276,8 @@ TaskList snapshot (from orchestrator) — JSON array, one object per task:
 (Orchestrator: replace the example above with the actual JSON. If there are zero pending/in_progress tasks, pass `[]`.)
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
+  `
+})
 ```
 
 #### Pre-pass: knowledge-mapper Haiku extractors (parallel burst, spawned alongside memory-writer)
@@ -301,6 +310,11 @@ Agent({
 #### Agent 2: knowledge-mapper
 
 ```
+Agent({
+  description: "knowledge-mapper synth — graph side of consolidation",
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  prompt: `
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly. (Historical note: routing through a `latest/` symlink caused data loss on 2026-05-02→03 — knowledge-mapper's first-pass output was overwritten by a parallel tab. The symlink no longer exists; absolute paths are the only path.)
 
 MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal description, hierarchical forward plan. Haiku pre-extractors have already produced raw candidate lists at {{SESSION_DIR}}/raw/tla-candidates.md, {{SESSION_DIR}}/raw/domain-terms.md, and {{SESSION_DIR}}/raw/dropped-tangents.md.
@@ -327,14 +341,21 @@ What to capture:
 
 Actions:
 1. Write everything to {{SESSION_DIR}}/consolidation.md as a single document with sections: Knowledge Graph / Domain Terms / Forward Plan / Dropped Tangents / Error Triage Patterns / Memory File Candidates.
-2. **Do NOT write to the memory directory directly.** memory-writer is the sole owner of persistent memory writes. If you identify a concept that deserves a standalone memory file, list it under "Memory File Candidates" in consolidation.md with a proposed filename, suggested edges, and a 2-3 sentence body. memory-writer's run is happening in parallel and may already cover it; if not, the candidate will be picked up on the next consolidation pass (or by Nick reading consolidation.md).
+2. **Do NOT write to the memory directory directly.** memory-writer is the sole owner of persistent memory writes. If you identify a concept that deserves a standalone memory file, list it under "Memory File Candidates" in consolidation.md with a proposed filename, suggested edges, and a 2-3 sentence body. memory-writer ran in Burst 1 alongside the Haiku pre-pass and has completed by the time you run; it may have already produced a `feedback_*.md` for this concept — if not, the candidate will be picked up on the next consolidation pass (or by Nick reading consolidation.md).
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
+  `
+})
 ```
 
 #### Agent 3: next-session-prompter (runs AFTER knowledge-mapper)
 
 ```
+Agent({
+  description: "next-session-prompter — craft the cold-reader onboarding prompt",
+  subagent_type: "general-purpose",
+  model: "opus",
+  prompt: `
 ABSOLUTE PATHS ONLY. The orchestrator has substituted the literal absolute session-dir path for every `{{SESSION_DIR}}` reference below — use those paths directly.
 
 MODEL: opus. This is the one deliverable Nick copy-pastes into the next session — its voice, challenge-skill calibration, and ability to "make the next instance want to dive in" set whether tomorrow lands in flow. Don't cheap out; Opus earns its cost here.
@@ -369,6 +390,8 @@ Actions:
 2. Score the projected engagement honestly — if some dimensions are naturally lower, say so.
 
 IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmation and any issues encountered. All detail goes into the files, not the return message.
+  `
+})
 ```
 
 ### After all three return
