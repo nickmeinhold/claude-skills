@@ -217,7 +217,7 @@ The `{{SESSION_DIR}}` placeholders in the brief specifications below are **docum
 **File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `{{SESSION_DIR}}/raw/marker-candidates.md` only
 - knowledge-mapper Haiku trio → `{{SESSION_DIR}}/raw/tla-candidates.md`, `{{SESSION_DIR}}/raw/domain-terms.md`, `{{SESSION_DIR}}/raw/dropped-tangents.md` (one file each, distinct)
-- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `{{SESSION_DIR}}/scorecard.json` + `{{SESSION_DIR}}/open-tasks.md` + `{{SESSION_DIR}}/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via `flock` — `~/.claude/wins.md.lock` is the lock file; see Wrap-up section)
+- `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `$SD/scorecard.json` + `$SD/open-tasks.md` + `$SD/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via mkdir-trap lock — `$HOME/.claude/wins.md.lock.d` is the lock directory; see Wrap-up section)
 - `knowledge-mapper` synth (Sonnet) → `{{SESSION_DIR}}/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
 - `next-session-prompter` (Opus) → `{{SESSION_DIR}}/next-session-prompt.md` only
 
@@ -430,17 +430,21 @@ Show Nick a **one-line** status per agent (3 lines total). Read `{{SESSION_DIR}}
 ## Wrap-up
 
 After Phase 1 completes:
-- **Merge session wins to global log.** If `{{SESSION_DIR}}/wins.md` exists and is non-empty, append it to `~/.claude/wins.md` under an exclusive `flock` to prevent interleave from parallel `/consolidate` orchestrators:
+- **Merge session wins to global log.** If `$SD/wins.md` exists and is non-empty, append it to `~/.claude/wins.md` under an exclusive mkdir-trap lock to prevent interleave from parallel `/consolidate` orchestrators:
   ```bash
   # Wrap-up step: append session-local wins to global wins file under exclusive lock.
-  # flock serializes across all parallel /consolidate orchestrators on this machine
-  # — fd 200 holds the lock from open until the cat completes, then releases.
-  {
-    flock 200
-    cat "$SD/wins.md" >> ~/.claude/wins.md
-  } 200>~/.claude/wins.md.lock
+  # mkdir is atomic on POSIX; lock-by-directory-creation is portable across macOS/Linux
+  # without needing util-linux's flock(1). The trap ensures release even on early exit.
+  if [ -s "$SD/wins.md" ]; then
+    LOCK="$HOME/.claude/wins.md.lock.d"
+    while ! mkdir "$LOCK" 2>/dev/null; do sleep 0.05; done
+    trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+    cat "$SD/wins.md" >> "$HOME/.claude/wins.md"
+    rmdir "$LOCK"
+    trap - EXIT
+  fi
   ```
-  The `flock` on `~/.claude/wins.md.lock` is the POSIX standard answer to the multi-byte-append race: two orchestrators running concurrently both block on the lock file; the second waits for the first to complete before writing. This is the same class of bug as the `latest/` symlink (PR #40 fix) — a shared mutable resource without a writer-serialization mechanism.
+  The `[ -s "$SD/wins.md" ]` guard skips the lock entirely when there is nothing to append (no-op session). `mkdir` is atomic — only one process can succeed at creating the same directory; the losers retry with 50ms backoff. `trap` ensures `rmdir` runs even on abnormal exit (Ctrl-C, error), preventing a stuck lock. The lock artifact is `$HOME/.claude/wins.md.lock.d` (a directory, not a file). This replaces the `flock(1)` pattern from 7c04504, which is not in macOS stock userland and fails silently if absent — defeating the race-free property the lock was meant to provide. The `mkdir` pattern achieves the same serialization guarantee without the external dependency.
 - Confirm memory files were written (memory-writer's status line)
 - Show Nick the final next-session prompt
 - Mention `{{SESSION_DIR}}/open-tasks.md` exists if there were any open tasks — call it out so Nick knows it's there
