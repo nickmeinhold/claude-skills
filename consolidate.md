@@ -175,11 +175,11 @@ Present to Nick as the seed for the Phase-0-style conversation questions ("what 
 
 Write the synthesis to `{{SESSION_DIR}}/multi-perspective-retro.md`.
 
-## Phase 1: Three specialized agents (2 parallel, then 1)
+## Phase 1: Tier-aware specialized agents (Haiku trio + Sonnet pair, then Opus)
 
 Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated — that's where the in-context judgment lives. Everything downstream of `session-summary.md` is mechanical knowledge capture and can be specialized + partially parallelized.
 
-Earlier versions of this skill ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). That serialization had one real semantic dependency (next-session-prompter needs the knowledge graph + forward plan) and a lot of incidental coupling that didn't need to be sequential. Splitting into three **specialized** agents — two of them in parallel, the third gated on knowledge-mapper's output — dropped wall-clock to ~2 min in the 2026-05-01 test run, with no loss of fidelity.
+**Evolution.** v4 ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). v5 split them into three **specialized** agents — memory-writer + knowledge-mapper in parallel, next-session-prompter gated on knowledge-mapper — and dropped wall-clock to ~2 min in the 2026-05-01 test run. v6 (this version) goes one further: it splits the extraction work *inside* knowledge-mapper into a Haiku pre-pass (TLAs / domain-terms / dropped-tangents) running parallel to memory-writer in Burst 1, then a Sonnet synth in Burst 2 that consumes those raw candidates, then Opus for the next-session prompt in Burst 3. Three bursts instead of two; the extra synchronization is paid for by moving the heaviest reads to Haiku.
 
 **File ownership is exclusive.** Each agent owns one output file in `{{SESSION_DIR}}/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `{{SESSION_DIR}}/raw/marker-candidates.md` only
