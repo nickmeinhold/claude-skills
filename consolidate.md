@@ -67,18 +67,34 @@ The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-
 # Claude Code stores transcripts at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
 # where encoded-cwd replaces every `/` in the absolute cwd with `-`.
 #
-# Authoritative: Claude Code exposes the current session ID as CLAUDE_CODE_SESSION_ID
-# (verified 2026-05-12). Use it directly — this eliminates the multi-tab ambiguity
-# where the newest JSONL by mtime could belong to a concurrent tab in the same cwd.
-ENCODED_CWD="${PWD//\//-}"
-JSONL_PATH="$HOME/.claude/projects/$ENCODED_CWD/${CLAUDE_CODE_SESSION_ID}.jsonl"
-# If the env var is unset or the file doesn't exist yet (session hasn't flushed),
+# Claude Code exposes both inputs the JSONL path needs — use them, don't recompute:
+#
+#   SESSION ID:
+#     1. $CLAUDE_CODE_SESSION_ID — explicit env var (newer harness versions; verified
+#        2026-05-12 on a peer-session harness)
+#     2. $CLAUDE_ENV_FILE → ~/.claude/session-env/<UUID>/sessionstart-hook-0.sh
+#        where <UUID> IS the session ID (every harness with SessionStart hooks;
+#        verified on 2.1.126, which does NOT export #1)
+#
+#   PROJECT DIR (for the encoded-cwd prefix):
+#     $CLAUDE_PROJECT_DIR — the session's STARTING cwd. Authoritative even after
+#     the user has `cd`'d into a subdirectory mid-session. Falls back to $PWD only
+#     when the env var is absent. Computing from $PWD alone fails the common case
+#     where /consolidate runs after a cd into a workspace child.
+#
+# Both session ID and project dir are per-session-stable, so neither suffers from
+# the two-tab mtime ambiguity that bit PR #40. DO NOT fall back to
+# `ls -t *.jsonl | head -1` — that is a latest/-shape workaround that picks the
+# wrong session when a concurrent tab is active in the same cwd.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+ENCODED_CWD="${PROJECT_DIR//\//-}"
+SESSION_ID="${CLAUDE_CODE_SESSION_ID:-$(basename "$(dirname "${CLAUDE_ENV_FILE:-/}")" 2>/dev/null)}"
+JSONL_PATH="$HOME/.claude/projects/$ENCODED_CWD/${SESSION_ID}.jsonl"
+# If neither exposure is available or the file doesn't exist yet (session hasn't flushed),
 # JSONL_PATH will point to a non-existent file — the emptiness check below handles it.
-# DO NOT fall back to ls -t mtime ordering: that is a latest/-shape workaround that
-# picks the wrong session in two-tab scenarios (same failure class as PR #40).
 ```
 
-If `$JSONL_PATH` does not resolve to an existing file (session hasn't flushed yet, or `CLAUDE_CODE_SESSION_ID` is unset), skip the marker-extractor spawn entirely and proceed to Phase 0b. Check with `[ -f "$JSONL_PATH" ]` before spawning. Do not pass a non-existent path to the Haiku agent.
+If `$JSONL_PATH` does not resolve to an existing file (session hasn't flushed yet, or neither `$CLAUDE_CODE_SESSION_ID` nor `$CLAUDE_ENV_FILE` is set), skip the marker-extractor spawn entirely and proceed to Phase 0b. Check with `[ -f "$JSONL_PATH" ]` before spawning. Do not pass a non-existent path to the Haiku agent.
 
 ### Spawn: marker-extractor (Haiku)
 
