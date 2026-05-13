@@ -105,6 +105,8 @@ Apply any local review criteria in addition to the standard review process.
 - Consider the PR's scope - don't request unrelated changes
 - Acknowledge good patterns and improvements
 
+If your review surfaces **3 or more findings that look like they rhyme** (the same anti-pattern played in different positions — e.g. multiple "single-owner" coordination issues, multiple gestural verification phrases, multiple substring-grep-where-a-schema-belongs), suggest invoking `/spiral-review $1` after the author addresses your verdict. The spiral discipline pulls one principle out of the bouquet rather than treating the findings as independent tasks. (See `~/.claude/consolidation/2026-05-12T19-51-spiral/spiral-audit-PR41.md` for the worked example.)
+
 ## Posting the Review
 
 **IMPORTANT:** Always post reviews as **KelvinBitBrawler [bot]** using a GitHub App installation token. (MaxwellMergeSlam is the PR author when using `/ship`, so it cannot approve its own PRs.)

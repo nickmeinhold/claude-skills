@@ -429,4 +429,6 @@ After posting reviews, provide a summary to the user:
 - What's the recommended action?
 - If a reviewer was unavailable, mention which and why (capacity? auth? error?) so the user can decide whether to re-run or escalate.
 
+If the consensus + disputed + unique-catches list totals **3 or more findings that look like they rhyme** (same shape played at different positions — e.g. several "single-owner" coordination issues, or several "string-doing-the-job-of-a-type" parsing issues, or several "gestural verification" issues), invoke `/spiral-review $1` next. The spiral pulls one principle out of the bouquet and fixes adjacent findings as a chord rather than a stack. See `~/.claude/consolidation/2026-05-12T19-51-spiral/spiral-audit-PR41.md` for the canonical worked example — PR #41's 5 findings collapsed into the single principle *gestural becomes auditable, with a named single owner*.
+
 Remember: Three heads (even artificial ones, from three different model families) are better than one. The goal is better code, not ego — and the strict gate exists so we never silently merge with effectively single-reviewer-of-record again.
