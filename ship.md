@@ -493,7 +493,87 @@ If approved:
    pending CI. By this point the user has already reviewed all feedback (Step 8), so
    the only remaining gate is CI completing.
 
-3. Report success with the merged PR URL.
+3. Capture the merge commit SHA for the verification step:
+   ```bash
+   MERGE_SHA=$(gh pr view $PR_NUMBER --json mergeCommit --jq '.mergeCommit.oid')
+   ```
+
+### Step 10: Verify on the production ref (MANDATORY)
+
+**"Written" is not "merged" is not "deployed."** Per the closing-ritual doctrine
+in `~/.claude/CLAUDE.md`, only **State 3** counts as "fixed/deployed":
+
+| State | Definition | Evidence required |
+|---|---|---|
+| 1 | PR opened | The diff exists. CI may be green. Production unchanged. |
+| 2 | PR merged | Bytes are on the production ref (e.g. `main`). Cron / CDN / runtime caches not yet exercised. |
+| 3 | Deployed AND exercised | Read state from the production source; confirm bytes match. For cron/event-driven systems, wait one cycle and confirm the new behaviour. |
+
+After `gh pr merge` succeeds, you have **State 2 only**. Don't say "shipped"
+or "deployed" yet.
+
+#### 10a. Match the deploy run by `headSha`, NEVER by recency
+
+Don't use `gh run list --limit 1` — it returns the most recent *completed* run,
+which may be an unrelated older deploy that finished while yours is still
+pending. **Always match by SHA:**
+
+```bash
+# Wait for the deploy run on YOUR merge commit to complete
+until [ "$(gh run list --workflow=<deploy-workflow.yml> --limit 5 \
+  --json status,headSha \
+  --jq "[.[] | select(.headSha == \"$MERGE_SHA\")][0].status" \
+  2>/dev/null)" = "completed" ]; do
+  sleep 20
+done
+
+# Read its conclusion
+gh run list --workflow=<deploy-workflow.yml> --limit 5 \
+  --json conclusion,headSha,databaseId \
+  --jq "[.[] | select(.headSha == \"$MERGE_SHA\")][0]"
+```
+
+If the project doesn't have a deploy workflow that fires on merge to main,
+skip this sub-step and document the manual deploy step the user needs to take.
+
+**Why it matters:** during PR #18 in `enspyrco/enspyrco-site`, querying
+`--limit 1` returned a 5-hour-old run (PR #17's deploy). I would have
+declared State 3 verified against stale content if I hadn't cross-checked
+`headSha`. Always match by SHA.
+
+#### 10b. Read the production ref and confirm bytes
+
+```bash
+# For each file the PR changed, read the bytes on the production ref
+for path in <changed-file-paths>; do
+  gh api "repos/$REPO/contents/$path?ref=$BASE_BRANCH" --jq '.sha,.size'
+done
+
+# If the project has a live URL, hit it with cache-bust and grep for a
+# signature phrase from the change
+curl -s "https://<production-url>/<path>?cb=$(date +%s)" | \
+  grep -oE "<signature-string-from-the-change>"
+```
+
+Bytes returned from `origin/<production-ref>` should match what you committed.
+The live URL fetch should contain a signature string from your change (a new
+heading, a renamed identifier, a paragraph you added). If both confirm, you
+are at State 3. Only now: "shipped / deployed / fixed."
+
+#### 10c. Defensive HEAD check before the next operation
+
+If a peer Claude Code instance may be active in this repo (per the global
+`feedback_peer_instance_collisions.md`), verify HEAD before any subsequent
+git-mutating command:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+If HEAD has shifted to a branch you didn't create (e.g., a peer Scribe instance
+yanked it), `git checkout <your-branch>` to recover, then continue. Your PR
+on origin is unaffected — peer-instance damage is HEAD-shifting, not
+commit-rewriting.
 
 ## Output Format
 
@@ -521,7 +601,12 @@ Report progress at each step:
 - [x] Merged PR #42 (squash)
 - [x] Deleted branch: feature-branch
 
-**Done! Changes shipped successfully.**
+### Verify on production (State 3)
+- [x] Deploy run matched by SHA `a1b2c3d` → success
+- [x] Bytes on `main` confirmed for changed files
+- [x] Live URL grep confirmed signature string
+
+**Done! Changes shipped, deployed, AND verified live.**
 ```
 
 ## Safety Checks
