@@ -58,7 +58,7 @@ Use `{{SESSION_DIR}}` as a literal placeholder below for the full session direct
 
 Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: triage each ("real / autopilot"), not remember.
 
-The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each line is a JSON object — parse it with `jq` or equivalent; do NOT substring-grep the raw line. For each object, select those where `.role == "user"` (or `.type == "user"` — verify the field in the actual JSONL), and within those, extract only text-type content blocks: `.content[] | select(.type=="text") | .text`. Ignore `tool_use` and `tool_result` content blocks — substring-grepping the raw line produces false positives from nested tool content. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the read.
+The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each line is a JSON object — parse it with `jq` or equivalent; do NOT substring-grep the raw line. For each object, select those where top-level `.type == "user"` — that identifies user-direction records in Claude Code JSONL. Within those, `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks; extract text via the shape-aware filter in the Haiku agent prompt below. Ignore `tool_use` and `tool_result` content blocks — substring-grepping the raw line produces false positives from nested tool content. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the read.
 
 **Resolve the JSONL path before spawning.** The orchestrator computes `$JSONL_PATH` from cwd, then passes the resolved path to the Haiku agent. Claude Code stores transcripts at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` where `encoded-cwd` replaces every `/` in the absolute cwd with `-`:
 
@@ -89,8 +89,14 @@ Agent({
   model: "haiku",
   prompt: `
 Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
-  jq -r 'select(.role == "user") | .content[] | select(.type == "text") | .text' "$JSONL_PATH"
-(If the field is `.type == "user"` instead of `.role == "user"`, try both — verify against the actual JSONL structure.) Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
+  jq -r 'select(.type=="user")
+    | select(.message.content
+        | type == "string" or any(.[]?; .type=="text"))
+    | "\(.timestamp) | \(.message.content
+        | if type=="string" then .
+          else (.[] | select(.type=="text") | .text)
+          end)"' "$JSONL_PATH"
+The top-level `.type=="user"` identifies user-direction records (NOT `.role == "user"` — that field doesn't exist at the top level in Claude Code JSONL). `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks — the filter handles both and EXCLUDES records where content is only `tool_result` blocks (those are tool responses, not Nick's input). Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
 
 Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
 
@@ -124,7 +130,7 @@ Haiku-extracted marker candidates are CANDIDATES, not ground truth — Haiku wil
 # composing the present-to-Nick dotpoints):
 while IFS= read -r line; do
   quote=$(echo "$line" | grep -o '"[^"]*"' | head -1)
-  if [ -n "$quote" ] && jq -r '.message.content[]? | select(.type=="text") | .text' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
+  if [ -n "$quote" ] && jq -r 'select(.type=="user") | .message.content | if type=="string" then . else (.[]? | select(.type=="text") | .text) end' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
     echo "$line"  # keep
   else
     echo "DROPPED (no JSONL match): $line" >&2
