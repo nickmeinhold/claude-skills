@@ -538,14 +538,18 @@ DEPLOY_WORKFLOW=${DEPLOY_WORKFLOW:-auto}
 
 if [ "$DEPLOY_WORKFLOW" = "none" ]; then
   echo "Project declares no deploy workflow. State 2 reached. Manual deploy required."
-  # Skip 10a + 10b; jump to 10c.
+  # Skip the bounded poll and conclusion check below; jump straight to 10c.
+  # The verification-mode in 10b may still apply if the user runs the deploy
+  # manually before this point — but Step 10's automated path stops here.
+  SKIP_DEPLOY_CHECK=1
 fi
 ```
 
 Bounded poll for the deploy run on the merge commit (typed `seq` budget, typed
-exit on zero-match):
+exit on zero-match) — skipped when `deploy-workflow: none`:
 
 ```bash
+if [ -z "$SKIP_DEPLOY_CHECK" ]; then
 DEPLOY_RUN=""
 MAX_ITERATIONS=60   # 60 * 20s = 20-min wall-clock budget
 for i in $(seq 1 $MAX_ITERATIONS); do
@@ -587,6 +591,7 @@ if [ "$CONCLUSION" != "success" ]; then
   exit 1
 fi
 echo "Deploy run $(echo "$DEPLOY_RUN" | jq -r '.id') succeeded for $MERGE_SHA."
+fi  # end SKIP_DEPLOY_CHECK guard
 ```
 
 **Why this matters:** during PR #18 in `enspyrco/enspyrco-site`, querying
