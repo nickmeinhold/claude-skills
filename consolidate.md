@@ -169,13 +169,16 @@ Marker categories Haiku is told to look for (kept here for the editing record, i
 - **Length anomalies**: terse messages amid prose (`PR`, `yeah`, `ship`) = high-conviction decisions; long messages amid terse = "I'm thinking out loud"
 - **Conversational-flow markers**: >5 min gap between user messages = Nick stopped to think; re-asking similar questions = first answer didn't click
 
-### Output format — quote-first dotpoints
+### Output format — numbered, quote-first dotpoints
 
-Recognition over recall. Nick's own words are his strongest recall trigger.
+Recognition over recall. Nick's own words are his strongest recall trigger. **Always number the markers (1, 2, 3, …) so Nick can triage by reference ("1 real, 2 autopilot, 3 real, …") instead of having to re-quote each one back.**
 
 ```
-[time] [emoji] "<verbatim quote from Nick>"
+1. [time] [emoji] "<verbatim quote from Nick>"
        → <consequence in 1 line>
+2. [time] [emoji] "<verbatim quote from Nick>"
+       → <consequence in 1 line>
+…
 ```
 
 Emoji-as-category (consistent at-a-glance scanning):
@@ -187,11 +190,11 @@ Emoji-as-category (consistent at-a-glance scanning):
 - 🪤 friction / process miss
 - 🎯 direction shift
 
-Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. Drop autopilot-sounding markers entirely; only surface candidates that have a plausible "so what".
+Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. Drop autopilot-sounding markers entirely; only surface candidates that have a plausible "so what". Numbering is not negotiable — un-numbered markers force Nick into recall-mode on triage, defeating the whole "recognition over recall" point of this phase.
 
 ### Present + triage
 
-Show the dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall. The "yes" rows seed the conversation with anchored memories Nick now recognises, which feeds richer content into the session-summary above (you may want to amend it).
+Show the numbered dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall, and even cheaper when Nick can answer "1 real, 2 autopilot, 3 real, 4-6 real, 7 autopilot" instead of re-typing the markers themselves. The "yes" rows seed the conversation with anchored memories Nick now recognises, which feeds richer content into the session-summary above (you may want to amend it).
 
 Write the surfaced + triaged dotpoints to `$SD/affective-highlights.md` so the Phase 1+ agents can use them.
 
