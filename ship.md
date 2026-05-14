@@ -622,34 +622,90 @@ api-probe-url: https://example.com/_version           # required for api-probe
 api-probe-grep: <expected substring>                  # required for api-probe
 ```
 
-For each changed file, determine its verification kind from the closed set
-`{ added, modified, renamed, deleted, binary, generated }` — each has a
-different rule:
+Dispatch on the verification mode. `api-probe`, `runtime-check`, and
+`skip-no-runtime` are project-wide single-shot checks; `live-grep` iterates
+over the closed set of file-change kinds `{ ADDED, MODIFIED, RENAMED,
+DELETED, BINARY, GENERATED }`:
 
 ```bash
-gh pr view $PR_NUMBER --json files --jq '.files[] | {path, additions, deletions, changeType}' \
-  | while read -r FILE_JSON; do
+VMODE=$(grep -E '^verification-mode:' .claude/ship-config.md 2>/dev/null \
+        | awk '{print $2}')
+
+case "$VMODE" in
+  skip-no-runtime)
+    echo "verification-mode=skip-no-runtime. State 2 reached (deploy succeeded,"
+    echo "bytes on $BASE_BRANCH); no runtime evidence available — do not claim 'live'."
+    ;;
+
+  api-probe)
+    URL=$(grep -E '^api-probe-url:'  .claude/ship-config.md | sed 's/^api-probe-url:[[:space:]]*//')
+    NEEDLE=$(grep -E '^api-probe-grep:' .claude/ship-config.md | sed 's/^api-probe-grep:[[:space:]]*//')
+    if curl -fsS "$URL?cb=$(date +%s)" | grep -qF "$NEEDLE"; then
+      echo "State 3 (api-probe): $URL contains '$NEEDLE'."
+    else
+      echo "ERROR: $URL did not contain '$NEEDLE'. State 3 not reached."; exit 1
+    fi
+    ;;
+
+  runtime-check)
+    CMD=$(grep -E '^runtime-smoke-command:' .claude/ship-config.md | sed 's/^runtime-smoke-command:[[:space:]]*//')
+    if eval "$CMD"; then
+      echo "State 3 (runtime-check): '$CMD' exited 0."
+    else
+      echo "ERROR: '$CMD' exited non-zero. State 3 not reached."; exit 1
+    fi
+    ;;
+
+  live-grep)
+    URL_PATTERN=$(grep -E '^production-url-pattern:' .claude/ship-config.md | sed 's/^production-url-pattern:[[:space:]]*//')
+    SIG_TEMPLATE=$(grep -E '^signature-extraction:'   .claude/ship-config.md | sed 's/^signature-extraction:[[:space:]]*//')
+    FAILED=0
+    # Process substitution rather than a pipe-to-while so the loop body runs
+    # in the parent shell — `exit 1` inside a `... | while` would only exit
+    # the subshell. `set -e` similarly would not propagate.
+    while read -r FILE_JSON; do
+      PATH_=$(echo "$FILE_JSON" | jq -r '.path')
       CHANGE=$(echo "$FILE_JSON" | jq -r '.changeType')
-      PATH_=$(echo "$FILE_JSON"  | jq -r '.path')
+      URL="${URL_PATTERN//\{path\}/$PATH_}"
+
       case "$CHANGE" in
-        ADDED|MODIFIED)
-          # live-grep / api-probe / runtime-check applies
-          ;;
-        RENAMED)
-          # verify NEW path resolves; ignore old
+        ADDED|MODIFIED|RENAMED)
+          SIG_CMD="${SIG_TEMPLATE//\{path\}/$PATH_}"
+          SIGNATURE=$(eval "$SIG_CMD" 2>/dev/null)
+          if [ -z "$SIGNATURE" ]; then
+            echo "WARN: no signature extracted from $PATH_; skipping live probe for this file."
+            continue
+          fi
+          if curl -fsS "$URL?cb=$(date +%s)" | grep -qF "$SIGNATURE"; then
+            echo "State 3 (live-grep): $PATH_ → $URL matched signature."
+          else
+            echo "ERROR: $URL did not contain signature from $PATH_."; FAILED=1
+          fi
           ;;
         DELETED)
-          # assert production URL now returns 404
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL")
+          if [ "$CODE" = "404" ]; then
+            echo "State 3 (live-grep): deleted $PATH_ → $URL returns 404 as expected."
+          else
+            echo "ERROR: $PATH_ deleted but $URL still responds (HTTP $CODE)."; FAILED=1
+          fi
           ;;
-        # Binary/generated need explicit ship-config opt-in to verify;
-        # otherwise rely on 10a deploy success.
+        # BINARY/GENERATED need explicit per-file verification opt-in. Default:
+        # rely on 10a deploy success only. If runtime evidence is required for
+        # these kinds, switch verification-mode to runtime-check.
       esac
-    done
-```
+    done < <(gh pr view "$PR_NUMBER" --json files \
+             --jq '.files[] | {path, changeType} | @json')
+    [ "$FAILED" -eq 0 ] || { echo "live-grep verification failed for ≥1 file. State 3 not reached."; exit 1; }
+    ;;
 
-If `verification-mode: skip-no-runtime` is set, Step 10 stops here at honest
-State 2.5 (deploy succeeded, source bytes on `main`, no runtime evidence
-available). **Do not** declare State 3.
+  *)
+    echo "ERROR: verification-mode missing or unrecognized in .claude/ship-config.md."
+    echo "Set one of: live-grep | api-probe | runtime-check | skip-no-runtime"
+    exit 1
+    ;;
+esac
+```
 
 #### 10c. Defensive HEAD check before the next operation
 
