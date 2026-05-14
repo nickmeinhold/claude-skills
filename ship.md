@@ -507,73 +507,160 @@ in `~/.claude/CLAUDE.md`, only **State 3** counts as "fixed/deployed":
 |---|---|---|
 | 1 | PR opened | The diff exists. CI may be green. Production unchanged. |
 | 2 | PR merged | Bytes are on the production ref (e.g. `main`). Cron / CDN / runtime caches not yet exercised. |
-| 3 | Deployed AND exercised | Read state from the production source; confirm bytes match. For cron/event-driven systems, wait one cycle and confirm the new behaviour. |
+| 3 | Deployed AND exercised | A runtime probe (live URL grep, API smoke, cron-cycle wait) confirms the new behaviour from outside the source ref. |
 
 After `gh pr merge` succeeds, you have **State 2 only**. Don't say "shipped"
 or "deployed" yet.
 
-#### 10a. Match the deploy run by `headSha`, NEVER by recency
+**Discipline for this step: type the evidence, type the bound, type the config.**
+Every named value below is sourced from `.claude/ship-config.md` (typed config)
+or from a typed API query (`head_sha`, `.conclusion`) — never from operator
+judgment or recency assumptions.
 
-Don't use `gh run list --limit 1` — it returns the most recent *completed* run,
-which may be an unrelated older deploy that finished while yours is still
-pending. **Always match by SHA:**
+#### 10a. Locate the deploy run by `head_sha` (typed query, not pagination)
+
+The right primitive is `gh api repos/$REPO/actions/runs?head_sha=$MERGE_SHA`,
+which filters server-side. **Do not** use `gh run list --limit N` and then
+`jq` for the SHA — that smuggles the recency bug back in (a busy workflow can
+push your merge commit out of the window before the loop catches it). Use the
+typed filter.
+
+Read the project's `.claude/ship-config.md` for the deploy workflow name:
 
 ```bash
-# Wait for the deploy run on YOUR merge commit to complete
-until [ "$(gh run list --workflow=<deploy-workflow.yml> --limit 5 \
-  --json status,headSha \
-  --jq "[.[] | select(.headSha == \"$MERGE_SHA\")][0].status" \
-  2>/dev/null)" = "completed" ]; do
+# Schema in .claude/ship-config.md:
+#   deploy-workflow: deploy.yml  # literal filename, OR
+#   deploy-workflow: auto        # match any workflow run for head_sha
+#   deploy-workflow: none        # project has no deploy workflow; declare State 2 and stop
+DEPLOY_WORKFLOW=$(grep -E '^deploy-workflow:' .claude/ship-config.md 2>/dev/null \
+  | awk '{print $2}')
+DEPLOY_WORKFLOW=${DEPLOY_WORKFLOW:-auto}
+
+if [ "$DEPLOY_WORKFLOW" = "none" ]; then
+  echo "Project declares no deploy workflow. State 2 reached. Manual deploy required."
+  # Skip 10a + 10b; jump to 10c.
+fi
+```
+
+Bounded poll for the deploy run on the merge commit (typed `seq` budget, typed
+exit on zero-match):
+
+```bash
+DEPLOY_RUN=""
+MAX_ITERATIONS=60   # 60 * 20s = 20-min wall-clock budget
+for i in $(seq 1 $MAX_ITERATIONS); do
+  # head_sha filter is server-side — no pagination guess, no --limit
+  DEPLOY_RUN=$(gh api "repos/$REPO/actions/runs?head_sha=$MERGE_SHA" \
+    --jq '.workflow_runs
+          | if "'"$DEPLOY_WORKFLOW"'" == "auto" then .[0]
+            else map(select(.path | test("'"$DEPLOY_WORKFLOW"'$"))) | .[0]
+            end' 2>/dev/null)
+
+  if [ -z "$DEPLOY_RUN" ] || [ "$DEPLOY_RUN" = "null" ]; then
+    # No run yet for this SHA. Wait one cycle for GitHub to queue it.
+    sleep 20
+    continue
+  fi
+
+  STATUS=$(echo "$DEPLOY_RUN" | jq -r '.status')
+  [ "$STATUS" = "completed" ] && break
   sleep 20
 done
 
-# Read its conclusion
-gh run list --workflow=<deploy-workflow.yml> --limit 5 \
-  --json conclusion,headSha,databaseId \
-  --jq "[.[] | select(.headSha == \"$MERGE_SHA\")][0]"
+if [ -z "$DEPLOY_RUN" ] || [ "$DEPLOY_RUN" = "null" ]; then
+  echo "ERROR: no deploy run matched MERGE_SHA=$MERGE_SHA within ${MAX_ITERATIONS} cycles."
+  echo "Either deploy-workflow is misconfigured, or the workflow did not trigger."
+  echo "State 3 not reached. Investigate before declaring shipped."
+  exit 1
+fi
 ```
 
-If the project doesn't have a deploy workflow that fires on merge to main,
-skip this sub-step and document the manual deploy step the user needs to take.
-
-**Why it matters:** during PR #18 in `enspyrco/enspyrco-site`, querying
-`--limit 1` returned a 5-hour-old run (PR #17's deploy). I would have
-declared State 3 verified against stale content if I hadn't cross-checked
-`headSha`. Always match by SHA.
-
-#### 10b. Read the production ref and confirm bytes
+**Assert success — `completed` is not `success`.** A failed, cancelled, or
+timed-out deploy still has `status==completed`. Read `conclusion` and require
+literal `success`:
 
 ```bash
-# For each file the PR changed, read the bytes on the production ref
-for path in <changed-file-paths>; do
-  gh api "repos/$REPO/contents/$path?ref=$BASE_BRANCH" --jq '.sha,.size'
-done
-
-# If the project has a live URL, hit it with cache-bust and grep for a
-# signature phrase from the change
-curl -s "https://<production-url>/<path>?cb=$(date +%s)" | \
-  grep -oE "<signature-string-from-the-change>"
+CONCLUSION=$(echo "$DEPLOY_RUN" | jq -r '.conclusion')
+if [ "$CONCLUSION" != "success" ]; then
+  echo "ERROR: deploy run conclusion=$CONCLUSION (must be 'success')."
+  echo "State 3 not reached. Deploy failed, was cancelled, or timed out."
+  exit 1
+fi
+echo "Deploy run $(echo "$DEPLOY_RUN" | jq -r '.id') succeeded for $MERGE_SHA."
 ```
 
-Bytes returned from `origin/<production-ref>` should match what you committed.
-The live URL fetch should contain a signature string from your change (a new
-heading, a renamed identifier, a paragraph you added). If both confirm, you
-are at State 3. Only now: "shipped / deployed / fixed."
+**Why this matters:** during PR #18 in `enspyrco/enspyrco-site`, querying
+`gh run list --limit 1` returned a 5-hour-old run (PR #17's deploy). I would
+have declared State 3 verified against stale content if I hadn't cross-checked
+`head_sha`. The typed `?head_sha=$MERGE_SHA` filter makes the mistake
+unrepresentable.
+
+#### 10b. Probe the runtime — State 3 evidence, not State 2
+
+State 2 evidence (bytes on the source ref) does not prove State 3. Reading
+`gh api repos/.../contents/?ref=main` is State 2 by definition — bytes on
+`main` is what State 2 *means*. State 3 needs evidence from *outside* the
+source ref: a live HTTP fetch, an API smoke, a cron-cycle wait. The mode is
+project-specific, sourced from `.claude/ship-config.md`:
+
+```yaml
+# Schema in .claude/ship-config.md:
+verification-mode: live-grep        # fetch a live URL and grep for a signature
+                  | api-probe       # GET a health/version endpoint and assert content
+                  | runtime-check   # run a project-supplied smoke command
+                  | skip-no-runtime # static repo with no live surface; declare State 2
+
+production-url-pattern: https://example.com/{path}   # required for live-grep
+signature-extraction: head -1 {path}                  # required for live-grep
+runtime-smoke-command: ./scripts/smoke.sh             # required for runtime-check
+api-probe-url: https://example.com/_version           # required for api-probe
+api-probe-grep: <expected substring>                  # required for api-probe
+```
+
+For each changed file, determine its verification kind from the closed set
+`{ added, modified, renamed, deleted, binary, generated }` — each has a
+different rule:
+
+```bash
+gh pr view $PR_NUMBER --json files --jq '.files[] | {path, additions, deletions, changeType}' \
+  | while read -r FILE_JSON; do
+      CHANGE=$(echo "$FILE_JSON" | jq -r '.changeType')
+      PATH_=$(echo "$FILE_JSON"  | jq -r '.path')
+      case "$CHANGE" in
+        ADDED|MODIFIED)
+          # live-grep / api-probe / runtime-check applies
+          ;;
+        RENAMED)
+          # verify NEW path resolves; ignore old
+          ;;
+        DELETED)
+          # assert production URL now returns 404
+          ;;
+        # Binary/generated need explicit ship-config opt-in to verify;
+        # otherwise rely on 10a deploy success.
+      esac
+    done
+```
+
+If `verification-mode: skip-no-runtime` is set, Step 10 stops here at honest
+State 2.5 (deploy succeeded, source bytes on `main`, no runtime evidence
+available). **Do not** declare State 3.
 
 #### 10c. Defensive HEAD check before the next operation
 
 If a peer Claude Code instance may be active in this repo (per the global
-`feedback_peer_instance_collisions.md`), verify HEAD before any subsequent
-git-mutating command:
+`feedback_peer_instance_collisions.md` — note that "peer instance" includes
+*any* other Claude Code session in any cwd, not just instances named after a
+specific repo's history), verify HEAD before any subsequent git-mutating
+command:
 
 ```bash
 git rev-parse --abbrev-ref HEAD
 ```
 
-If HEAD has shifted to a branch you didn't create (e.g., a peer Scribe instance
-yanked it), `git checkout <your-branch>` to recover, then continue. Your PR
-on origin is unaffected — peer-instance damage is HEAD-shifting, not
-commit-rewriting.
+If HEAD has shifted to a branch you didn't create, `git checkout <your-branch>`
+to recover, then continue. Your PR on origin is unaffected — peer-instance
+damage is HEAD-shifting, not commit-rewriting.
 
 ## Output Format
 
@@ -601,12 +688,19 @@ Report progress at each step:
 - [x] Merged PR #42 (squash)
 - [x] Deleted branch: feature-branch
 
-### Verify on production (State 3)
-- [x] Deploy run matched by SHA `a1b2c3d` → success
-- [x] Bytes on `main` confirmed for changed files
-- [x] Live URL grep confirmed signature string
+### Verify on production
+- [x] Deploy run matched by `head_sha=a1b2c3d` → conclusion=success
+- [x] Runtime probe (`verification-mode: live-grep`) confirmed signature string
 
-**Done! Changes shipped, deployed, AND verified live.**
+**State 3 reached. Changes shipped, deployed, AND verified live.**
+
+— or, when `verification-mode: skip-no-runtime` —
+
+### Verify on production
+- [x] Deploy run matched by `head_sha=a1b2c3d` → conclusion=success
+- [ ] Runtime probe — skipped (`verification-mode: skip-no-runtime`)
+
+**State 2 reached. Bytes on `main`; no runtime evidence available — do not claim "live".**
 ```
 
 ## Safety Checks
