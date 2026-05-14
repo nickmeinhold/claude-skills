@@ -493,7 +493,235 @@ If approved:
    pending CI. By this point the user has already reviewed all feedback (Step 8), so
    the only remaining gate is CI completing.
 
-3. Report success with the merged PR URL.
+3. Capture the merge commit SHA for the verification step:
+   ```bash
+   MERGE_SHA=$(gh pr view $PR_NUMBER --json mergeCommit --jq '.mergeCommit.oid')
+   ```
+
+### Step 10: Verify on the production ref (MANDATORY)
+
+**"Written" is not "merged" is not "deployed."** Per the closing-ritual doctrine
+in `~/.claude/CLAUDE.md`, only **State 3** counts as "fixed/deployed":
+
+| State | Definition | Evidence required |
+|---|---|---|
+| 1 | PR opened | The diff exists. CI may be green. Production unchanged. |
+| 2 | PR merged | Bytes are on the production ref (e.g. `main`). Cron / CDN / runtime caches not yet exercised. |
+| 3 | Deployed AND exercised | A runtime probe (live URL grep, API smoke, cron-cycle wait) confirms the new behaviour from outside the source ref. |
+
+After `gh pr merge` succeeds, you have **State 2 only**. Don't say "shipped"
+or "deployed" yet.
+
+**Discipline for this step: type the evidence, type the bound, type the config.**
+Every named value below is sourced from `.claude/ship-config.md` (typed config)
+or from a typed API query (`head_sha`, `.conclusion`) — never from operator
+judgment or recency assumptions.
+
+#### 10a. Locate the deploy run by `head_sha` (typed query, not pagination)
+
+The right primitive is `gh api repos/$REPO/actions/runs?head_sha=$MERGE_SHA`,
+which filters server-side. **Do not** use `gh run list --limit N` and then
+`jq` for the SHA — that smuggles the recency bug back in (a busy workflow can
+push your merge commit out of the window before the loop catches it). Use the
+typed filter.
+
+Read the project's `.claude/ship-config.md` for the deploy workflow name:
+
+```bash
+# Schema in .claude/ship-config.md:
+#   deploy-workflow: deploy.yml  # literal filename, OR
+#   deploy-workflow: auto        # match any workflow run for head_sha
+#   deploy-workflow: none        # project has no deploy workflow; declare State 2 and stop
+DEPLOY_WORKFLOW=$(grep -E '^deploy-workflow:' .claude/ship-config.md 2>/dev/null \
+  | awk '{print $2}')
+DEPLOY_WORKFLOW=${DEPLOY_WORKFLOW:-auto}
+
+if [ "$DEPLOY_WORKFLOW" = "none" ]; then
+  echo "Project declares no deploy workflow. State 2 reached. Manual deploy required."
+  # Skip the bounded poll and conclusion check below; jump straight to 10c.
+  # The verification-mode in 10b may still apply if the user runs the deploy
+  # manually before this point — but Step 10's automated path stops here.
+  SKIP_DEPLOY_CHECK=1
+fi
+```
+
+Bounded poll for the deploy run on the merge commit (typed `seq` budget, typed
+exit on zero-match) — skipped when `deploy-workflow: none`:
+
+```bash
+if [ -z "$SKIP_DEPLOY_CHECK" ]; then
+DEPLOY_RUN=""
+MAX_ITERATIONS=60   # 60 * 20s = 20-min wall-clock budget
+for i in $(seq 1 $MAX_ITERATIONS); do
+  # head_sha filter is server-side — no pagination guess, no --limit
+  DEPLOY_RUN=$(gh api "repos/$REPO/actions/runs?head_sha=$MERGE_SHA" \
+    --jq '.workflow_runs
+          | if "'"$DEPLOY_WORKFLOW"'" == "auto" then .[0]
+            else map(select(.path | test("'"$DEPLOY_WORKFLOW"'$"))) | .[0]
+            end' 2>/dev/null)
+
+  if [ -z "$DEPLOY_RUN" ] || [ "$DEPLOY_RUN" = "null" ]; then
+    # No run yet for this SHA. Wait one cycle for GitHub to queue it.
+    sleep 20
+    continue
+  fi
+
+  STATUS=$(echo "$DEPLOY_RUN" | jq -r '.status')
+  [ "$STATUS" = "completed" ] && break
+  sleep 20
+done
+
+if [ -z "$DEPLOY_RUN" ] || [ "$DEPLOY_RUN" = "null" ]; then
+  echo "ERROR: no deploy run matched MERGE_SHA=$MERGE_SHA within ${MAX_ITERATIONS} cycles."
+  echo "Either deploy-workflow is misconfigured, or the workflow did not trigger."
+  echo "State 3 not reached. Investigate before declaring shipped."
+  exit 1
+fi
+```
+
+**Assert success — `completed` is not `success`.** A failed, cancelled, or
+timed-out deploy still has `status==completed`. Read `conclusion` and require
+literal `success`:
+
+```bash
+CONCLUSION=$(echo "$DEPLOY_RUN" | jq -r '.conclusion')
+if [ "$CONCLUSION" != "success" ]; then
+  echo "ERROR: deploy run conclusion=$CONCLUSION (must be 'success')."
+  echo "State 3 not reached. Deploy failed, was cancelled, or timed out."
+  exit 1
+fi
+echo "Deploy run $(echo "$DEPLOY_RUN" | jq -r '.id') succeeded for $MERGE_SHA."
+fi  # end SKIP_DEPLOY_CHECK guard
+```
+
+**Why this matters:** during PR #18 in `enspyrco/enspyrco-site`, querying
+`gh run list --limit 1` returned a 5-hour-old run (PR #17's deploy). I would
+have declared State 3 verified against stale content if I hadn't cross-checked
+`head_sha`. The typed `?head_sha=$MERGE_SHA` filter makes the mistake
+unrepresentable.
+
+#### 10b. Probe the runtime — State 3 evidence, not State 2
+
+State 2 evidence (bytes on the source ref) does not prove State 3. Reading
+`gh api repos/.../contents/?ref=main` is State 2 by definition — bytes on
+`main` is what State 2 *means*. State 3 needs evidence from *outside* the
+source ref: a live HTTP fetch, an API smoke, a cron-cycle wait. The mode is
+project-specific, sourced from `.claude/ship-config.md`:
+
+```yaml
+# Schema in .claude/ship-config.md:
+verification-mode: live-grep        # fetch a live URL and grep for a signature
+                  | api-probe       # GET a health/version endpoint and assert content
+                  | runtime-check   # run a project-supplied smoke command
+                  | skip-no-runtime # static repo with no live surface; declare State 2
+
+production-url-pattern: https://example.com/{path}   # required for live-grep
+signature-extraction: head -1 {path}                  # required for live-grep
+runtime-smoke-command: ./scripts/smoke.sh             # required for runtime-check
+api-probe-url: https://example.com/_version           # required for api-probe
+api-probe-grep: <expected substring>                  # required for api-probe
+```
+
+Dispatch on the verification mode. `api-probe`, `runtime-check`, and
+`skip-no-runtime` are project-wide single-shot checks; `live-grep` iterates
+over the closed set of file-change kinds `{ ADDED, MODIFIED, RENAMED,
+DELETED, BINARY, GENERATED }`:
+
+```bash
+VMODE=$(grep -E '^verification-mode:' .claude/ship-config.md 2>/dev/null \
+        | awk '{print $2}')
+
+case "$VMODE" in
+  skip-no-runtime)
+    echo "verification-mode=skip-no-runtime. State 2 reached (deploy succeeded,"
+    echo "bytes on $BASE_BRANCH); no runtime evidence available — do not claim 'live'."
+    ;;
+
+  api-probe)
+    URL=$(grep -E '^api-probe-url:'  .claude/ship-config.md | sed 's/^api-probe-url:[[:space:]]*//')
+    NEEDLE=$(grep -E '^api-probe-grep:' .claude/ship-config.md | sed 's/^api-probe-grep:[[:space:]]*//')
+    if curl -fsS "$URL?cb=$(date +%s)" | grep -qF "$NEEDLE"; then
+      echo "State 3 (api-probe): $URL contains '$NEEDLE'."
+    else
+      echo "ERROR: $URL did not contain '$NEEDLE'. State 3 not reached."; exit 1
+    fi
+    ;;
+
+  runtime-check)
+    CMD=$(grep -E '^runtime-smoke-command:' .claude/ship-config.md | sed 's/^runtime-smoke-command:[[:space:]]*//')
+    if eval "$CMD"; then
+      echo "State 3 (runtime-check): '$CMD' exited 0."
+    else
+      echo "ERROR: '$CMD' exited non-zero. State 3 not reached."; exit 1
+    fi
+    ;;
+
+  live-grep)
+    URL_PATTERN=$(grep -E '^production-url-pattern:' .claude/ship-config.md | sed 's/^production-url-pattern:[[:space:]]*//')
+    SIG_TEMPLATE=$(grep -E '^signature-extraction:'   .claude/ship-config.md | sed 's/^signature-extraction:[[:space:]]*//')
+    FAILED=0
+    # Process substitution rather than a pipe-to-while so the loop body runs
+    # in the parent shell — `exit 1` inside a `... | while` would only exit
+    # the subshell. `set -e` similarly would not propagate.
+    while read -r FILE_JSON; do
+      PATH_=$(echo "$FILE_JSON" | jq -r '.path')
+      CHANGE=$(echo "$FILE_JSON" | jq -r '.changeType')
+      URL="${URL_PATTERN//\{path\}/$PATH_}"
+
+      case "$CHANGE" in
+        ADDED|MODIFIED|RENAMED)
+          SIG_CMD="${SIG_TEMPLATE//\{path\}/$PATH_}"
+          SIGNATURE=$(eval "$SIG_CMD" 2>/dev/null)
+          if [ -z "$SIGNATURE" ]; then
+            echo "WARN: no signature extracted from $PATH_; skipping live probe for this file."
+            continue
+          fi
+          if curl -fsS "$URL?cb=$(date +%s)" | grep -qF "$SIGNATURE"; then
+            echo "State 3 (live-grep): $PATH_ → $URL matched signature."
+          else
+            echo "ERROR: $URL did not contain signature from $PATH_."; FAILED=1
+          fi
+          ;;
+        DELETED)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL")
+          if [ "$CODE" = "404" ]; then
+            echo "State 3 (live-grep): deleted $PATH_ → $URL returns 404 as expected."
+          else
+            echo "ERROR: $PATH_ deleted but $URL still responds (HTTP $CODE)."; FAILED=1
+          fi
+          ;;
+        # BINARY/GENERATED need explicit per-file verification opt-in. Default:
+        # rely on 10a deploy success only. If runtime evidence is required for
+        # these kinds, switch verification-mode to runtime-check.
+      esac
+    done < <(gh pr view "$PR_NUMBER" --json files \
+             --jq '.files[] | {path, changeType} | @json')
+    [ "$FAILED" -eq 0 ] || { echo "live-grep verification failed for ≥1 file. State 3 not reached."; exit 1; }
+    ;;
+
+  *)
+    echo "ERROR: verification-mode missing or unrecognized in .claude/ship-config.md."
+    echo "Set one of: live-grep | api-probe | runtime-check | skip-no-runtime"
+    exit 1
+    ;;
+esac
+```
+
+#### 10c. Defensive HEAD check before the next operation
+
+If a peer Claude Code instance may be active in this repo (per the global
+`feedback_peer_instance_collisions.md` — note that "peer instance" includes
+*any* other Claude Code session in any cwd, not just instances named after a
+specific repo's history), verify HEAD before any subsequent git-mutating
+command:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+If HEAD has shifted to a branch you didn't create, `git checkout <your-branch>`
+to recover, then continue. Your PR on origin is unaffected — peer-instance
+damage is HEAD-shifting, not commit-rewriting.
 
 ## Output Format
 
@@ -521,7 +749,19 @@ Report progress at each step:
 - [x] Merged PR #42 (squash)
 - [x] Deleted branch: feature-branch
 
-**Done! Changes shipped successfully.**
+### Verify on production
+- [x] Deploy run matched by `head_sha=a1b2c3d` → conclusion=success
+- [x] Runtime probe (`verification-mode: live-grep`) confirmed signature string
+
+**State 3 reached. Changes shipped, deployed, AND verified live.**
+
+— or, when `verification-mode: skip-no-runtime` —
+
+### Verify on production
+- [x] Deploy run matched by `head_sha=a1b2c3d` → conclusion=success
+- [ ] Runtime probe — skipped (`verification-mode: skip-no-runtime`)
+
+**State 2 reached. Bytes on `main`; no runtime evidence available — do not claim "live".**
 ```
 
 ## Safety Checks
