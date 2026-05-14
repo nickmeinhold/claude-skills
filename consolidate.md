@@ -4,17 +4,17 @@ description: End-of-session consolidation — Phase 0 in-context conversation + 
 
 # Consolidate
 
-Phase 0 (in-context conversation + multi-perspective retrospective) followed by **tier-aware specialized agents** organized as a **three-burst DAG**: Burst 1 runs `memory-writer` (Sonnet) in parallel with the knowledge-mapper Haiku pre-extractor trio (TLAs / domain-terms / dropped-tangents); Burst 2 runs `knowledge-mapper` synth (Sonnet) gated on the Haiku trio's `raw/*.md` outputs; Burst 3 runs `next-session-prompter` (Opus) gated on `knowledge-mapper`. Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run; tier-aware decomposition (v6) is expected to drop further by moving the read-and-extract passes to Haiku.
+Phase 0 (in-context conversation + multi-perspective retrospective) followed by **tier-aware specialized agents** organized as a **three-burst DAG**: Burst 1 runs `memory-writer` (Sonnet) in parallel with the knowledge-mapper Haiku pre-extractor pair (domain-terms / dropped-tangents — *no* separate TLA extractor; see "Why no separate TLA extractor" below); Burst 2 runs `knowledge-mapper` synth (Sonnet) gated on the Haiku pair's `raw/*.md` outputs; Burst 3 runs `next-session-prompter` (Opus) gated on `knowledge-mapper`. Each agent runs as a **separate subagent** with its own context, writing results to a session-namespaced consolidation directory. This prevents the consolidation itself from bloating the already-heavy session context, prevents parallel sessions from clobbering each other's files, and — since each agent owns a distinct output file — eliminates merge-conflict risk. Wall-clock dropped from ~3-5 min sequential to ~2 min in the 2026-05-01 test run; tier-aware decomposition (v6) is expected to drop further by moving the read-and-extract passes to Haiku.
 
 ## Tiering rationale (read before editing)
 
 Not every sub-job benefits from Haiku-fanout. Subagent spawn has real overhead (context priming, network round-trips, file handoff verification). Use Haiku where it earns its cost:
 
-- **Haiku-worthy**: read-context-and-extract-patterns jobs. Phase 0a marker grep (whole-JSONL scan), knowledge-mapper's TLA / domain-term / dropped-tangent extraction. Each reads a sizeable input and produces a small structured output.
+- **Haiku-worthy**: read-context-and-extract-patterns jobs. Phase 0a marker grep (whole-JSONL scan), knowledge-mapper's domain-term / dropped-tangent extraction. Each reads a sizeable input and produces a small structured output.
 - **Stays inside Sonnet synth (NOT a separate Haiku spawn)**: small formatting jobs like `open-tasks.md`, `pending-tasks.json`, `scorecard.json`, `$SD/wins.md` (session-local write). These are cheap enough that the spawn cost would exceed the savings; they ride along with `memory-writer`. The global append to `~/.claude/wins.md` is the orchestrator's job in Wrap-up, under mkdir-trap lock — NOT memory-writer's job.
 - **Opus-only**: `next-session-prompter`. Voice, challenge-skill calibration, and "make the next instance want to dive in" determine whether tomorrow's session lands in flow. Don't cheap out.
 
-**Verification gate.** Sonnet synth agents MUST validate Haiku outputs before consuming them — Haiku will occasionally hallucinate a TLA or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes a mechanically-applicable two-pass rule: (1) for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md` — if not, drop it and note the drop; (2) scan `session-summary.md` for TLAs / domain-terms / dropped-tangents not in the raw lists and add them with the same one-line definition format. Both passes are auditable — a reviewer can re-run the procedure and check compliance.
+**Verification gate.** Sonnet synth agents MUST validate Haiku outputs before consuming them — Haiku will occasionally hallucinate a domain term or mis-classify a marker. Treat `$SD/raw/*.md` as candidates, not ground truth. The synth agent's brief includes a mechanically-applicable two-pass rule: (1) for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md` — if not, drop it and note the drop; (2) scan `session-summary.md` for domain-terms / dropped-tangents not in the raw lists and add them with the same one-line definition format. Both passes are auditable — a reviewer can re-run the procedure and check compliance.
 
 ## Setup
 
@@ -243,11 +243,11 @@ Present to Nick as the seed for the Phase-0-style conversation questions ("what 
 
 Write the synthesis to `$SD/multi-perspective-retro.md`.
 
-## Phase 1: Tier-aware specialized agents (Haiku trio + Sonnet pair, then Opus)
+## Phase 1: Tier-aware specialized agents (Haiku pair + Sonnet pair, then Opus)
 
 Phase 0 (the conversation with Nick + retrospective synthesis) stays undelegated — that's where the in-context judgment lives. Everything downstream of `session-summary.md` is mechanical knowledge capture and can be specialized + partially parallelized.
 
-**Evolution.** v4 ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). v5 split them into three **specialized** agents — memory-writer + knowledge-mapper in parallel, next-session-prompter gated on knowledge-mapper — and dropped wall-clock to ~2 min in the 2026-05-01 test run. v6 (this version) goes one further: it splits the extraction work *inside* knowledge-mapper into a Haiku pre-pass (TLAs / domain-terms / dropped-tangents) running parallel to memory-writer in Burst 1, then a Sonnet synth in Burst 2 that consumes those raw candidates, then Opus for the next-session prompt in Burst 3. Three bursts instead of two; the extra synchronization is paid for by moving the heaviest reads to Haiku.
+**Evolution.** v4 ran knowledge capture, the forward plan, and the next-session prompt as **three sequential** general-purpose agents (~60k tokens, ~3-5 min wall-clock). v5 split them into three **specialized** agents — memory-writer + knowledge-mapper in parallel, next-session-prompter gated on knowledge-mapper — and dropped wall-clock to ~2 min in the 2026-05-01 test run. v6 (this version) goes one further: it splits the extraction work *inside* knowledge-mapper into a Haiku pre-pass (domain-terms / dropped-tangents) running parallel to memory-writer in Burst 1, then a Sonnet synth in Burst 2 that consumes those raw candidates, then Opus for the next-session prompt in Burst 3. Three bursts instead of two; the extra synchronization is paid for by moving the heaviest reads to Haiku. v6.1 (2026-05-15) removed a third Haiku pre-extractor for TLAs that was reintroducing the cargo-cult acronym defining stripped in PR #13 — see "Why no separate TLA extractor" below.
 
 **Substitution mechanism.** The orchestrator composes each agent brief as a bash heredoc with `$SD` interpolated, NOT as a templated string substituted post-hoc. Example:
 
@@ -265,7 +265,7 @@ The `{{SESSION_DIR}}` placeholders in the brief specifications below are **docum
 
 **File ownership is exclusive.** Each agent owns one output file in `$SD/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `$SD/raw/marker-candidates.md` only; Maxwell validation pass produces `$SD/raw/marker-candidates-verified.md` (orchestrator-side, not a separate agent)
-- knowledge-mapper Haiku trio → `$SD/raw/tla-candidates.md`, `$SD/raw/domain-terms.md`, `$SD/raw/dropped-tangents.md` (one file each, distinct)
+- knowledge-mapper Haiku pair → `$SD/raw/domain-terms.md`, `$SD/raw/dropped-tangents.md` (one file each, distinct)
 - `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `$SD/scorecard.json` + `$SD/open-tasks.md` + `$SD/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via mkdir-trap lock — `$HOME/.claude/wins.md.lock.d` is the lock directory; see Wrap-up section)
 - `knowledge-mapper` synth (Sonnet) → `$SD/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
 - `next-session-prompter` (Opus) → `$SD/next-session-prompt.md` only
@@ -297,8 +297,8 @@ This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<se
 
 ### Spawn order
 
-1. **Burst 1 (parallel, single message)**: memory-writer (Sonnet) + knowledge-mapper's three Haiku pre-extractors (TLAs / domain-terms / dropped-tangents). Four agent calls in one message. Wait for ALL FOUR to complete before Burst 2.
-2. **Burst 2 (single agent)**: knowledge-mapper synth (Sonnet) reads `$SD/raw/*.md` and writes `consolidation.md`. Gated on Burst 1's Haiku trio.
+1. **Burst 1 (parallel, single message)**: memory-writer (Sonnet) + knowledge-mapper's two Haiku pre-extractors (domain-terms / dropped-tangents). Three agent calls in one message. Wait for ALL THREE to complete before Burst 2.
+2. **Burst 2 (single agent)**: knowledge-mapper synth (Sonnet) reads `$SD/raw/*.md` and writes `consolidation.md`. Gated on Burst 1's Haiku pair.
 3. **Burst 3 (single agent)**: next-session-prompter (Opus). Reads `consolidation.md` + everything else, writes `next-session-prompt.md`.
 
 This is 3 phases of agent execution. The 2026-05-01 wall-clock measurement (~2 min, v5) reflects the older 2-burst shape; v6 adds one more synchronization barrier but moves the heaviest extraction reads to Haiku running in parallel with memory-writer. Net expectation: similar or slightly better wall-clock, materially lower token cost.
@@ -366,16 +366,11 @@ IMPORTANT: Keep your return message to 2-3 sentences max — a status confirmati
 
 #### Pre-pass: knowledge-mapper Haiku extractors (parallel burst, spawned alongside memory-writer)
 
-Before knowledge-mapper synthesizes, three Haiku subagents read `session-summary.md` in parallel and produce raw candidate lists. The synth agent consumes these as input rather than re-doing the extraction. **Spawn these three in the same message as memory-writer** — four parallel agents total in this burst (memory-writer + three Haiku extractors). They write to distinct files under `$SD/raw/`, so no shared-write risk.
+Before knowledge-mapper synthesizes, two Haiku subagents read `session-summary.md` in parallel and produce raw candidate lists. The synth agent consumes these as input rather than re-doing the extraction. **Spawn these two in the same message as memory-writer** — three parallel agents total in this burst (memory-writer + two Haiku extractors). They write to distinct files under `$SD/raw/`, so no shared-write risk.
+
+**Why no separate TLA extractor.** PR #13 (2026-05-02, "strip stale every-TLA directives") removed the "Every TLA used — define each one" instruction from the session-summary brief and the knowledge-mapper synth, because it cargo-culted definitions of standard dev vocabulary (PR, CI, API, LLM, OCR, CLIP, YOLO) the reading agent already knows, diluting signal and burying genuinely-novel concepts. The v6 tier-aware refactor (`3fc0895`) reintroduced the same anti-pattern as a dedicated Haiku TLA-extractor — Nick caught it on the 2026-05-15 run with output containing `OCR — Optical Character Recognition`, `RAW — Camera raw sensor mode`, `P0–P4 — Priority Zero through Four`, and 3 hallucinated acronyms (SECI, MPFB, FSRS) that don't appear in the session summary. Genuinely-novel acronyms (e.g. STAL, BTE, CIELAB) belong in `domain-terms.md` — the domain-terms extractor naturally captures any acronym that needs defining without the noise floor of "every all-caps token in the file." The TLA extractor was strictly worse than this: it inverted the bar (define everything unless common-English) instead of (define only what needs it). DO NOT reintroduce it.
 
 ```
-Agent({
-  description: "Extract TLA candidates from session summary",
-  subagent_type: "general-purpose",
-  model: "haiku",
-  prompt: `Read $SD/session-summary.md. Find every Three-Letter Acronym (or 2-5 letter all-caps token) used as a domain term — e.g. CLS, SECI, MPFB, FSRS. For each, output one line: \`TLA — short expansion or "unknown"\`. Skip common English (USA, API, CLI, HTTP, JSON, etc.) unless used in a non-obvious sense. Write to $SD/raw/tla-candidates.md (overwrite). Return 1-sentence status.`
-})
-
 Agent({
   description: "Extract domain-term candidates",
   subagent_type: "general-purpose",
@@ -401,11 +396,11 @@ Agent({
   prompt: `
 ABSOLUTE PATHS ONLY. All paths below use $SD — the orchestrator has already substituted the literal absolute session-dir path at heredoc-expansion time. Use these paths directly; no substitution needed. (Historical note: routing through a `latest/` symlink caused data loss on 2026-05-02→03 — knowledge-mapper's first-pass output was overwritten by a parallel tab. The symlink no longer exists; absolute paths are the only path.)
 
-MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal description, hierarchical forward plan. Haiku pre-extractors have already produced raw candidate lists at $SD/raw/tla-candidates.md, $SD/raw/domain-terms.md, and $SD/raw/dropped-tangents.md.
+MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal description, hierarchical forward plan. Haiku pre-extractors have already produced raw candidate lists at $SD/raw/domain-terms.md and $SD/raw/dropped-tangents.md. (There is intentionally NO `tla-candidates.md` — see "Why no separate TLA extractor" in the orchestrator section. Genuinely-novel acronyms surface naturally in domain-terms.)
 
 **Verification gate.** Treat the raw/* files as CANDIDATES, not ground truth. Apply this two-pass validation against session-summary.md:
 1. **Candidate check (per entry)**: for each entry in `raw/*.md`, confirm a supporting span (matching token / phrase / explicit mention) exists in `session-summary.md`. If no supporting span exists, drop the entry and note the drop (e.g., "Dropped: XYZ — no mention in summary"). Sharpen vague definitions where the summary contains more precision.
-2. **Coverage scan**: scan `session-summary.md` independently for TLAs / domain-terms / dropped-tangents not captured in the raw lists. Add any missing entries with the same one-line format.
+2. **Coverage scan**: scan `session-summary.md` independently for domain-terms / dropped-tangents not captured in the raw lists. Add any missing entries with the same one-line format.
 
 Both passes are mechanically applicable — a reviewer can re-run the procedure and check your compliance. This is the price of admission for using the Haiku pre-pass — skip it and you ship hallucinations.
 
