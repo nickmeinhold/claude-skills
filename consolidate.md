@@ -192,11 +192,44 @@ Emoji-as-category (consistent at-a-glance scanning):
 
 Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. Drop autopilot-sounding markers entirely; only surface candidates that have a plausible "so what". Numbering is not negotiable — un-numbered markers force Nick into recall-mode on triage, defeating the whole "recognition over recall" point of this phase.
 
-### Present + triage
+### Present + triage (the cheap filter)
 
-Show the numbered dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall, and even cheaper when Nick can answer "1 real, 2 autopilot, 3 real, 4-6 real, 7 autopilot" instead of re-typing the markers themselves. The "yes" rows seed the conversation with anchored memories Nick now recognises, which feeds richer content into the session-summary above (you may want to amend it).
+Show the numbered dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall, and even cheaper when Nick can answer "1 real, 2 autopilot, 3 real, 4-6 real, 7 autopilot" instead of re-typing the markers themselves.
 
-Write the surfaced + triaged dotpoints to `$SD/affective-highlights.md` so the Phase 1+ agents can use them.
+Triage is **a filter, not the capture.** Its job is **attention-allocation** — spend the expensive conversation budget only where it pays. That's the primary rationale; the fact that it also protects a tired end-of-session from being force-marched through all 7 markers is a welcome *side effect*, not the reason the filter exists. Don't justify the filter by fatigue — justify it by cost-allocation. The "real" rows are the ones worth Nick's attention in the conversation that follows; don't treat the binary tag as the end of Phase 0a.
+
+**What "real" means: did this teach something, not was this consequential.** The two come apart. A procedural request ("dry-run it", "ship it", "use plan mode") can be highly consequential — it changes what happens next — yet carry no durable lesson, so it's noise for this filter. Conversely a throwaway aside can encode a real shift in how Nick thinks. Tag "real" when the marker has a *takeaway worth a `**Surfaced:**` line*, not when it merely mattered to the session's trajectory. When unsure, ask Nick — but lead him with this distinction, because the intuitive pull is to tag consequential things "real."
+
+### Converse through the "real" markers (the capture)
+
+This is where the value lives. `concept_conversation_first_consolidation` in memory: *dialogue IS consolidation, not a precursor to it.* A binary tag throws away the richest vein — *why* a moment mattered — at the exact moment Nick's recall is hottest. So after triage, walk through the markers Nick tagged "real" **one at a time**, as an actual back-and-forth.
+
+**Mechanics:**
+- Go in order. For each "real" marker, open with a specific, non-generic question that shows you remember the moment — never "tell me about this."
+- **Default technique: the hypothesis-fork.** Offer Nick a *pair* of competing readings and ask which nerve it hit — e.g. "you pushed back hard on X here — was that about the approach, or did you see something downstream I didn't?" A fork is more inviting than an open question (it gives Nick something to push against), forces you to commit to specific hypotheses (so a lazy "tell me more" is impossible), and a wrong fork is still useful — Nick correcting "neither, it was Z" surfaces more than a blank prompt would. The marker quote + your "→" consequence guess are your raw material for the two prongs; put them on the table and let Nick confirm, sharpen, or overturn. (This isn't mandatory — an open question is fine when you genuinely have no hypothesis — but the fork is the default because in the dry-run it consistently out-pulled open prompts.)
+- **One marker per turn.** Don't batch them into a numbered list — that collapses back into triage. Ask, listen, follow the thread Nick pulls (even if it wanders to an untagged marker or a thread not in the list), then move to the next. Two or three exchanges per marker is normal; if Nick gives a one-liner and moves on, that's his signal the well is dry — don't force depth.
+- **Autopilot markers get skipped entirely** — that's what the filter bought. If Nick re-flags one mid-conversation ("actually 5 connects to this"), pull it back in.
+- Stop when the "real" list is exhausted OR Nick signals he's done ("ok that's it", "let's move on"). Respect the stop — over-mining a tired session is its own anti-pattern (see Fatigue Monitoring in CLAUDE.md).
+
+**Capture as you go.** Append each marker's exchange to `$SD/marker-conversation.md` as it happens — don't reconstruct from memory at the end. Format per marker:
+
+```
+## [time] [emoji] "<verbatim marker quote>"
+
+**Q:** <the question you opened with>
+**Nick:** <his response, paraphrased faithfully or quoted — preserve his actual framing, not your gloss of it>
+**Surfaced:** <the durable takeaway — what this moment actually taught, in 1-2 lines. This is the line downstream agents mine.>
+```
+
+The `**Surfaced:**` line is the payload: it's what knowledge-mapper turns into graph nodes and what next-session-prompter weaves into the cold-reader's context. Write what was *learned*, not what was *said*.
+
+### Write the Phase 0a outputs
+
+Write the surfaced + triaged dotpoints to `$SD/affective-highlights.md` (the recognition layer — quote + consequence + real/autopilot tag) AND the per-marker dialogue to `$SD/marker-conversation.md` (the capture layer — the `**Surfaced:**` takeaways). Both feed Phase 1+ agents; they are distinct surfaces, not duplicates — `affective-highlights.md` is the *what stood out*, `marker-conversation.md` is the *what we learned about why*.
+
+If Nick tagged zero markers "real" (or skipped the conversation), still create `$SD/marker-conversation.md` with a single line: `No marker conversation this session.` — its existence is the contract the downstream agents check, same pattern as `open-tasks.md`.
+
+You may also amend `$SD/session-summary.md` with anything the conversation surfaced that belongs in the agents' primary context — the amendment fence (Burst 1 dispatch) still applies.
 
 ## Phase 0b: Three-pole retrospective (Maxwell + Kelvin + Carnot)
 
@@ -265,6 +298,7 @@ The `{{SESSION_DIR}}` placeholders in the brief specifications below are **docum
 
 **File ownership is exclusive.** Each agent owns one output file in `$SD/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `$SD/raw/marker-candidates.md` only; Maxwell validation pass produces `$SD/raw/marker-candidates-verified.md` (orchestrator-side, not a separate agent)
+- Phase 0a conversation (orchestrator-side, in-context with Nick) → `$SD/affective-highlights.md` (triage layer) + `$SD/marker-conversation.md` (capture layer). Both written by the orchestrator during Phase 0a; read by knowledge-mapper and next-session-prompter
 - knowledge-mapper Haiku pair → `$SD/raw/domain-terms.md`, `$SD/raw/dropped-tangents.md` (one file each, distinct)
 - `memory-writer` (Sonnet) → memory directory + `MEMORY.md` + `memory-health.json` + `<MEMORY_DIR>/pending-tasks.json` (project-keyed; consumed by wake-up step 10) + `$SD/scorecard.json` + `$SD/open-tasks.md` + `$SD/wins.md` (session-local; orchestrator merges to `~/.claude/wins.md` in Wrap-up via mkdir-trap lock — `$HOME/.claude/wins.md.lock.d` is the lock directory; see Wrap-up section)
 - `knowledge-mapper` synth (Sonnet) → `$SD/consolidation.md` only (no writes to the persistent memory directory — it surfaces *candidates* in `consolidation.md`; memory-writer is the sole memory-dir writer; also does NOT write to `raw/*` — those are read-only inputs from the Haiku pre-pass)
@@ -289,9 +323,31 @@ memory-writer and knowledge-mapper may *both* surface the same TRANSFORM lesson 
 
 This is *semantic* redundancy, not a *file-write* race. Don't conflate the two: file-write races are bugs (and we don't have any in this design); semantic redundancy across distinct files is cheap insurance against either agent missing the lesson.
 
+### Trawl the session for missed tasks
+
+**Before gathering the TaskList snapshot**, scan the session transcript for task-shaped intentions that never got `TaskCreate`'d. The global "capture ideas as tasks the moment they surface" rule fails sometimes — proposals get acknowledged in prose, work continues, the intent evaporates with the session. Consolidation is the last chance to recover them.
+
+**How**:
+
+1. If `$JSONL_PATH` resolves to an existing file (same path Phase 0a uses), trawl assistant-and-user turns for task-shaped intent. Patterns to surface:
+   - "we should ...", "next time ...", "I should ..." stated as a commitment, not as analysis or hypothetical
+   - "TODO", "follow-up", "later", "come back to", "park it", "for another session"
+   - "blocked on ...", "once X lands, we ..."
+   - User turns where Nick proposed a feature / fix / refactor / investigation that wasn't immediately implemented and didn't produce a TaskCreate call within ~3 turns
+2. Cross-reference candidates against the current TaskList (call TaskList once for this check). Drop any candidate whose intent is already represented by an open task.
+3. Surface surviving candidates to Nick during Phase 0 conversation, BEFORE the snapshot: "I found N task-shaped threads we never tracked — keep, drop, or reshape each?" One line per candidate, each with the source quote so Nick can verify it's a real commitment vs. exploratory chatter.
+4. For each kept candidate, orchestrator runs `TaskCreate` immediately (in the live session, so the recovered tasks land in the snapshot collected by the next step). Dropped → no action.
+5. Then proceed to "Orchestrator brief: gather the TaskList snapshot" — the snapshot now includes the recovered tasks, so they get written into `open-tasks.md` and `pending-tasks.json` like any other.
+
+**Why this exists**: tasks not in `TaskList` at consolidation time don't reach `open-tasks.md` or `pending-tasks.json`, so they're invisible to the next session's wake-up. The mid-session capture rule catches most; this trawl is the safety net for the ones it missed. The 2026-05-18 audit found 330 orphaned `pending` tasks across 50 sessions on disk — many came from exactly this failure mode (intent surfaced, never tracked, session ended without consolidating).
+
+**Cost discipline**: one grep-pass + one short dialog turn, NOT a subagent. The orchestrator reads `$JSONL_PATH` inline and filters. Only spawn a Haiku trawler if the JSONL is unusually large (>50k tokens) AND Phase 0a's marker-extractor is also spawning — in that case, add a third Haiku running in parallel with the marker-extractor + dropped-tangents extractor, writing `$SD/raw/missed-tasks.md`, and surface that file's contents to Nick after the marker review.
+
+**Scope boundary**: this trawl recovers tasks created-but-not-tracked in the CURRENT session. It does NOT recover orphans from prior unconsolidated sessions — those live in `~/.claude/tasks/<other-uuid>/` and require a separate cross-session orphan sweep (see project memory for the audit). That sweep is a wake-up concern, not a consolidate concern.
+
 ### Orchestrator brief: gather the TaskList snapshot
 
-**Before spawning the agents**, the orchestrator (you, in Phase 0) collects the current open task list via the TaskList tool — every task with `status: pending` or `status: in_progress`. For each, capture `subject`, full `description`, and `activeForm`. Pass this snapshot to memory-writer as part of its brief (inline, not via file — the orchestrator is the only context with TaskList access).
+**Before spawning the agents**, the orchestrator (you, in Phase 0) collects the current open task list via the TaskList tool — every task with `status: pending` or `status: in_progress`. For each, capture `subject`, full `description`, and `activeForm`. Pass this snapshot to memory-writer as part of its brief (inline, not via file — the orchestrator is the only context with TaskList access). **Also pass the current working directory** (the orchestrator's cwd) — memory-writer needs it to derive the `project:<slug>` label for step 6.5's GH issue reconciliation.
 
 This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<session-uuid>/` — **session-scoped, invisible to a fresh session**. Without an explicit dump to a file the next session can read, the task list evaporates at session end. The 2026-05-01 run initially missed this; Nick caught it with "did you save the tasks?". Generalize the lesson: **persistent context lives in files the next session can independently read, not in session-scoped state.** (Same lifecycle pattern that bit `/graph` skill's `commands/` sync-volatile and the audit script's only-`←` parser.)
 
@@ -329,7 +385,12 @@ Read the existing MEMORY.md from the memory directory, then read any memory file
 
 Actions:
 1. **Error triage**: scan the session for mistakes, corrections from Nick, and process misses. For each TRANSFORM-worthy lesson (the kind that should change future behavior), write or update a feedback_*.md memory file.
-2. **Memory writes**: for every concept, project, or reference worth keeping, write/update a memory file. Update MEMORY.md to index new files with appropriate edges (`←` derives_from, `⊕` extends, `~` analogous_to, `↔` contrasts, `⊗` joint_synthesis).
+2. **Memory writes**: for every concept, project, or reference worth keeping, write/update a memory file. Then index the new file with appropriate edges (`←` derives_from, `⊕` extends, `~` analogous_to, `↔` contrasts, `⊗` joint_synthesis) — **routing the index line by memory-type if the project uses a sharded index**:
+
+   - First check whether the project's memory dir contains `MEMORY.feedback.md` and/or `MEMORY.concepts.md` sibling indexes alongside `MEMORY.md` (the **tree-sharded layout** — root `MEMORY.md` is always auto-loaded; children load on demand to keep the root under its ~24KB context budget).
+   - **If sharded:** route by filename prefix. `feedback_*.md` → append index line to `MEMORY.feedback.md`. `concept_*.md` and `dreamscape_*.md` → append to `MEMORY.concepts.md`. Only `user_*`, `project_*`, `reference_*`, `org_*`, `agent_*` and `memory-health.json` go in root `MEMORY.md`. **Never append a `feedback_*` or `concept_*` line to root** — that re-bloats it and undoes the split.
+   - **If not sharded (flat `MEMORY.md` only):** index everything in root as before. But if root crosses ~24KB after your writes, flag it in the scorecard (`memory_index_over_budget: true`) — that's the signal to shard next.
+   - Index lines: **one line, under ~200 chars** including edges. Long edge-chains are bloat; the file holds the detail, the index just routes.
 3. **memory-health.json**: update access counts and decay-class entries for any memory files touched this session.
 4. **Scorecard**: write $SD/scorecard.json with your own counts — files written, files updated, MEMORY.md edits, errors triaged. You know your own work; no reason to defer this to a separate pass.
 5. **Open-tasks dump (human-readable)**: write $SD/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
@@ -340,11 +401,29 @@ Actions:
 
 6. **Pending-tasks snapshot (machine-readable, project-keyed)** — broken into three sub-steps so each concern is explicit:
 
-   - **6a. Resolve the target path.** Read `$SD/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). The target file is `<MEMORY_DIR>/pending-tasks.json`. Filing it under the project memory dir (not `$SD/`) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. This is the file the wake-up protocol's auto-restore reads (CLAUDE.md step 10).
+   - **6a. Resolve the target path.** Read `$SD/memory-path.txt` to get the project memory dir (e.g. `/Users/nick/.claude/projects/-Users-nick-git-orgs-.../memory`). The target file is `<MEMORY_DIR>/pending-tasks.json`. Filing it under the project memory dir (not `$SD/`) keeps tasks project-keyed — tasks from a tech_world session won't leak into an infra session's wake-up. This file is the **local mirror / fallback** for the wake-up protocol; the primary source is GitHub issues in `nickmeinhold/claude-tasks` (see step 6.5).
 
    - **6b. Write the JSON snapshot.** Write the TaskList snapshot verbatim as a JSON array, one object per task, fields `subject` / `description` / `activeForm`. Schema must match exactly — the wake-up step maps these fields directly into `TaskCreate` calls.
 
    - **6c. Empty-snapshot semantics + overwrite policy.** If the snapshot is empty, still write `[]` — the wake-up step's existence check is the contract; an absent file means "no consolidation has run", an empty array means "consolidation ran, no tasks were pending". If a `pending-tasks.json` already exists at the target path from a prior unrestored session, overwrite it: the TaskList snapshot from the most-recent consolidation is authoritative. If the prior session had pending tasks Nick still wanted, they're recoverable from MEMORY.md or that session's `$SD/open-tasks.md` — so the last-writer-wins behavior here is bounded, not silent data loss.
+
+6.5. **GH issue reconciliation (catch-up sync for the PostToolUse hook).** The `task-to-gh-issue.sh` PostToolUse hook (wired in `~/.claude/settings.json`) creates an issue in `nickmeinhold/claude-tasks` live on every `TaskCreate` and closes it on `TaskUpdate→completed`. Consolidation's job is **reconciliation**, not bulk-creation — the hook may have dropped a write (network blip, `gh` rate-limit) or missed a task captured before the hook was installed.
+
+   - **6.5a. Derive the project label.** `project_slug = cwd_with_/_replaced_by_-` (matches `~/.claude/projects/<slug>/` convention). The label is `project:${project_slug}`. The orchestrator's cwd at session start is the source of truth — pass it to memory-writer alongside the TaskList snapshot.
+
+   - **6.5b. List existing open issues** for this project: `gh issue list -R nickmeinhold/claude-tasks --label "project:<slug>" --state open --json number,title,body --limit 200`. Extract each issue's `claude-task-id` marker from the body (line of the form `<!-- claude-task-id: <16-hex> -->`).
+
+   - **6.5c. Cross-reference with the TaskList snapshot.** For each task in the snapshot, compute `id = sha256(subject + "::" + project_slug) | shasum -a 256 | cut -c1-16`. If no open issue carries that marker, the hook missed it — create the issue inline:
+     ```bash
+     gh issue create -R nickmeinhold/claude-tasks \
+       --title "<subject>" \
+       --body "<description>\n\n---\nReconciled at consolidation (session <session-id>).\n<!-- claude-task-id: <id> -->" \
+       --label "project:<slug>"
+     ```
+
+   - **6.5d. Do NOT close issues here.** Closing is the `TaskUpdate→completed` hook's job. Consolidation only creates missing issues — a task being absent from the current snapshot doesn't mean it was completed (could be deleted, deferred, or never captured this session). Hook owns closure; consolidation owns catch-up.
+
+   - **6.5e. Failure mode.** If any `gh` call fails (offline, rate-limited, repo unreachable), note it in the return message and continue — the local `pending-tasks.json` from step 6 is the fallback, and the next consolidation retries. Never block the rest of consolidation on a `gh` failure.
 
 7. **Write wins** from this session to `$SD/wins.md` (with today's date). Do NOT write to `~/.claude/wins.md` directly — the orchestrator appends this file to the global wins log in the Wrap-up step, ensuring a single writer even when parallel /consolidate sessions are running.
 
@@ -402,7 +481,7 @@ MODEL: sonnet. You are synthesizing — graph edges, Kolmogorov-minimal descript
 
 Both passes are mechanically applicable — a reviewer can re-run the procedure and check your compliance. This is the price of admission for using the Haiku pre-pass — skip it and you ship hallucinations.
 
-Read $SD/memory-path.txt to get the correct memory directory path. Then read $SD/session-summary.md and the three raw/* files.
+Read $SD/memory-path.txt to get the correct memory directory path. Then read $SD/session-summary.md and the three raw/* files. ALSO read $SD/marker-conversation.md if it exists and is not the "No marker conversation this session." sentinel — its `**Surfaced:**` lines are Nick's own articulation of why specific moments mattered, which is high-signal input for graph nodes and the error-triage patterns section. Treat a takeaway Nick stated himself as stronger evidence than one you inferred from the summary.
 
 Nick says: "Are you really really sure you got everything... this context is a frickin goldmine! Remember to check for TLAs (Three Letter Acronyms). Are there any concepts that bind each other together? What's the Kolmogorov complexity here? Don't compress to the point of extinction but let's make sure all of the threads are available to pull on next session."
 
@@ -442,6 +521,7 @@ Read these files (all of them — they are your full input):
 - $SD/consolidation.md (knowledge graph + forward plan + dropped tangents — written by knowledge-mapper, which has just completed)
 - $SD/open-tasks.md (deferred tasks dump — written by memory-writer; may say "No open tasks at consolidation time.")
 - $SD/affective-highlights.md (Nick-triaged emotional anchors, if present)
+- $SD/marker-conversation.md (the per-marker dialogue — Nick's own framing of WHY the "real" moments mattered; mine the `**Surfaced:**` lines for the cold reader's emotional + strategic context. May say "No marker conversation this session.")
 - $SD/multi-perspective-retro.md (three-pole retrospective synthesis, if present)
 
 Nick says: "Ok what's the prompt for the next session? Let's aim for 5's across the board."
@@ -460,7 +540,7 @@ The prompt should:
 - Set up challenge-skill balance — not trivially easy, not overwhelmingly vague
 - Include engagement score targets and why 5's are achievable
 - Be ready to paste directly into a new session
-- Include a one-line pointer near the top: "Open tasks from previous session: see $SD/open-tasks.md — recreate via TaskCreate if you want them live." (Skip this line only if open-tasks.md says "No open tasks at consolidation time.")
+- Include a one-line pointer near the top: "Open tasks from previous session: tracked as open issues on `nickmeinhold/claude-tasks` (label `project:<slug>`) — wake-up will auto-restore them via TaskCreate. Local fallback: `$SD/open-tasks.md` + project `pending-tasks.json`." (Skip this line only if open-tasks.md says "No open tasks at consolidation time.")
 
 Actions:
 1. WRITE (overwrite) $SD/next-session-prompt.md with the full prompt. You are the sole owner of this file; no other agent writes to it.
