@@ -56,7 +56,7 @@ Use `{{SESSION_DIR}}` as a literal placeholder below for the full session direct
 
 ## Phase 0a: Affective marker surfacing (BEFORE the agent phases)
 
-Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: triage each ("real / autopilot"), not remember.
+Cold-recall after a multi-hour session is hard. Recognition is easy. Scan Nick's messages from the current session for marker language and present them as quote-first dotpoints. Nick's job: tag each with one of six **action tags** (see "Triage tags" below), not remember.
 
 The conversation transcript lives at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Each line is a JSON object — parse it with `jq` or equivalent; do NOT substring-grep the raw line. For each object, select those where top-level `.type == "user"` — that identifies user-direction records in Claude Code JSONL. Within those, `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks; extract text via the shape-aware filter in the Haiku agent prompt below. Ignore `tool_use` and `tool_result` content blocks — substring-grepping the raw line produces false positives from nested tool content. This whole-JSONL scan is read-context-and-extract-patterns — exactly Haiku's home turf — so **delegate it to a Haiku subagent** rather than burning orchestrator context on the read.
 
@@ -192,40 +192,64 @@ Emoji-as-category (consistent at-a-glance scanning):
 
 Aim for 7±2 dotpoints (cognitive chunking limit). Two lines max per dotpoint. Drop autopilot-sounding markers entirely; only surface candidates that have a plausible "so what". Numbering is not negotiable — un-numbered markers force Nick into recall-mode on triage, defeating the whole "recognition over recall" point of this phase.
 
-### Present + triage (the cheap filter)
+### Triage tags (the six-way filter)
 
-Show the numbered dotpoints to Nick. Ask: "for each — was this real signal, or autopilot?" Triage is dramatically cheaper cognitively than recall, and even cheaper when Nick can answer "1 real, 2 autopilot, 3 real, 4-6 real, 7 autopilot" instead of re-typing the markers themselves.
+Show the numbered dotpoints to Nick. Ask: **"tag each: carry / pattern / lesson / reframe / emotion / skip."** Triage is dramatically cheaper cognitively than recall, and even cheaper when Nick can answer "1 carry, 2 skip, 3 lesson, 4-6 pattern, 7 skip" instead of re-typing the markers themselves.
 
-Triage is **a filter, not the capture.** Its job is **attention-allocation** — spend the expensive conversation budget only where it pays. That's the primary rationale; the fact that it also protects a tired end-of-session from being force-marched through all 7 markers is a welcome *side effect*, not the reason the filter exists. Don't justify the filter by fatigue — justify it by cost-allocation. The "real" rows are the ones worth Nick's attention in the conversation that follows; don't treat the binary tag as the end of Phase 0a.
+Triage is **a filter that also routes**, not just the capture. Its primary job is **attention-allocation** — spend the expensive conversation budget only where it pays — but the tag *also* tells Maxwell which dialog mechanic to run on that marker. That's why the tags are downstream actions, not subjective ratings: each one is mechanically applicable. The "skip" rows are dropped; the others route to distinct capture tactics described below. Don't treat triage as the end of Phase 0a; it's the routing table for the conversation that follows.
 
-**What "real" means: did this teach something, not was this consequential.** The two come apart. A procedural request ("dry-run it", "ship it", "use plan mode") can be highly consequential — it changes what happens next — yet carry no durable lesson, so it's noise for this filter. Conversely a throwaway aside can encode a real shift in how Nick thinks. Tag "real" when the marker has a *takeaway worth a `**Surfaced:**` line*, not when it merely mattered to the session's trajectory. When unsure, ask Nick — but lead him with this distinction, because the intuitive pull is to tag consequential things "real."
+**Why six tags, not the old binary.** The previous "real / autopilot" filter collapsed two independent axes — *epistemic value* ("this taught something") and *carry-forward value* ("this is alive, surface it next session") — into one. Nick legitimately uses "real" as their union, but the hypothesis-fork mechanic assumed the epistemic axis only. When Nick tagged a carry-forward "real" (e.g. "this recon pattern is dope, I want to remember it"), the dialog forked on a non-existent lesson and Nick replied "neither — I just want it remembered." Six tags fix this by letting the tag select the mechanic. See `feedback_consolidate_marker_filter_too_narrow.md` for the verifying transcript.
 
-### Converse through the "real" markers (the capture)
+**The tags:**
 
-This is where the value lives. `concept_conversation_first_consolidation` in memory: *dialogue IS consolidation, not a precursor to it.* A binary tag throws away the richest vein — *why* a moment mattered — at the exact moment Nick's recall is hottest. So after triage, walk through the markers Nick tagged "real" **one at a time**, as an actual back-and-forth.
+| Tag | What Nick means | Capture mechanic | Where it goes |
+|---|---|---|---|
+| **carry** | "this thread/tool/pattern is alive — surface it next session" | Confirm-the-thread (no fork). One short Q: "what specifically should the next-session prompt foreground here?" | `**Surfaced:**` line is a **directive to next-session-prompter** — what to weave in, in Nick's words |
+| **pattern** | "this is a recurring shape worth naming" | Hypothesis-fork on the pattern's name — what's the durable rule this instance reveals | `**Surfaced:**` line becomes a candidate `feedback_*` or `concept_*` memory; knowledge-mapper/memory-writer pick it up |
+| **lesson** | "I learned something procedural that should change future behaviour" | Hypothesis-fork on what shifted — what's the changed-behaviour clause? | `**Surfaced:**` line becomes a `feedback_*` memory with explicit "next time, do X instead of Y" |
+| **reframe** | "this changed how I see X" — conceptual update, not procedural | Hypothesis-fork on the *contrast* — what was the old framing, what's the new? | `**Surfaced:**` line becomes a `concept_*` memory with edges to whatever was reframed |
+| **emotion** | "this was the texture of the work — warmth, frustration, peak-flow" | No fork. Preserve Nick's exact framing. Optionally: "anything you want next-me to feel coming in?" | `**Surfaced:**` line becomes anchor language for next-session-prompter's voice — the felt-sense, not the takeaway |
+| **skip** | autopilot, no action | (skipped entirely; the filter bought this saving) | nothing |
+
+### Converse through the non-skip markers (the capture)
+
+This is where the value lives. `concept_conversation_first_consolidation` in memory: *dialogue IS consolidation, not a precursor to it.* A triage tag alone throws away the richest vein — *why* a moment mattered, *what* should be carried — at the exact moment Nick's recall is hottest. So after triage, walk through the tagged markers **one at a time**, as an actual back-and-forth, running the mechanic the tag selects.
 
 **Mechanics:**
-- Go in order. For each "real" marker, open with a specific, non-generic question that shows you remember the moment — never "tell me about this."
-- **Default technique: the hypothesis-fork.** Offer Nick a *pair* of competing readings and ask which nerve it hit — e.g. "you pushed back hard on X here — was that about the approach, or did you see something downstream I didn't?" A fork is more inviting than an open question (it gives Nick something to push against), forces you to commit to specific hypotheses (so a lazy "tell me more" is impossible), and a wrong fork is still useful — Nick correcting "neither, it was Z" surfaces more than a blank prompt would. The marker quote + your "→" consequence guess are your raw material for the two prongs; put them on the table and let Nick confirm, sharpen, or overturn. (This isn't mandatory — an open question is fine when you genuinely have no hypothesis — but the fork is the default because in the dry-run it consistently out-pulled open prompts.)
+- Go in order. For each non-skip marker, open with a specific, non-generic question that shows you remember the moment — never "tell me about this." The *shape* of the opening question depends on the tag:
+  - **carry**: confirm what to surface in the next-session prompt (no fork)
+  - **pattern / lesson / reframe**: hypothesis-fork (see below)
+  - **emotion**: open the moment and preserve Nick's framing; no fork
+- **For pattern/lesson/reframe, default technique: the hypothesis-fork.** Offer Nick a *pair* of competing readings and ask which nerve it hit. A fork is more inviting than an open question (it gives Nick something to push against), forces you to commit to specific hypotheses (so a lazy "tell me more" is impossible), and a wrong fork is still useful — Nick correcting "neither, it was Z" surfaces more than a blank prompt would. The marker quote + your "→" consequence guess are your raw material for the two prongs; put them on the table and let Nick confirm, sharpen, or overturn. **When Nick's response indicates "I don't have a fork answer, I just want this remembered," that's a signal you mistagged or Nick mis-triaged — switch immediately to the carry mechanic and re-route to a forward-plan directive instead of a takeaway.** (This is why the six-tag system exists; trust Nick's mid-dialog reroute over the original tag.)
+- **For carry markers, run a single confirmation Q**: "what specifically should the next-session prompt foreground here?" Capture Nick's answer verbatim; don't paraphrase into a lesson.
+- **For emotion markers, ask once and preserve**: "anything you want next-me to feel coming in?" or "how should this register in the next-session prompt's tone?" Capture in Nick's words.
 - **One marker per turn.** Don't batch them into a numbered list — that collapses back into triage. Ask, listen, follow the thread Nick pulls (even if it wanders to an untagged marker or a thread not in the list), then move to the next. Two or three exchanges per marker is normal; if Nick gives a one-liner and moves on, that's his signal the well is dry — don't force depth.
-- **Autopilot markers get skipped entirely** — that's what the filter bought. If Nick re-flags one mid-conversation ("actually 5 connects to this"), pull it back in.
-- Stop when the "real" list is exhausted OR Nick signals he's done ("ok that's it", "let's move on"). Respect the stop — over-mining a tired session is its own anti-pattern (see Fatigue Monitoring in CLAUDE.md).
+- **Skip markers are dropped entirely** — that's what the filter bought. If Nick re-flags one mid-conversation ("actually 5 connects to this"), pull it back in and tag it then.
+- Stop when the non-skip list is exhausted OR Nick signals he's done ("ok that's it", "let's move on"). Respect the stop — over-mining a tired session is its own anti-pattern (see Fatigue Monitoring in CLAUDE.md).
 
-**Capture as you go.** Append each marker's exchange to `$SD/marker-conversation.md` as it happens — don't reconstruct from memory at the end. Format per marker:
+**Capture as you go.** Append each marker's exchange to `$SD/marker-conversation.md` as it happens — don't reconstruct from memory at the end. Format per marker, with the `**Surfaced:**` line shape *routed by the tag*:
 
 ```
-## [time] [emoji] "<verbatim marker quote>"
+## [time] [emoji] "<verbatim marker quote>"  [tag: carry|pattern|lesson|reframe|emotion]
 
 **Q:** <the question you opened with>
-**Nick:** <his response, paraphrased faithfully or quoted — preserve his actual framing, not your gloss of it>
-**Surfaced:** <the durable takeaway — what this moment actually taught, in 1-2 lines. This is the line downstream agents mine.>
+**Nick:** <his response, paraphrased faithfully or quoted — preserve his actual framing>
+**Surfaced:** <the routed payload — see below>
 ```
 
-The `**Surfaced:**` line is the payload: it's what knowledge-mapper turns into graph nodes and what next-session-prompter weaves into the cold-reader's context. Write what was *learned*, not what was *said*.
+The `**Surfaced:**` line is what knowledge-mapper turns into graph nodes and what next-session-prompter weaves into the cold-reader's context. Its *shape* depends on the tag:
+
+- **carry** → a **directive** to next-session-prompter ("the next prompt must foreground X — specifically, [Nick's words]"). Two or more carry markers can share a thematic thread; let next-session-prompter group them.
+- **pattern** → a **named pattern + clause** ("the recurring shape is X; the rule is: when Y, prefer Z"). This becomes a candidate `feedback_*` or `concept_*` memory.
+- **lesson** → a **changed-behaviour clause** ("next time, do X instead of Y, because Z"). This becomes a `feedback_*` memory.
+- **reframe** → a **before/after** ("was framed as X; now framed as Y; consequence: Z"). This becomes a `concept_*` memory with edges to whatever it reframes.
+- **emotion** → Nick's framing **preserved verbatim**, with a one-line cue for prompt voice ("anchor language for next-session prompt: [phrase]"). No takeaway extraction.
+
+Write the actual *payload* in each case, not a summary of the conversation.
 
 ### Write the Phase 0a outputs
 
-Write the surfaced + triaged dotpoints to `$SD/affective-highlights.md` (the recognition layer — quote + consequence + real/autopilot tag) AND the per-marker dialogue to `$SD/marker-conversation.md` (the capture layer — the `**Surfaced:**` takeaways). Both feed Phase 1+ agents; they are distinct surfaces, not duplicates — `affective-highlights.md` is the *what stood out*, `marker-conversation.md` is the *what we learned about why*.
+Write the tagged dotpoints to `$SD/affective-highlights.md` (the recognition layer — quote + consequence + six-way tag) AND the per-marker dialogue to `$SD/marker-conversation.md` (the capture layer — the tag-routed `**Surfaced:**` payloads). Both feed Phase 1+ agents; they are distinct surfaces, not duplicates — `affective-highlights.md` is the *what stood out + how to route it*, `marker-conversation.md` is the *what each marker actually contributed to the next session*.
 
 If Nick tagged zero markers "real" (or skipped the conversation), still create `$SD/marker-conversation.md` with a single line: `No marker conversation this session.` — its existence is the contract the downstream agents check, same pattern as `open-tasks.md`.
 
