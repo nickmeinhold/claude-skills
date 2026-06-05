@@ -45,22 +45,45 @@ cat /tmp/pr-$1-diff.txt
 
 The Pro-tier Gemini models hit "You have exhausted your capacity on this model" failure consistently across recent sessions. The full Kelvin review wraps internal retries before failing, so blindly firing it costs ~30s of wall time on every cage-match when Kelvin is down. A 1-token ping resolves in ~1-2s and tells us up front which model (if any) is actually reachable. Falling back to a Flash model is intentionally NOT done here: 2.5-flash gives shallow APPROVE-everything reviews that paper over real concerns — better to declare Kelvin unavailable than to seat a soft reviewer at the table.
 
+**Why `GEMINI_CLI_TRUST_WORKSPACE=true`?** The `gemini` CLI gates on a "trusted folders" prompt; in a non-interactive shell that gate fails BEFORE the model is ever contacted. With `2>/dev/null` swallowing stderr, that trusted-dir error was indistinguishable from a real quota error — so the probe wrongly concluded "Kelvin exhausted" and silently dropped Kelvin from the gate. Setting `GEMINI_CLI_TRUST_WORKSPACE=true` on every `gemini` invocation pre-trusts the workspace so the CLI reaches the model. The probe below also captures stderr (instead of discarding it) and only declares Kelvin unavailable on a genuine capacity/quota error — never on a trusted-dir/permission error.
+
 ```bash
 KELVIN_MODEL=""
+KELVIN_PROBE_ERR=""
 for m in gemini-3-pro-preview gemini-2.5-pro; do
   # Tiny prompt, short timeout. If the model responds at all, it's up;
-  # we'll use it for the full review. If both fail, KELVIN_MODEL stays
-  # empty and we skip the Kelvin call entirely.
-  if timeout 15 gemini --model "$m" "Reply PONG." --output-format text 2>/dev/null \
-       | grep -v "Loaded cached credentials" | grep -q "PONG"; then
+  # we'll use it for the full review. Capture stderr to a file (NOT
+  # /dev/null) so we can tell a trusted-dir/permission failure apart
+  # from a real quota/capacity failure. GEMINI_CLI_TRUST_WORKSPACE=true
+  # pre-trusts the workspace so the CLI reaches the model instead of
+  # stalling on the "trusted folders" gate.
+  PROBE_OUT=$(timeout 15 env GEMINI_CLI_TRUST_WORKSPACE=true \
+       gemini --model "$m" "Reply PONG." --output-format text 2>/tmp/kelvin-probe-err-$1.txt \
+       | grep -v "Loaded cached credentials")
+  if echo "$PROBE_OUT" | grep -q "PONG"; then
     KELVIN_MODEL="$m"
     break
   fi
+  KELVIN_PROBE_ERR=$(cat /tmp/kelvin-probe-err-$1.txt 2>/dev/null)
 done
 
 if [ -z "$KELVIN_MODEL" ]; then
-  echo "Kelvin probe: no Pro model available (3-pro-preview and 2.5-pro both exhausted)."
-  echo "Skipping Kelvin entirely; gate will rely on Maxwell + Carnot."
+  # Distinguish a real capacity/quota exhaustion from a trusted-dir /
+  # permission error. Only a genuine quota error means "Kelvin is down";
+  # a trusted-dir error means the CLI gate misfired and should have been
+  # cured by GEMINI_CLI_TRUST_WORKSPACE=true above — surface it loudly
+  # rather than silently demoting Kelvin to "exhausted".
+  if echo "$KELVIN_PROBE_ERR" | grep -qiE "exhausted|quota|rate.?limit|resource_exhausted|capacity"; then
+    echo "Kelvin probe: no Pro model available (3-pro-preview and 2.5-pro both exhausted)."
+    echo "Skipping Kelvin entirely; gate will rely on Maxwell + Carnot."
+  else
+    echo "Kelvin probe: NO model responded, but the error is NOT a quota/capacity error."
+    echo "This is likely a trusted-dir / auth / CLI error — Kelvin is NOT necessarily down."
+    echo "Probe stderr was:"
+    echo "$KELVIN_PROBE_ERR"
+    echo "GEMINI_CLI_TRUST_WORKSPACE=true should cure a trusted-dir gate; if this persists,"
+    echo "investigate the gemini CLI directly rather than treating Kelvin as capacity-exhausted."
+  fi
 else
   echo "Kelvin probe: $KELVIN_MODEL responsive."
 fi
@@ -77,7 +100,9 @@ if [ -n "$KELVIN_MODEL" ]; then
 # Backgrounded so Claude can compose Maxwell's review while Gemini's
 # API call resolves in parallel. wait $KELVIN_PID below before reading
 # the output file. Skipped entirely when the probe came back empty.
-gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
+# GEMINI_CLI_TRUST_WORKSPACE=true pre-trusts the workspace so the CLI
+# reaches the model instead of stalling on the "trusted folders" gate.
+env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the cold, calculating heel wrestler of code review - absolute zero tolerance for bullshit
@@ -347,7 +372,7 @@ if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   MAXWELL_REVIEW=$(cat /tmp/maxwell-review-$1.md)
   KELVIN_REVIEW=$(cat /tmp/kelvin-review-$1.md)
 
-  KELVIN_CRITIQUE=$(gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
+  KELVIN_CRITIQUE=$(env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
 
 Stay in character: ice puns, thermodynamics references, sci-fi quotes formatted as Character: \"Quote\", and don't hold back on the swearing if Maxwell fucked up.
 
@@ -418,6 +443,59 @@ if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
 fi
 
 wait
+```
+
+## Round 9: Auto-apply the `cage-matched` label on consensus APPROVE
+
+A downstream merge gate (live on `nickmeinhold/the-dreaming-repo`, being mirrored to `flux-shadow`) refuses to auto-merge a sensitive PR unless it carries the `cage-matched` label. Apply that label automatically when the cage match reaches a clean consensus, so the label means exactly "a cage match approved this" rather than "a human remembered to click".
+
+**Consensus rule:** label iff **Maxwell = APPROVE** AND (**Kelvin = APPROVE** OR **Carnot = APPROVE**). If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the two adversarial reviewers to APPROVE alongside Maxwell.
+
+The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action is attributable to the cage-match identity. Labeling is best-effort: the label may not exist on every repo, so we create-if-missing and tolerate any residual error rather than failing the whole cage match.
+
+```bash
+# Verdicts:
+#  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
+#    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
+#  - KELVIN_VERDICT: already set above for the review post.
+#  - Carnot's verdict comes from the structured JSON (source of truth).
+MAXWELL_VERDICT="COMMENT"   # Set from Maxwell's review verdict above.
+
+CARNOT_VERDICT=""
+if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
+  CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
+fi
+
+# Any REQUEST_CHANGES from any reviewer is a hard block on the label.
+ANY_REQUEST_CHANGES=0
+for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT"; do
+  [ "$v" = "REQUEST_CHANGES" ] && ANY_REQUEST_CHANGES=1
+done
+
+# Consensus APPROVE: Maxwell APPROVE + at least one adversarial APPROVE.
+ADVERSARIAL_APPROVE=0
+{ [ "$KELVIN_AVAILABLE" -eq 1 ] && [ "$KELVIN_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
+{ [ "$CARNOT_AVAILABLE" -eq 1 ] && [ "$CARNOT_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
+
+if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
+   && [ "$MAXWELL_VERDICT" = "APPROVE" ] \
+   && [ "$ADVERSARIAL_APPROVE" -eq 1 ]; then
+  echo "Consensus APPROVE — applying 'cage-matched' label to PR #$1."
+  # Best-effort: ensure the label exists, then add it. Neither call may
+  # fail the cage match. Use Maxwell's App token so the label is
+  # attributable to the cage-match identity.
+  GH_TOKEN=$MAXWELL_TOKEN gh label create cage-matched \
+    -R "$REPO" --color 5319e7 \
+    --description "Approved by /cage-match adversarial review" 2>/dev/null \
+    || true  # already exists, or label-create not permitted — fine either way
+  if GH_TOKEN=$MAXWELL_TOKEN gh pr edit $1 -R "$REPO" --add-label cage-matched; then
+    echo "Label 'cage-matched' applied."
+  else
+    echo "WARN: failed to apply 'cage-matched' label (label missing? permissions?). Continuing — cage match itself succeeded."
+  fi
+else
+  echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT) — NOT applying 'cage-matched' label."
+fi
 ```
 
 ## Summary
