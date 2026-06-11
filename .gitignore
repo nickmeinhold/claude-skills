@@ -5,3 +5,4 @@ coverage/
 *.log
 *.pem
 .claude/live-qa-config.md
+__pycache__/

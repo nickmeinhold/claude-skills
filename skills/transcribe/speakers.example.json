@@ -1,0 +1,10 @@
+{
+  "title": "Team sync",
+  "context": "A small product team planning meeting.",
+  "num_speakers": 3,
+  "speakers": [
+    {"name": "Avery", "profile": "team lead; drives the agenda, talks roadmap, scope and priorities", "anchor": "let's lock the scope before we touch any code"},
+    {"name": "Blake", "profile": "engineer; focuses on implementation detail and trade-offs"},
+    {"name": "Casey", "profile": "joins partway through, mostly listens, occasional questions"}
+  ]
+}
