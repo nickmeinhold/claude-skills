@@ -8,7 +8,7 @@ Guidance for Claude Code when working on this repository.
 
 ## Project Overview
 
-This repo contains **Claude Code Skills** — markdown files that define custom slash commands.
+This repo contains **Claude Code Skills** — each skill is a `skills/<name>/SKILL.md` file defining a custom slash command.
 
 The Google Slides build that powers `/slides` and `/live-qa` lives in the sibling repo
 [`nickmeinhold/claude-slides`](https://github.com/nickmeinhold/claude-slides). See that
@@ -45,12 +45,12 @@ Instructions for Claude to follow...
 
 ### Skill Locations
 
-- **Source**: `*.md` files in this repo root
-- **Symlinked to**: `~/.claude/commands/`
+- **Source**: `skills/<name>/SKILL.md` in this repo
+- **Symlinked to**: `~/.claude/skills/`
 
 To install skills globally (from repo root):
 ```bash
-ln -s "$(pwd)"/*.md ~/.claude/commands/
+ln -s "$(pwd)/skills" ~/.claude/skills
 ```
 
 ## Testing Changes
@@ -61,7 +61,7 @@ After modifying skills:
 
 ## File Conventions
 
-- Skills: `*.md` in repo root
+- Skills: `skills/<name>/SKILL.md`
 - Tokens/credentials: Not committed (in `.gitignore`)
 
 ## Environment Variables

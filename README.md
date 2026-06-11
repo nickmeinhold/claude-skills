@@ -12,7 +12,9 @@ git clone git@github.com:nickmeinhold/claude-skills.git
 
 # 2. Symlink skills to Claude Code (from repo root)
 cd claude-skills
-ln -s "$(pwd)"/*.md ~/.claude/commands/
+ln -s "$(pwd)/skills" ~/.claude/skills
+# (or, if you already have your own ~/.claude/skills dir:
+#  ln -s "$(pwd)"/skills/* ~/.claude/skills/)
 
 # 3. Symlink the helper script
 mkdir -p ~/.claude-skills
@@ -29,7 +31,7 @@ Then install the reviewer GitHub Apps on your repos (one-time per repo):
 
 That's it. Skills are now available as `/pr-review`, `/ship`, `/cage-match`, etc.
 
-**Why symlink?** Claude Code looks for skills in `~/.claude/commands/`. Symlinking means `git pull` updates skills instantly.
+**Why symlink?** Claude Code looks for skills in `~/.claude/skills/` (each skill is a `<name>/SKILL.md` directory). Symlinking means `git pull` updates skills instantly.
 
 ## Setup (Your Own Projects)
 
@@ -40,7 +42,7 @@ Want to use `/ship`, `/pr-review`, or `/cage-match` on your own repos? You'll ne
 ```bash
 git clone git@github.com:nickmeinhold/claude-skills.git
 cd claude-skills
-ln -s "$(pwd)"/*.md ~/.claude/commands/
+ln -s "$(pwd)/skills" ~/.claude/skills
 ```
 
 ### Step 2: Register two GitHub Apps

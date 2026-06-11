@@ -55,7 +55,7 @@ PR_DIFF=$(cat /tmp/pr-$PR-diff.txt)
 ## Round 2: Run Set A (production wrestling personas)
 
 Set A is the **current production cage-match prompts** as written in
-`~/.claude/commands/cage-match.md`: MaxwellMergeSlam (Claude), KelvinBitBrawler
+`~/.claude/skills/cage-match/SKILL.md`: MaxwellMergeSlam (Claude), KelvinBitBrawler
 (Gemini), CarnotCodeCarver (Codex). Fire all three in parallel, exactly as
 that skill does — but route the outputs to Set-A-labelled files.
 
@@ -148,7 +148,7 @@ CARNOT_A_PID=$!
 
 **Step C — Maxwell (Set A): you compose the wrestling-Maxwell review
 in-process** following the exact instructions in
-`~/.claude/commands/cage-match.md` Round 2 Step C. Save to
+`~/.claude/skills/cage-match/SKILL.md` Round 2 Step C. Save to
 `$EVAL_DIR/set-a-maxwell.md`.
 
 ```bash
