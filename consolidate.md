@@ -32,7 +32,7 @@ Before starting, write a session summary to prime the agents. This is the critic
 
    ### Cross-session safety
 
-   The skill used to maintain a `~/.claude/consolidation/latest` symlink as a "wake-up convenience". It is no longer created. The symlink was a single shared mutable pointer — when two tabs ran `/consolidate` concurrently it caused real data loss (2026-05-02→03: knowledge-mapper's output was overwritten by a parallel tab's setup moving the symlink between read and write). Every consumer that used to follow `latest/` (the wake-up protocol's prompt handoff, the readtime-check SessionStart hook, the heartbeat scorecard read) now resolves the newest consolidation directly by mtime, e.g.:
+   The skill used to maintain a `~/.claude/consolidation/latest` symlink as a "wake-up convenience". It is no longer created. The symlink was a single shared mutable pointer — when two tabs ran `/consolidate` concurrently it caused real data loss (2026-05-02→03: knowledge-mapper's output was overwritten by a parallel tab's setup moving the symlink between read and write). Every consumer that used to follow `latest/` (the wake-up protocol's prompt handoff, the readtime-check grader — now invoked from Setup step 3, not a SessionStart hook — and the heartbeat scorecard read) now resolves the newest consolidation directly by mtime (readtime-check additionally filters to same-project dirs via `memory-path.txt`), e.g.:
 
    ```bash
    NEWEST_PROMPT="$(ls -t "$HOME"/.claude/consolidation/2*/next-session-prompt.md 2>/dev/null | head -1)"
@@ -44,7 +44,14 @@ Before starting, write a session summary to prime the agents. This is the critic
 
 2. **Resolve the memory path.** Find the correct project memory directory by looking for the MEMORY.md that matches the current working directory. It will be under `~/.claude/projects/` with the path encoded (e.g., `~/git` → `-Users-nick-git`). Write this resolved path into the session directory as `memory-path.txt` so agents can read it instead of guessing.
 
-3. **Write the session summary** to `<session-dir>/session-summary.md`:
+3. **Grade the previous consolidation's scorecard (readtime-scoring).** Dual-wired: a SessionStart hook (settings.json) usually handles this at session start, and the script self-silences once a scorecard is graded — so this step is the catch-up net for sessions where the hook didn't fire (fresh project, hook disabled, scorecard written mid-session). Cheap to check, so always check. Run:
+   ```bash
+   bash ~/.claude/sleep/readtime-check.sh | jq -r '.hookSpecificOutput.additionalContext // empty'
+   ```
+   - **Empty output** → nothing to grade (no prior same-project scorecard, or already graded). Continue.
+   - **Non-empty** → follow the emitted instruction now, in-context (it locates the prior same-project scorecard via `memory-path.txt`, and specifies the exact readtime-score.json schema — keep to it strictly; schema drift is what rotted this instrument the first time). You are grading the PREVIOUS instance's bets and memory choices against the session that just ran — the best-resolved vantage point this loop will ever get.
+
+4. **Write the session summary** to `<session-dir>/session-summary.md`:
    - Everything that happened this session: topics, decisions, code written, problems solved
    - Domain-specific or session-specific terms — only those that need defining (skip standard developer vocabulary the reading agent already knows). Bar: would a competent dev assistant cold-reading this need the definition? If no, omit it.
    - Key threads and how they connect
@@ -392,7 +399,26 @@ Actions:
    - **If not sharded (flat `MEMORY.md` only):** index everything in root as before. But if root crosses ~24KB after your writes, flag it in the scorecard (`memory_index_over_budget: true`) — that's the signal to shard next.
    - Index lines: **one line, under ~200 chars** including edges. Long edge-chains are bloat; the file holds the detail, the index just routes.
 3. **memory-health.json**: update access counts and decay-class entries for any memory files touched this session.
-4. **Scorecard**: write $SD/scorecard.json with your own counts — files written, files updated, MEMORY.md edits, errors triaged. You know your own work; no reason to defer this to a separate pass.
+4. **Scorecard**: write $SD/scorecard.json with EXACTLY this schema — no alias keys, no extra top-level fields. (Schema drift is what killed this instrument's analyzability the first time: 200+ distinct keys had accumulated by the 2026-05-28 audit, and the analyzer ended up grading an empty field-intersection. Anything that doesn't fit goes in `notes`.) Before listing a file under `memories_written`/`memories_updated`, verify it exists on disk (`ls` the path) — a prior consolidation claimed memories it never wrote (phantom-write bug, 2026-04-29); the scorecard is a receipt, not a self-report.
+
+   ```json
+   {
+     "schema_version": 2,
+     "session_date": "<ISO 8601>",
+     "memory_dir": "<absolute path from $SD/memory-path.txt>",
+     "memories_written": ["<absolute path, verified to exist on disk>"],
+     "memories_updated": ["<absolute path, verified to exist on disk>"],
+     "index_edits": 0,
+     "errors_triaged": 0,
+     "memory_index_over_budget": false,
+     "predictions": [
+       {"text": "<falsifiable claim about the next session>", "basis": "<evidence>", "confidence": 0.8}
+     ],
+     "notes": "<optional free text — overflow goes here, never as a new top-level key>"
+   }
+   ```
+
+   Predictions: 3-5, graded at next-session-start by the readtime hook. Prefer claims checkable from repo/file/issue state over claims about what Nick will choose to do — in the first run of this experiment, 75% of predictions came back unresolvable because they needed days to resolve and grading happened within hours. Include at least one negative prediction ("X will NOT happen") — those are the honest bets.
 5. **Open-tasks dump (human-readable)**: write $SD/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
 
    > These tasks are session-scoped (they live in ~/.claude/tasks/<session-uuid>/ and won't be visible to a fresh session). To make them live again next session, recreate each via TaskCreate.
