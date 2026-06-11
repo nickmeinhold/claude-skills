@@ -9,7 +9,7 @@ signing an RS256 JWT and exchanging it via the GitHub API. Inputs (app id,
 base64 private key, `owner/repo`) are typically sourced from
 `~/.claude-skills/.env`.
 
-Called from: `~/.claude/commands/{cage-match,ship,cage-match-eval}.md` —
+Called from: `~/.claude/skills/{cage-match,ship,cage-match-eval}/SKILL.md` —
 whenever a skill needs to post a bot review or open a bot-authored PR as
 Maxwell or Kelvin.
 
