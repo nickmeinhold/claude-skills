@@ -6,14 +6,14 @@
 # fixtures and reader move together, so renaming one without the other
 # leaves both green. PR #38 (2026-05-04) was caused by exactly that —
 # PR #30 renamed cohort dirs from `claude-skills-PR-` to
-# `nickmeinhold__claude-skills-PR-` in the writer (cage-match-eval.md) and
+# `nickmeinhold__claude-skills-PR-` in the writer (skills/cage-match-eval/SKILL.md) and
 # in `ship.md`'s gate, but `scripts/eval-tally.sh`'s COHORT_PREFIX kept the
 # old shape. The script silently returned "no PRs complete" against
 # production for days because nobody ran it and the fixture-based test
 # kept passing.
 #
 # This file closes that surface. Both tests source-grep the writer's
-# EVAL_DIR formula straight out of cage-match-eval.md and `eval` it. If
+# EVAL_DIR formula straight out of skills/cage-match-eval/SKILL.md and `eval` it. If
 # the writer formula changes, the test executes the new shape and the
 # reader either finds it (test passes — both updated together) or doesn't
 # (test fails — drift detected at CI, not in production).
@@ -30,7 +30,7 @@ teardown() {
   fi
 }
 
-# Construct an EVAL_DIR using the writer formula from cage-match-eval.md,
+# Construct an EVAL_DIR using the writer formula from skills/cage-match-eval/SKILL.md,
 # substituting our isolated $EVAL_ROOT for the literal `~/.claude/persona-eval`.
 # Sets EVAL_DIR in the caller's scope.
 construct_eval_dir() {
@@ -39,7 +39,7 @@ construct_eval_dir() {
   REPO="$repo"
   PR="$pr"
   local writer_lines
-  writer_lines=$(grep -E '^(REPO_SLUG=|EVAL_DIR=)' "${REPO_ROOT}/cage-match-eval.md")
+  writer_lines=$(grep -E '^(REPO_SLUG=|EVAL_DIR=)' "${REPO_ROOT}/skills/cage-match-eval/SKILL.md")
   [ -n "$writer_lines" ] || return 1
   writer_lines=${writer_lines//\~\/.claude\/persona-eval/$EVAL_ROOT}
   eval "$writer_lines"
