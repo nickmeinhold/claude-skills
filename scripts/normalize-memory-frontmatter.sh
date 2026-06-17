@@ -14,9 +14,11 @@
 #     scope: repo | universal | meta
 #   ---
 #
-# Runtime prerequisite: python3 with PyYAML (`import yaml`). Used for best-effort
-#   lenient extraction and for the apply-time validation gate. If PyYAML is absent,
-#   extraction degrades to a regex fallback and --apply exits 3 with a clear message.
+# Runtime prerequisite: python3 with PyYAML (`import yaml`) for best-effort lenient
+#   extraction. The apply-time validation gate is DELEGATED to the canonical schema
+#   validator (scripts/validate-memory-frontmatter.sh — single source of truth,
+#   issue #883), which must be present; --apply exits 3 if it is missing or rejects
+#   the rebuilt frontmatter.
 #
 # DESIGN — preserve-first, not generate-first (hardened 2026-06-17, issue #859):
 #   This tool used to (a) reject every prefix but feedback_/concept_, (b) hardcode
@@ -58,6 +60,12 @@ APPLY=0
 if [ "${1:-}" = "--apply" ]; then APPLY=1; shift; fi
 FILE="${1:?usage: normalize-memory-frontmatter.sh [--apply] <file>}"
 [ -f "$FILE" ] || { echo "ERROR: no such file: $FILE" >&2; exit 1; }
+
+# The apply-time gate delegates to the CANONICAL schema validator (its sibling in
+# this dir) rather than re-stating the schema here — one definition, no drift
+# (issue #883). Resolved relative to this script so a bulk run from any cwd finds it.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export VALIDATOR="$HERE/validate-memory-frontmatter.sh"
 
 # All real work is in one Python block: bash YAML parsing is exactly the fragility
 # that produced the malformed files this tool repairs. Python lenient-extracts the
@@ -234,29 +242,23 @@ result = new_fm + sep + body
 if not result.endswith("\n"):
     result += "\n"
 
-# Validate the result parses as YAML before replacing the original (fail-loudly gate).
-try:
-    import yaml
-except ImportError:
-    sys.stderr.write(f"ERROR: PyYAML required for --apply validation (pip install pyyaml): {FILE}\n")
-    sys.exit(3)
-try:
-    assert result.startswith("---\n"), "no opening fence"
-    parsed = yaml.safe_load(result.split("---\n", 2)[1])
-    for k in ("name", "description"):
-        assert parsed.get(k), f"missing/empty {k}"
-    assert parsed.get("metadata", {}).get("type"), "missing metadata.type"
-    assert parsed.get("metadata", {}).get("scope") in VALID_SCOPES, "bad scope"
-except Exception as e:
-    sys.stderr.write(f"ERROR: result frontmatter failed validation ({e}): {FILE}\n")
-    sys.exit(3)
-
-# Atomic write: temp in the same dir, then mv.
+# Atomic write: temp in the same dir, validate it through the CANONICAL schema
+# validator (the single source of truth — issue #883), then mv only if it passes.
+# Writing the temp first lets the validator see the real on-disk bytes, and a
+# failure discards the temp so the original is never replaced by an invalid file.
 d = os.path.dirname(os.path.abspath(FILE))
 fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
 try:
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(result)
+    validator = os.environ.get("VALIDATOR", "")
+    if not validator or not os.path.exists(validator):
+        sys.stderr.write(f"ERROR: canonical validator not found ({validator!r}); run install-symlinks.sh or check scripts/: {FILE}\n")
+        sys.exit(3)
+    proc = subprocess.run(["bash", validator, tmp], capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(f"ERROR: result frontmatter failed canonical validation: {FILE}\n{proc.stdout}{proc.stderr}")
+        sys.exit(3)
     os.replace(tmp, FILE)
 except BaseException:
     try:

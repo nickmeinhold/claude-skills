@@ -100,3 +100,7 @@ link() {
 # --- symlinks to install ----------------------------------------------------
 # Add new entries here; one `link` call per symlink.
 link "$HOME/.claude/persona-eval/eval-tally.sh" "$REPO_ROOT/scripts/eval-tally.sh"
+# The canonical memory-frontmatter schema. /consolidate's memory-writer runs in
+# arbitrary repos and reaches it by this stable path (the repo path is unknown
+# from another project's session); SKILL.md step 2a calls it as the post-write gate.
+link "$HOME/.claude/scripts/validate-memory-frontmatter.sh" "$REPO_ROOT/scripts/validate-memory-frontmatter.sh"
