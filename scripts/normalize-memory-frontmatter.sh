@@ -8,18 +8,31 @@
 #   name: <human-readable title>
 #   description: <one-line retrieval cue>
 #   metadata:
-#     type: feedback | concept | project | reference | user
+#     type: feedback | concept | project | reference   (canonical derivation set;
+#           an existing valid type already in the file is PRESERVED as-is — see DESIGN)
 #     scope: repo | universal | meta
 #   ---
 #
+# Runtime prerequisite: python3 with PyYAML (`import yaml`). Used for best-effort
+#   lenient extraction and for the apply-time validation gate. If PyYAML is absent,
+#   extraction degrades to a regex fallback and --apply exits 3 with a clear message.
+#
 # DESIGN — preserve-first, not generate-first (hardened 2026-06-17, issue #859):
 #   This tool used to (a) reject every prefix but feedback_/concept_, (b) hardcode
-#   scope:repo, and (c) LLM-regenerate name+description on every run. On an already-
-#   canonical file that meant: refusing most of the corpus, CLOBBERING scope:universal
-#   /meta down to repo (destroying the graduation classification — the most valuable
-#   bit), and lossily rewriting curated text. All three are fixed here:
-#     - TYPE comes from a prefix->type map covering the whole corpus, not a 2-entry
-#       allowlist.
+#   scope:repo, (c) DERIVE type from the prefix and override any existing type, and
+#   (d) LLM-regenerate name+description on every run. On an already-canonical file
+#   that meant: refusing most of the corpus, CLOBBERING scope:universal/meta down to
+#   repo (destroying the graduation classification — the most valuable bit), CLOBBERING
+#   curated types (user/session/etc.), and lossily rewriting curated text. All fixed:
+#     - PREFIX is accepted via a map covering the whole corpus, not a 2-entry allowlist.
+#     - TYPE is PRESERVE-FIRST: an existing non-empty metadata.type is kept verbatim
+#       (the corpus has 40+ user / 27 session / 10 technical / 5 architecture files —
+#       deriving from the prefix would clobber them, the identical bug class as scope).
+#       Type is DERIVED from the prefix ONLY when genuinely absent, and the derivation
+#       map emits ONLY the canonical allowlist {feedback,concept,project,reference}
+#       (SKILL.md step 1) — so the tool never INTRODUCES a non-canonical type, it only
+#       echoes back one a human already curated. (NOTE: SKILL.md's "total allowlist" of
+#       4 types is stale vs the live corpus's richer vocabulary — flagged for follow-up.)
 #     - SCOPE is READ from the existing frontmatter and only DEFAULTS to repo when
 #       genuinely absent. Existing universal/meta is never downgraded. (A bulk sweep
 #       still never PROMOTES — it can't invent universal/meta where none was written;
@@ -28,6 +41,8 @@
 #       The headless-Claude call fires ONLY when a field is genuinely missing/empty —
 #       i.e. on the drifted/unfenced files this tool exists to repair, not on healthy
 #       ones. Zero LLM calls on a clean corpus; the steady-state run is a fast no-op.
+#     - The body after the closing fence is preserved BYTE-FOR-BYTE (only the
+#       frontmatter block changes); an unfenced file gets one synthesized blank line.
 #
 # Usage:
 #   normalize-memory-frontmatter.sh <file>            # DRY RUN: print proposed frontmatter to stdout
@@ -55,15 +70,19 @@ FILE = sys.argv[1]
 APPLY = os.environ.get("APPLY", "0") == "1"
 base = os.path.basename(FILE)
 
-# --- prefix -> canonical type (covers the whole corpus, not a 2-entry allowlist) ---
+# --- prefix -> canonical type, used ONLY to DERIVE a type when the file has none ----
+# Every value is in the canonical allowlist {feedback, concept, project, reference}
+# (SKILL.md step 1), so derivation can never emit a non-canonical type. An existing
+# valid type IN the file is preserved instead of derived (preserve-first, see below).
 PREFIX_TYPE = {
-    "feedback": "feedback", "concept": "concept", "project": "project",
-    "reference": "reference", "user": "user", "session": "project",
-    "plan": "project", "technical": "reference", "bug": "reference",
+    "feedback": "feedback", "concept": "concept",
+    "project": "project", "session": "project", "plan": "project", "next": "project",
+    "reference": "reference", "user": "reference", "technical": "reference",
+    "bug": "reference", "org": "reference", "architecture": "reference",
 }
 prefix = base.split("_", 1)[0] if "_" in base else base.rsplit(".", 1)[0]
-TYPE = PREFIX_TYPE.get(prefix)
-if TYPE is None:
+DERIVED_TYPE = PREFIX_TYPE.get(prefix)
+if DERIVED_TYPE is None:
     sys.stderr.write(f"ERROR: unknown prefix {prefix!r} (want one of {sorted(PREFIX_TYPE)}): {base}\n")
     sys.exit(1)
 
@@ -84,10 +103,11 @@ def split_frontmatter(t):
 
 def extract_fields(fm):
     """Lenient: try YAML, then fall back to per-line regex for whatever it missed.
-    Malformed-but-parseable-by-eye files are the point — never trust safe_load alone."""
-    name = desc = scope = ""
+    Malformed-but-parseable-by-eye files are the point — never trust safe_load alone.
+    Returns (name, description, scope, type) — each '' when genuinely absent."""
+    name = desc = scope = ftype = ""
     if fm is None:
-        return name, desc, scope
+        return name, desc, scope, ftype
     try:
         import yaml
         data = yaml.safe_load(fm)
@@ -99,9 +119,12 @@ def extract_fields(fm):
         meta = data.get("metadata")
         if isinstance(meta, dict):
             scope = str(meta.get("scope") or "").strip()
+            ftype = str(meta.get("type") or "").strip()
         if not scope:
             scope = str(data.get("scope") or "").strip()  # tolerate a flat scope:
-    if not (name and desc and scope):
+        if not ftype:
+            ftype = str(data.get("type") or "").strip()   # tolerate a flat type:
+    if not (name and desc and scope and ftype):
         for line in fm.split("\n"):
             m = re.match(r"\s*name:\s*(.+)", line)
             if m and not name:
@@ -112,12 +135,21 @@ def extract_fields(fm):
             m = re.match(r"\s*scope:\s*(.+)", line)
             if m and not scope:
                 scope = m.group(1).strip().strip("\"'")
-    return name, desc, scope
+            m = re.match(r"\s*type:\s*(.+)", line)
+            if m and not ftype:
+                ftype = m.group(1).strip().strip("\"'")
+    return name, desc, scope, ftype
 
 
 fm, body = split_frontmatter(text)
-name, desc, scope = extract_fields(fm)
-body = body.lstrip("\n")  # normalize to exactly one blank line after the fence below
+had_frontmatter = fm is not None
+name, desc, scope, existing_type = extract_fields(fm)
+
+# type: PRESERVE-FIRST. An existing curated type (user/session/technical/... or any
+# of the canonical 4) is kept verbatim — deriving from the prefix would clobber the
+# 40+ corpus files that legitimately carry non-prefix-default types. Only DERIVE from
+# the prefix (canonical allowlist) when the file has no type at all.
+TYPE = existing_type if existing_type else DERIVED_TYPE
 
 # scope: READ then DEFAULT. Never downgrade an existing universal/meta; only fill a
 # genuine absence with repo. (A bad/typo'd scope also falls back to repo.)
@@ -153,8 +185,11 @@ if not name or not desc:
             ["claude", "-p", "--output-format", "text"],
             input=prompt, capture_output=True, text=True, timeout=120,
         ).stdout
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"WARN: headless `claude` fallback failed for {FILE}: {e}\n")
         raw = ""
+    if not raw.strip():
+        sys.stderr.write(f"WARN: headless `claude` returned no output for {FILE}\n")
     for line in raw.splitlines():
         m = re.match(r"NAME:\s*(.+)", line)
         if m and not name:
@@ -190,13 +225,22 @@ if not APPLY:
     print(new_fm)
     sys.exit(0)
 
-result = new_fm + "\n\n" + body
+# Reconstruct verbatim: when the file already had frontmatter, `body` holds everything
+# after the closing fence INCLUDING its original leading blank line, so a single "\n"
+# closes the fence line and the body is preserved byte-for-byte. An unfenced file had
+# no separator to preserve, so synthesize exactly one blank line.
+sep = "\n" if had_frontmatter else "\n\n"
+result = new_fm + sep + body
 if not result.endswith("\n"):
     result += "\n"
 
 # Validate the result parses as YAML before replacing the original (fail-loudly gate).
 try:
     import yaml
+except ImportError:
+    sys.stderr.write(f"ERROR: PyYAML required for --apply validation (pip install pyyaml): {FILE}\n")
+    sys.exit(3)
+try:
     assert result.startswith("---\n"), "no opening fence"
     parsed = yaml.safe_load(result.split("---\n", 2)[1])
     for k in ("name", "description"):
