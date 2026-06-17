@@ -104,3 +104,8 @@ link "$HOME/.claude/persona-eval/eval-tally.sh" "$REPO_ROOT/scripts/eval-tally.s
 # arbitrary repos and reaches it by this stable path (the repo path is unknown
 # from another project's session); SKILL.md step 2a calls it as the post-write gate.
 link "$HOME/.claude/scripts/validate-memory-frontmatter.sh" "$REPO_ROOT/scripts/validate-memory-frontmatter.sh"
+# The canonical /consolidate scorecard schema — sibling of the above. memory-writer
+# (and the Wrap-up gate) reach it by this stable path from any repo's session;
+# SKILL.md step 4 calls it after writing scorecard.json so a drifted scorecard
+# (which silently breaks the next-session readtime grader) fails loudly instead.
+link "$HOME/.claude/scripts/validate-scorecard.sh" "$REPO_ROOT/scripts/validate-scorecard.sh"
