@@ -398,7 +398,19 @@ Actions:
    - **WITHIN THIS REPO ONLY** — never touch another project's memory dir (it races with parallel sessions and mis-keys files); same guardrail as the within-repo merge pass. In steady state this is a fast no-op (the 2026-06-16 one-shot sweep left the corpus at zero drift); it only fires on newly-drifted or missed files. The standalone `scripts/normalize-memory-frontmatter.sh` in the claude-skills repo applies the identical transform for bulk/manual runs.
 1. **Error triage + scope classification**: scan the session for mistakes, corrections from Nick, and process misses. For each TRANSFORM-worthy lesson (the kind that should change future behavior), write or update a feedback_*.md memory file — **and classify its SCOPE in the frontmatter** (`metadata.scope`). This matters because a lesson's correct home depends on its *scope*, not on the cwd where it happened to be learned: the auto-memory `MEMORY.md` loads ONLY for the exact cwd slug (no parent-walk, no cascade), so a universal lesson written into one project's memory dir is invisible from every other project. Only `~/.claude/CLAUDE.md` cascades into every session everywhere.
 
-   **Frontmatter is canonical YAML, not bold-markdown lines.** Write metadata as a `---`-fenced YAML block — `name`, `description`, and `metadata:` (`type`, plus `scope`) — NOT as `**metadata.scope**: meta` body lines. Reason: the self-maintaining tooling (write-suppression, eviction, recurrence scans across the corpus) reads these fields with a YAML parser; bold-markdown metadata is the same silent schema-drift that rotted the scorecard (a typo'd `**scope**` just fails to match and the tool reads nothing, vs YAML failing loudly). And **do NOT invent fields** — no `origin_session` / `origin_cwd` or other provenance. Provenance lives in git history and the consolidation dir, never in the memory file; the lesson's body carries its own "what happened" texture without a metadata breadcrumb.
+   **Frontmatter is canonical YAML, not bold-markdown lines.** Every memory file opens with EXACTLY this `---`-fenced block and NOTHING else in it — copy this shape literally, do not add to it:
+
+   ```
+   ---
+   name: <kebab-case-slug>
+   description: <one-line retrieval cue — what situation should recall this>
+   metadata:
+     type: <feedback | concept | project | reference>
+     scope: <repo | universal | meta>
+   ---
+   ```
+
+   **The allowlist is total. Top-level keys: ONLY `name`, `description`, `metadata`. Under `metadata`: ONLY `type` and `scope`.** Any other key is forbidden — this explicitly includes `node_type`, `originSessionId`, `origin_session`, `origin_cwd`, and any other provenance/breadcrumb field. Do NOT invent fields, and do NOT copy stray fields from existing corpus files you are updating: **many older files still carry banned `node_type`/`originSessionId` provenance (a pre-canonical scheme) — if you open one to update it, STRIP those fields, never preserve or imitate them.** The corpus's existing shape is NOT the spec; this block is the spec. Reason the allowlist is strict: the self-maintaining tooling (write-suppression, eviction, recurrence scans) reads these fields with a YAML parser; bold-markdown metadata (`**scope**: meta` body lines) is silent schema-drift that rotted the scorecard (a typo'd key fails to match and the tool reads nothing, vs YAML failing loudly), and provenance fields are pure noise — provenance lives in git history and the consolidation dir, never in the memory file. The body carries its own "what happened" texture without a metadata breadcrumb.
 
    - **`scope: repo`** — about THIS repo's code, workflow, or tooling. Stays in this memory dir (the default). Loads when working here. *Most lessons are this — don't over-promote.*
    - **`scope: universal`** — behavior that should hold in EVERY session everywhere (e.g. "verify before claiming done", "never batch irreversible ops", "recommend a default over a menu"). Write the full `feedback_*.md` here as usual (preserves the long-form), AND append a graduation candidate to `$SD/claude-md-candidates.md` (step 1.5). **Do NOT edit `~/.claude/CLAUDE.md` directly** — it's always-on, budget-constrained, and Nick-curated; graduation is his call, surfaced in Wrap-up.
@@ -423,6 +435,37 @@ Actions:
    - **If sharded:** route by filename prefix. `feedback_*.md` → append index line to `MEMORY.feedback.md`. `concept_*.md` and `dreamscape_*.md` → append to `MEMORY.concepts.md`. Only `user_*`, `project_*`, `reference_*`, `org_*`, `agent_*` and `memory-health.json` go in root `MEMORY.md`. **Never append a `feedback_*` or `concept_*` line to root** — that re-bloats it and undoes the split.
    - **If not sharded (flat `MEMORY.md` only):** index everything in root as before. But if root crosses ~24KB after your writes, flag it in the scorecard (`memory_index_over_budget: true`) — that's the signal to shard next.
    - Index lines: **one line, under ~200 chars** including edges. Long edge-chains are bloat; the file holds the detail, the index just routes.
+
+2a. **Post-write frontmatter validation gate (HARD — do not skip).** Step 0's self-heal runs BEFORE your writes, so it cannot catch a banned field YOU just wrote — this gate closes that hole at the source. After all step-2 writes, validate EVERY file you created or updated this session (NOT the whole dir — legacy drift in files you didn't touch is step 0's job, not this gate's). Pass the exact list of paths you wrote/updated. The gate asserts the allowlist holds: top-level keys ⊆ {`name`, `description`, `metadata`}, and `metadata` keys ⊆ {`type`, `scope`}; a file whose frontmatter won't parse is itself a violation (that is the silent-drop failure mode, not an excuse to skip it):
+
+   ```bash
+   # WROTE = absolute paths of the memory files you wrote/updated in steps 1-2.
+   # MUST be a bash/zsh array (not a bare string): zsh does NOT word-split an
+   # unquoted "$WROTE", so a space-joined string arrives as one bogus path.
+   WROTE=( /abs/path/to/file_one.md /abs/path/to/file_two.md )   # ← fill with the files you actually wrote
+   python3 - "${WROTE[@]}" <<'PY'
+   import sys, re, os, yaml
+   bad = []
+   for f in sys.argv[1:]:
+       try:
+           m = re.match(r'^---\n(.*?)\n---', open(f).read(), re.S)
+           fm = yaml.safe_load(m.group(1)) if m else None
+           if not isinstance(fm, dict):
+               raise ValueError("no parseable ---fenced frontmatter")
+       except Exception as e:
+           bad.append((f, f"UNPARSEABLE: {e}")); continue
+       extra_top  = set(fm) - {"name", "description", "metadata"}
+       extra_meta = set(fm.get("metadata") or {}) - {"type", "scope"}
+       if extra_top or extra_meta:
+           bad.append((f, f"top+{sorted(extra_top)} meta+{sorted(extra_meta)}"))
+   for f, why in bad:
+       print(f"FORBIDDEN/INVALID {os.path.basename(f)}: {why}")
+   sys.exit(1 if bad else 0)
+   PY
+   ```
+
+   If it exits non-zero, **strip the offending keys (or fix the unparseable block) in each named file — re-edit its frontmatter to the canonical block — and re-run until it exits 0.** This is a gate, not a warning: finishing step 2 with any file failing it re-commits the exact PR #57 violation this gate exists to stop (the 2026-06-16 first-live-run leak of `node_type`/`originSessionId` into 9 files). Same fail-loudly discipline as `scripts/normalize-memory-frontmatter.sh`'s validation step.
+
 3. **memory-health.json**: update access counts and decay-class entries for any memory files touched this session.
 4. **Scorecard**: write $SD/scorecard.json with EXACTLY this schema — no alias keys, no extra top-level fields. (Schema drift is what killed this instrument's analyzability the first time: 200+ distinct keys had accumulated by the 2026-05-28 audit, and the analyzer ended up grading an empty field-intersection. Anything that doesn't fit goes in `notes`.) Before listing a file under `memories_written`/`memories_updated`, verify it exists on disk (`ls` the path) — a prior consolidation claimed memories it never wrote (phantom-write bug, 2026-04-29); the scorecard is a receipt, not a self-report.
 
