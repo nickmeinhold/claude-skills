@@ -79,6 +79,14 @@ jobs:
             echo "No validate-frontmatter bats tests."
           fi
 
+      - name: Run bats — validate-scorecard (canonical scorecard schema) contract
+        run: |
+          if compgen -G 'tests/validate-scorecard/*.bats' > /dev/null; then
+            bats tests/validate-scorecard/*.bats
+          else
+            echo "No validate-scorecard bats tests."
+          fi
+
       - name: Run bats — install-symlinks
         run: |
           if [ -d tests/install-symlinks ]; then
