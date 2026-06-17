@@ -107,7 +107,39 @@ EOF
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":"high"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"confidence must be a number"* ]]
+  [[ "$output" == *"confidence must be a finite number in [0,1]"* ]]
+}
+
+@test "an out-of-range confidence (>1) is caught" {
+  canonical "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":1.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  run bash "$SCRIPT" "$SANDBOX/s.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"confidence must be a finite number in [0,1]"* ]]
+}
+
+@test "an Infinity confidence (non-standard JSON) is rejected at parse" {
+  # json.load accepts Infinity by default — the validator must NOT. Caught either
+  # as invalid JSON (parse_constant) — confidence Infinity must never pass.
+  printf '%s' '{"schema_version":2,"session_date":"d","memory_dir":"/m","memories_written":[],"memories_updated":[],"index_edits":0,"errors_triaged":0,"memory_index_over_budget":false,"predictions":[{"text":"x","basis":"b","confidence":Infinity}],"notes":""}' > "$SANDBOX/s.json"
+  run bash "$SCRIPT" "$SANDBOX/s.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not valid JSON"* || "$output" == *"confidence must be a finite number"* ]]
+}
+
+@test "notes is OPTIONAL — a scorecard without notes still passes" {
+  canonical "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); del d["notes"]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  run bash "$SCRIPT" "$SANDBOX/s.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "a non-string notes (when present) is caught" {
+  canonical "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["notes"]=123; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  run bash "$SCRIPT" "$SANDBOX/s.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"notes must be string"* ]]
 }
 
 # --- scalar types ----------------------------------------------------------

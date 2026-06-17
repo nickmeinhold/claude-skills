@@ -26,8 +26,9 @@
 #     predictions             array of objects, each EXACTLY {text, basis, confidence}
 #                               text   = non-empty string (the grader reads this)
 #                               basis  = string
-#                               confidence = number
-#     notes                   string (may be empty)
+#                               confidence = finite number in [0, 1]
+#     notes                   string (may be empty) — OPTIONAL (step 4 calls it
+#                               "optional free text"; absent is fine, present must be a string)
 #
 # Usage:
 #   validate-scorecard.sh <scorecard.json> [<more.json> ...]
@@ -41,38 +42,49 @@ if [ "$#" -lt 1 ]; then
 fi
 
 python3 - "$@" <<'PY'
-import sys, os, json, numbers
+import sys, os, json, math, numbers
 
+# `notes` is OPTIONAL (step 4 documents it as "optional free text"); the other 9
+# are required. ALLOWED = the full set; REQUIRED = the set that must be present.
 TOP_REQUIRED = {
     "schema_version", "session_date", "memory_dir",
     "memories_written", "memories_updated", "index_edits",
-    "errors_triaged", "memory_index_over_budget", "predictions", "notes",
+    "errors_triaged", "memory_index_over_budget", "predictions",
 }
+TOP_ALLOWED  = TOP_REQUIRED | {"notes"}
 PRED_REQUIRED = {"text", "basis", "confidence"}
 
 def is_str(x):  return isinstance(x, str)
 def is_int(x):  return isinstance(x, int) and not isinstance(x, bool)
-def is_num(x):  return isinstance(x, numbers.Number) and not isinstance(x, bool)
+def is_unit_confidence(x):
+    # finite number in [0,1] — rejects bool, NaN, and ±Infinity (which strict
+    # JSON forbids but json.load accepts by default; we also reject them at parse).
+    return (isinstance(x, numbers.Number) and not isinstance(x, bool)
+            and math.isfinite(x) and 0.0 <= x <= 1.0)
 def is_strlist(x): return isinstance(x, list) and all(isinstance(i, str) for i in x)
+
+def _reject_nonfinite(s):
+    raise ValueError(f"non-standard JSON constant {s!r} (NaN/Infinity not allowed)")
 
 bad = []  # (path, reason)
 
 for f in sys.argv[1:]:
     try:
-        data = json.load(open(f, encoding="utf-8"))
+        data = json.load(open(f, encoding="utf-8"), parse_constant=_reject_nonfinite)
     except FileNotFoundError:
         bad.append((f, "file not found")); continue
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         bad.append((f, f"not valid JSON: {e}")); continue
     if not isinstance(data, dict):
         bad.append((f, "top level is not a JSON object")); continue
 
     reasons = []
 
-    # exact top-level key set — no missing, no extra/alias keys
+    # top-level key set — the 9 required must be present; only `notes` may also
+    # appear; anything else is a forbidden alias/extra.
     keys = set(data)
     missing = TOP_REQUIRED - keys
-    extra   = keys - TOP_REQUIRED
+    extra   = keys - TOP_ALLOWED
     if missing:
         reasons.append(f"missing top-level keys {sorted(missing)}")
     if extra:
@@ -114,8 +126,8 @@ for f in sys.argv[1:]:
                     reasons.append(f"predictions[{i}].text must be a non-empty string")
                 if "basis" in p and not is_str(p["basis"]):
                     reasons.append(f"predictions[{i}].basis must be a string")
-                if "confidence" in p and not is_num(p["confidence"]):
-                    reasons.append(f"predictions[{i}].confidence must be a number")
+                if "confidence" in p and not is_unit_confidence(p["confidence"]):
+                    reasons.append(f"predictions[{i}].confidence must be a finite number in [0,1]")
 
     if reasons:
         bad.append((f, "; ".join(reasons)))
