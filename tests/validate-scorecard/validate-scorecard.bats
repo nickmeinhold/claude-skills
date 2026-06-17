@@ -156,7 +156,15 @@ EOF
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["memories_written"]=[123]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"memories_written must be array of strings"* ]]
+  [[ "$output" == *"memories_written must be array of absolute-path strings"* ]]
+}
+
+@test "a relative path in memories_written is caught (absolute paths required)" {
+  canonical "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["memories_written"]=["relative.md"]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  run bash "$SCRIPT" "$SANDBOX/s.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"memories_written must be array of absolute-path strings"* ]]
 }
 
 # --- malformed input -------------------------------------------------------

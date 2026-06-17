@@ -62,6 +62,10 @@ def is_unit_confidence(x):
     return (isinstance(x, numbers.Number) and not isinstance(x, bool)
             and math.isfinite(x) and 0.0 <= x <= 1.0)
 def is_strlist(x): return isinstance(x, list) and all(isinstance(i, str) for i in x)
+def is_abs_strlist(x):
+    # memories_written/updated are documented as absolute paths; enforce it so a
+    # relative path (which the readtime grader may fail to resolve) can't drift in.
+    return isinstance(x, list) and all(isinstance(i, str) and i.startswith("/") for i in x)
 
 def _reject_nonfinite(s):
     raise ValueError(f"non-standard JSON constant {s!r} (NaN/Infinity not allowed)")
@@ -95,8 +99,8 @@ for f in sys.argv[1:]:
         ("schema_version", is_int, "int"),
         ("session_date",   is_str, "string"),
         ("memory_dir",     is_str, "string"),
-        ("memories_written", is_strlist, "array of strings"),
-        ("memories_updated", is_strlist, "array of strings"),
+        ("memories_written", is_abs_strlist, "array of absolute-path strings"),
+        ("memories_updated", is_abs_strlist, "array of absolute-path strings"),
         ("index_edits",    is_int, "int"),
         ("errors_triaged", is_int, "int"),
         ("memory_index_over_budget", lambda x: isinstance(x, bool), "bool"),
