@@ -17,8 +17,9 @@
 # Runtime prerequisite: python3 with PyYAML (`import yaml`) for best-effort lenient
 #   extraction. The apply-time validation gate is DELEGATED to the canonical schema
 #   validator (scripts/validate-memory-frontmatter.sh — single source of truth,
-#   issue #883), which must be present; --apply exits 3 if it is missing or rejects
-#   the rebuilt frontmatter.
+#   issue #883), which must be present. On --apply, a rebuild that the validator
+#   REJECTS exits 3 (schema-invalid); a validator that is missing or cannot run
+#   exits 4 (could-not-certify). See the exit-code table below.
 #
 # DESIGN — preserve-first, not generate-first (hardened 2026-06-17, issue #859):
 #   This tool used to (a) reject every prefix but feedback_/concept_, (b) hardcode
