@@ -55,6 +55,22 @@ jobs:
             echo "No shell scripts to check."
           fi
 
+      # normalize-memory-frontmatter.sh uses python3 + PyYAML for its --apply
+      # validation gate, which the contract tests exercise. ubuntu-latest usually
+      # ships PyYAML, but make it explicit so a runner-image change can't silently
+      # skip the validation path. Only install when it's genuinely missing.
+      - name: Ensure PyYAML (for normalize-frontmatter tests)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
+
+      - name: Run bats — normalize-frontmatter contract
+        run: |
+          if compgen -G 'tests/normalize-frontmatter/*.bats' > /dev/null; then
+            bats tests/normalize-frontmatter/*.bats
+          else
+            echo "No normalize-frontmatter bats tests."
+          fi
+
       - name: Run bats — install-symlinks
         run: |
           if [ -d tests/install-symlinks ]; then
