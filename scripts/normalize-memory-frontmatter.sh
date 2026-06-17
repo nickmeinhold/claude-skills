@@ -8,8 +8,9 @@
 #   name: <human-readable title>
 #   description: <one-line retrieval cue>
 #   metadata:
-#     type: feedback | concept | project | reference   (canonical derivation set;
-#           an existing valid type already in the file is PRESERVED as-is — see DESIGN)
+#     type: <the filename prefix — an OPEN descriptive tag, e.g. feedback | concept |
+#           project | reference | user | session | technical | …; an existing type in
+#           the file is PRESERVED as-is, an absent one is DERIVED as the prefix — see DESIGN)
 #     scope: repo | universal | meta
 #   ---
 #
@@ -27,12 +28,11 @@
 #     - PREFIX is accepted via a map covering the whole corpus, not a 2-entry allowlist.
 #     - TYPE is PRESERVE-FIRST: an existing non-empty metadata.type is kept verbatim
 #       (the corpus has 40+ user / 27 session / 10 technical / 5 architecture files —
-#       deriving from the prefix would clobber them, the identical bug class as scope).
-#       Type is DERIVED from the prefix ONLY when genuinely absent, and the derivation
-#       map emits ONLY the canonical allowlist {feedback,concept,project,reference}
-#       (SKILL.md step 1) — so the tool never INTRODUCES a non-canonical type, it only
-#       echoes back one a human already curated. (NOTE: SKILL.md's "total allowlist" of
-#       4 types is stale vs the live corpus's richer vocabulary — flagged for follow-up.)
+#       overriding from the prefix would clobber them, the identical bug class as scope).
+#       Type is an OPEN descriptive tag (no tool branches on its value — SKILL.md step 1),
+#       so an absent type is DERIVED as the prefix itself (user_ -> user, session_ ->
+#       session), faithfully — NOT coerced into a smaller "canonical" set. The known-
+#       prefix set is a typo / non-memory-file GATE only, not a type allowlist.
 #     - SCOPE is READ from the existing frontmatter and only DEFAULTS to repo when
 #       genuinely absent. Existing universal/meta is never downgraded. (A bulk sweep
 #       still never PROMOTES — it can't invent universal/meta where none was written;
@@ -70,21 +70,21 @@ FILE = sys.argv[1]
 APPLY = os.environ.get("APPLY", "0") == "1"
 base = os.path.basename(FILE)
 
-# --- prefix -> canonical type, used ONLY to DERIVE a type when the file has none ----
-# Every value is in the canonical allowlist {feedback, concept, project, reference}
-# (SKILL.md step 1), so derivation can never emit a non-canonical type. An existing
-# valid type IN the file is preserved instead of derived (preserve-first, see below).
-PREFIX_TYPE = {
-    "feedback": "feedback", "concept": "concept",
-    "project": "project", "session": "project", "plan": "project", "next": "project",
-    "reference": "reference", "user": "reference", "technical": "reference",
-    "bug": "reference", "org": "reference", "architecture": "reference",
+# --- known prefixes; metadata.type is the prefix itself (an OPEN descriptive tag) ----
+# type is NOT a closed enum — no tool branches on its value (SKILL.md step 1); it is a
+# prefix-derived descriptive tag. So type DERIVED = the prefix, faithfully (user_ -> user,
+# session_ -> session), NOT coerced into a smaller set. The known-prefix set is a typo /
+# non-memory-file GATE only (rejects `feedbck_`, README, etc.), not a type allowlist.
+# An existing non-empty type IN the file is preserved instead of derived (preserve-first).
+KNOWN_PREFIXES = {
+    "feedback", "concept", "project", "reference", "user",
+    "session", "plan", "next", "technical", "bug", "org", "architecture",
 }
 prefix = base.split("_", 1)[0] if "_" in base else base.rsplit(".", 1)[0]
-DERIVED_TYPE = PREFIX_TYPE.get(prefix)
-if DERIVED_TYPE is None:
-    sys.stderr.write(f"ERROR: unknown prefix {prefix!r} (want one of {sorted(PREFIX_TYPE)}): {base}\n")
+if prefix not in KNOWN_PREFIXES:
+    sys.stderr.write(f"ERROR: unknown prefix {prefix!r} (want one of {sorted(KNOWN_PREFIXES)}): {base}\n")
     sys.exit(1)
+DERIVED_TYPE = prefix  # type = prefix; an open descriptive tag, see SKILL.md step 1
 
 VALID_SCOPES = ("repo", "universal", "meta")
 text = open(FILE, encoding="utf-8").read()
