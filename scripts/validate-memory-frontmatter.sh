@@ -60,6 +60,17 @@ VALID_SCOPES = {"repo", "universal", "meta"}
 bad = []  # (path, reason)
 
 for f in sys.argv[1:]:
+    # The index is not a memory file: MEMORY.md is the human-readable corpus
+    # index and has no frontmatter by design, so it is out of scope for this
+    # schema. Skipping it (rather than flagging it) lets a whole-corpus sweep
+    # `validate-memory-frontmatter.sh <dir>/*.md` exit 0 cleanly, and matches
+    # the exact exclusion in memory_neighborhood.py (`if name == "MEMORY.md"`).
+    # This is a targeted skip of the ONE known non-memory file, NOT a broad
+    # name-prefix filter — a genuinely misnamed memory file must still be
+    # flagged, never silently skipped.
+    if os.path.basename(f) == "MEMORY.md":
+        continue
+
     try:
         text = open(f, encoding="utf-8").read()
     except OSError as e:
