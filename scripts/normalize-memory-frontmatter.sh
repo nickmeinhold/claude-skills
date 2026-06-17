@@ -53,7 +53,10 @@
 # Exit 0 on success; non-zero (and no write) on any failure, so a driver can skip.
 #   1 = bad args / no file / unknown prefix
 #   2 = a field is missing AND the LLM fallback could not fill it
-#   3 = the emitted frontmatter failed yaml.safe_load (atomic temp is discarded)
+#   3 = the rebuilt frontmatter is INVALID per the canonical schema (validator exit 1;
+#       atomic temp is discarded) — a genuine schema failure
+#   4 = the canonical validator could not RUN (missing, or exit 2: usage / no PyYAML);
+#       the rebuild could not be certified — a toolchain failure, NOT a schema verdict
 set -euo pipefail
 
 APPLY=0
@@ -253,12 +256,21 @@ try:
         f.write(result)
     validator = os.environ.get("VALIDATOR", "")
     if not validator or not os.path.exists(validator):
+        # Can't CERTIFY the rebuild — distinct from "the rebuild is invalid" (exit 4,
+        # not 3), so a caller can tell a broken toolchain from a real schema failure.
         sys.stderr.write(f"ERROR: canonical validator not found ({validator!r}); run install-symlinks.sh or check scripts/: {FILE}\n")
-        sys.exit(3)
+        sys.exit(4)
     proc = subprocess.run(["bash", validator, tmp], capture_output=True, text=True)
-    if proc.returncode != 0:
-        sys.stderr.write(f"ERROR: result frontmatter failed canonical validation: {FILE}\n{proc.stdout}{proc.stderr}")
+    if proc.returncode == 1:
+        # Validator exit 1 == the rebuilt frontmatter genuinely violates the schema.
+        sys.stderr.write(f"ERROR: rebuilt frontmatter is INVALID per canonical schema: {FILE}\n{proc.stdout}{proc.stderr}")
         sys.exit(3)
+    if proc.returncode != 0:
+        # Validator exit 2 (usage / missing PyYAML) or any other non-zero == the
+        # validator could not RUN. That is a toolchain failure, not a schema verdict;
+        # surface it as such instead of mislabelling it "invalid frontmatter".
+        sys.stderr.write(f"ERROR: canonical validator could not run (exit {proc.returncode}); cannot certify {FILE}\n{proc.stdout}{proc.stderr}")
+        sys.exit(4)
     os.replace(tmp, FILE)
 except BaseException:
     try:

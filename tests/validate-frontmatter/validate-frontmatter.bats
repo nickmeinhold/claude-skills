@@ -122,6 +122,22 @@ node_type: episode' "$SANDBOX/feedback_bad.md" && rm -f "$SANDBOX/feedback_bad.m
   [[ "$output" == *"no ---fenced frontmatter"* ]]
 }
 
+@test "a malformed closing fence (---garbage) is NOT accepted as a fence" {
+  # The closing fence must be exactly '---' on its own line. A body line like
+  # '---garbage' must not be mistaken for the closing fence and let a truncated
+  # prefix validate. (Carnot finding, PR #883 cage-match.)
+  printf '%s\n' '---' 'name: "A Title"' 'description: "cue"' 'metadata:' '  type: feedback' '  scope: repo' '---garbage' 'body' > "$SANDBOX/f.md"
+  run bash "$SCRIPT" "$SANDBOX/f.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no ---fenced frontmatter"* ]]
+}
+
+@test "a clean closing fence with trailing whitespace is still accepted" {
+  printf '%s\n' '---' 'name: "A Title"' 'description: "cue"' 'metadata:' '  type: feedback' '  scope: repo' '---  ' 'body' > "$SANDBOX/f.md"
+  run bash "$SCRIPT" "$SANDBOX/f.md"
+  [ "$status" -eq 0 ]
+}
+
 # --- multi-file semantics --------------------------------------------------
 @test "all-valid batch exits 0; one bad file in the batch exits 1 and names only it" {
   canonical "$SANDBOX/good1.md"

@@ -14,7 +14,8 @@
 # checked the scope enum but not the key allowlist). One executable definition
 # can't drift from itself — that is the whole point (issue #883).
 #
-# THE SCHEMA (exhaustive — this comment + the code below ARE the spec):
+# THE SCHEMA (the CODE below is authoritative; this comment only describes it —
+# if the two ever disagree, the code wins and the comment is the bug):
 #   A memory file MUST open with a `---`-fenced YAML block parsing to a mapping:
 #     ---
 #     name: <non-empty string>           # human-readable title / retrieval handle
@@ -64,8 +65,14 @@ for f in sys.argv[1:]:
     except OSError as e:
         bad.append((f, f"unreadable: {e}")); continue
 
-    # (F) must open with a ---fenced block that parses to a mapping.
-    m = re.match(r"^---\n(.*?)\n---", text, re.S)
+    # (F) must open with a ---fenced block that parses to a mapping. The closing
+    # fence must be a line that is exactly `---` (optional trailing space), then a
+    # newline or EOF — NOT `---garbage`. Anchoring it this way keeps the validator's
+    # parseability contract exactly as strict as the block the normalizer emits, so
+    # the round-trip is genuinely exact (a body line like `---x` can't masquerade as
+    # the closing fence). re.S lets `.` span the YAML's newlines; the non-greedy
+    # `(.*?)` still stops at the FIRST real closing fence.
+    m = re.match(r"^---\n(.*?)\n---[ \t]*(?:\n|\Z)", text, re.S)
     if not m:
         bad.append((f, "no ---fenced frontmatter block")); continue
     try:
