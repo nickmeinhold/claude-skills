@@ -410,7 +410,7 @@ Actions:
    ---
    ```
 
-   **The KEY allowlist is total. Top-level keys: ONLY `name`, `description`, `metadata`. Under `metadata`: ONLY `type` and `scope`.** Any other key is forbidden — this explicitly includes `node_type`, `originSessionId`, `origin_session`, `origin_cwd`, and any other provenance/breadcrumb field. Do NOT invent fields, and do NOT copy stray fields from existing corpus files you are updating: **many older files still carry banned `node_type`/`originSessionId` provenance (a pre-canonical scheme) — if you open one to update it, STRIP those fields, never preserve or imitate them.** The corpus's existing shape is NOT the spec; this block is the spec. Reason the KEY allowlist is strict: the self-maintaining tooling (write-suppression, eviction, recurrence scans) reads these fields with a YAML parser; bold-markdown metadata (`**scope**: meta` body lines) is silent schema-drift that rotted the scorecard (a typo'd key fails to match and the tool reads nothing, vs YAML failing loudly), and provenance fields are pure noise — provenance lives in git history and the consolidation dir, never in the memory file. The body carries its own "what happened" texture without a metadata breadcrumb.
+   **The canonical schema is `scripts/validate-memory-frontmatter.sh` — not this prose.** That one executable IS the authoritative definition (key allowlist + required fields + `scope` enum); the block above is its writer-facing copy, and step 2a runs the validator to enforce it. When the two ever seem to disagree, the script wins — fix the prose, never fork the rule. In words, the schema it enforces: **top-level keys ONLY `name`, `description`, `metadata`; under `metadata` ONLY `type` and `scope`.** Any other key is forbidden — this explicitly includes `node_type`, `originSessionId`, `origin_session`, `origin_cwd`, and any other provenance/breadcrumb field. Do NOT invent fields, and do NOT copy stray fields from existing corpus files you are updating: **many older files still carry banned `node_type`/`originSessionId` provenance (a pre-canonical scheme) — if you open one to update it, STRIP those fields, never preserve or imitate them.** The corpus's existing shape is NOT the spec; the validator is. Reason the KEY allowlist is strict: the self-maintaining tooling (write-suppression, eviction, recurrence scans) reads these fields with a YAML parser; bold-markdown metadata (`**scope**: meta` body lines) is silent schema-drift that rotted the scorecard (a typo'd key fails to match and the tool reads nothing, vs YAML failing loudly), and provenance fields are pure noise — provenance lives in git history and the consolidation dir, never in the memory file. The body carries its own "what happened" texture without a metadata breadcrumb.
 
    **`type` vs `scope` — only ONE value is a closed set.** The KEY allowlist above is total and enforced. The two VALUES are not symmetric: **`scope` is a closed, behaviour-driving allowlist** (`repo | universal | meta`) — write-suppression, graduation, and eviction branch on it, so an out-of-set scope is a real bug. **`type` is an OPEN, descriptive tag** derived from the filename prefix (`feedback_` → `feedback`, `user_` → `user`, `session_` → `session`, …). *No tool branches on its value* — it is documentation for humans and grep, not a validated enum. The four canonical values (`feedback`/`concept`/`project`/`reference`) are merely the most common; `user`, `session`, `technical`, `architecture`, `org`, `plan`, `bug` are all in live use and equally valid. Keep `type` non-empty and prefix-faithful — do NOT coerce it into a smaller set (that was a stale "allowlist is total" reading that fought the live corpus; the standalone normalizer derives `type = prefix`).
 
@@ -438,35 +438,19 @@ Actions:
    - **If not sharded (flat `MEMORY.md` only):** index everything in root as before. But if root crosses ~24KB after your writes, flag it in the scorecard (`memory_index_over_budget: true`) — that's the signal to shard next.
    - Index lines: **one line, under ~200 chars** including edges. Long edge-chains are bloat; the file holds the detail, the index just routes.
 
-2a. **Post-write frontmatter validation gate (HARD — do not skip).** Step 0's self-heal runs BEFORE your writes, so it cannot catch a banned field YOU just wrote — this gate closes that hole at the source. After all step-2 writes, validate EVERY file you created or updated this session (NOT the whole dir — legacy drift in files you didn't touch is step 0's job, not this gate's). Pass the exact list of paths you wrote/updated. The gate asserts the allowlist holds: top-level keys ⊆ {`name`, `description`, `metadata`}, and `metadata` keys ⊆ {`type`, `scope`}; a file whose frontmatter won't parse is itself a violation (that is the silent-drop failure mode, not an excuse to skip it):
+2a. **Post-write frontmatter validation gate (HARD — do not skip).** Step 0's self-heal runs BEFORE your writes, so it cannot catch a banned field YOU just wrote — this gate closes that hole at the source. After all step-2 writes, validate EVERY file you created or updated this session (NOT the whole dir — legacy drift in files you didn't touch is step 0's job, not this gate's). Pass the exact list of paths you wrote/updated to **the canonical schema validator** — `scripts/validate-memory-frontmatter.sh` (installed at the stable path `$HOME/.claude/scripts/validate-memory-frontmatter.sh` by `scripts/install-symlinks.sh`). That ONE script IS the schema definition — the allowlist, the required fields, and the scope enum live there and nowhere else, so this gate cannot drift from the normalizer's gate or from step 1's prose (issue #883). Do not re-state or re-implement the checks here; just call it:
 
    ```bash
    # WROTE = absolute paths of the memory files you wrote/updated in steps 1-2.
    # MUST be a bash/zsh array (not a bare string): zsh does NOT word-split an
    # unquoted "$WROTE", so a space-joined string arrives as one bogus path.
    WROTE=( /abs/path/to/file_one.md /abs/path/to/file_two.md )   # ← fill with the files you actually wrote
-   python3 - "${WROTE[@]}" <<'PY'
-   import sys, re, os, yaml
-   bad = []
-   for f in sys.argv[1:]:
-       try:
-           m = re.match(r'^---\n(.*?)\n---', open(f).read(), re.S)
-           fm = yaml.safe_load(m.group(1)) if m else None
-           if not isinstance(fm, dict):
-               raise ValueError("no parseable ---fenced frontmatter")
-       except Exception as e:
-           bad.append((f, f"UNPARSEABLE: {e}")); continue
-       extra_top  = set(fm) - {"name", "description", "metadata"}
-       extra_meta = set(fm.get("metadata") or {}) - {"type", "scope"}
-       if extra_top or extra_meta:
-           bad.append((f, f"top+{sorted(extra_top)} meta+{sorted(extra_meta)}"))
-   for f, why in bad:
-       print(f"FORBIDDEN/INVALID {os.path.basename(f)}: {why}")
-   sys.exit(1 if bad else 0)
-   PY
+   bash "$HOME/.claude/scripts/validate-memory-frontmatter.sh" "${WROTE[@]}"
+   # (If the symlink is missing — fresh clone — run `bash scripts/install-symlinks.sh`
+   #  in the claude-skills repo first, or call the repo copy directly.)
    ```
 
-   If it exits non-zero, **strip the offending keys (or fix the unparseable block) in each named file — re-edit its frontmatter to the canonical block — and re-run until it exits 0.** This is a gate, not a warning: finishing step 2 with any file failing it re-commits the exact PR #57 violation this gate exists to stop (the 2026-06-16 first-live-run leak of `node_type`/`originSessionId` into 9 files). Same fail-loudly discipline as `scripts/normalize-memory-frontmatter.sh`'s validation step.
+   It prints one `INVALID <file>: <why>` line per offender and exits non-zero. If it does, **strip the offending keys (or fix the unparseable / missing field) in each named file — re-edit its frontmatter to the canonical block in step 1 — and re-run until it exits 0.** This is a gate, not a warning: finishing step 2 with any file failing it re-commits the exact PR #57 violation this gate exists to stop (the 2026-06-16 first-live-run leak of `node_type`/`originSessionId` into 9 files). The validator enforces the FULL schema (key allowlist + required `name`/`description`/`metadata.type` + `scope` enum + parseability) — strictly more than this gate's earlier inline check, which caught extra keys but not a bad/missing scope.
 
 3. **memory-health.json**: update access counts and decay-class entries for any memory files touched this session.
 4. **Scorecard**: write $SD/scorecard.json with EXACTLY this schema — no alias keys, no extra top-level fields. (Schema drift is what killed this instrument's analyzability the first time: 200+ distinct keys had accumulated by the 2026-05-28 audit, and the analyzer ended up grading an empty field-intersection. Anything that doesn't fit goes in `notes`.) Before listing a file under `memories_written`/`memories_updated`, verify it exists on disk (`ls` the path) — a prior consolidation claimed memories it never wrote (phantom-write bug, 2026-04-29); the scorecard is a receipt, not a self-report.
