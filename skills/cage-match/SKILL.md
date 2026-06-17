@@ -407,24 +407,34 @@ Based on all available reviews and critiques, synthesize a final assessment:
 
 ## Round 8: Post Reviews to GitHub (parallel)
 
-Generate App tokens in parallel — independent calls to the same helper script. Carnot does NOT yet have a dedicated GitHub App (see follow-up task to create CarnotCodeCarver App), so Carnot's review posts as a regular PR comment from the orchestrator's `gh` user, with the body labelled `## CarnotCodeCarver's Review` so the artifact is identifiable.
+Generate App tokens in parallel — independent calls to the same helper script. Carnot now has its own GitHub App (CarnotCodeCarver), so when `CARNOT_APP_ID` is configured its review posts as a **formal PR review** carrying its verdict (so an adversarial APPROVE actually satisfies branch protection). If the Carnot App env is absent (older setup), it falls back to a plain `gh pr comment` labelled `## CarnotCodeCarver's Review`.
 
 ```bash
-# Generate short-lived installation tokens for Maxwell + Kelvin Apps in parallel.
+# Generate short-lived installation tokens for Maxwell + Kelvin (+ Carnot) Apps in parallel.
 ~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   ~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" > /tmp/kelvin-token-$1 &
 fi
+# Carnot App token only if the App is configured AND Carnot produced a review.
+CARNOT_APP_CONFIGURED=0
+if [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNOT_PRIVATE_KEY_B64:-}" ]; then
+  CARNOT_APP_CONFIGURED=1
+  ~/.claude-skills/github-app-token.sh "$CARNOT_APP_ID" "$CARNOT_PRIVATE_KEY_B64" "$REPO" > /tmp/carnot-token-$1 &
+fi
 wait
 MAXWELL_TOKEN=$(cat /tmp/maxwell-token-$1)
 [ "$KELVIN_AVAILABLE" -eq 1 ] && KELVIN_TOKEN=$(cat /tmp/kelvin-token-$1)
-rm -f /tmp/maxwell-token-$1 /tmp/kelvin-token-$1
+[ "$CARNOT_APP_CONFIGURED" -eq 1 ] && CARNOT_TOKEN=$(cat /tmp/carnot-token-$1)
+rm -f /tmp/maxwell-token-$1 /tmp/kelvin-token-$1 /tmp/carnot-token-$1
 ```
 
-Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin per its verdict (App token). Carnot as a plain `gh pr comment` from the orchestrator's user account (no App token):
+Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin and Carnot each as a **formal review** carrying their verdict (App token), so an adversarial APPROVE counts toward the merge gate. Carnot falls back to a plain comment only if its App is not configured:
 
 ```bash
 KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHANGES, or COMMENT
+# Carnot's verdict is the source of truth in its structured JSON.
+CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
+case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -437,9 +447,15 @@ if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
 fi
 
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
-  # No App token yet — post as a PR comment from the orchestrator's gh user.
-  # Body is labelled with "## CarnotCodeCarver's Review" so the artifact is identifiable.
-  gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
+  if [ "$CARNOT_APP_CONFIGURED" -eq 1 ]; then
+    # Formal review as CarnotCodeCarver[bot], verdict carried — an APPROVE counts.
+    GH_TOKEN=$CARNOT_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
+      -f body="$(cat /tmp/carnot-review-$1.md)" \
+      -f event="$CARNOT_VERDICT" &
+  else
+    # Fallback (App not configured): plain comment from the orchestrator's gh user.
+    gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
+  fi
 fi
 
 wait
