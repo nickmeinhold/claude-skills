@@ -31,8 +31,11 @@ import { argv, env } from 'node:process';
 const PORT = Number(argFlag('--port') ?? env.LIVE_GAME_PORT ?? 7373);
 // A weak shared secret so randoms on the network can't drive the game. Printed
 // at startup; the host view reads it from the URL fragment.
-const HOST_TOKEN = env.LIVE_GAME_HOST_TOKEN ?? crypto.randomBytes(4).toString('hex');
+const HOST_TOKEN = env.LIVE_GAME_HOST_TOKEN ?? crypto.randomBytes(16).toString('hex');
 const DEFAULT_TIME_LIMIT = 20; // seconds; speed bonus decays over this window
+const MIN_TIME_LIMIT = 5;
+const MAX_TIME_LIMIT = 300;
+const MAX_PLAYERS = 500; // cap in-memory growth from a join loop
 
 // The address phones should hit. A host screen is usually opened on localhost,
 // but the QR/join URL must be a LAN-reachable address — so the SERVER resolves
@@ -83,7 +86,9 @@ function tallies() {
 function leaderboard() {
   return [...players.values()]
     .map((p) => ({ name: p.name, score: p.score, lastGain: p.lastGain ?? 0 }))
-    .sort((a, b) => b.score - a.score)
+    // Deterministic tie-break (score desc, then name asc) so equal scores
+    // don't jitter between broadcasts.
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     .slice(0, 10);
 }
 
@@ -133,6 +138,11 @@ function readBody(req) {
       try { resolve(buf ? JSON.parse(buf) : {}); }
       catch { resolve({}); }
     });
+    // Settle the promise on abnormal termination too, so a destroyed/aborted
+    // request never leaves the handler awaiting forever. resolve() is
+    // idempotent — whichever fires first wins.
+    req.on('error', () => resolve({}));
+    req.on('close', () => resolve({}));
   });
 }
 
@@ -188,6 +198,8 @@ const server = http.createServer(async (req, res) => {
     const name = String(body.name || '').trim().slice(0, 24) || 'anon';
     if (!id) return json(res, 400, { error: 'clientId required' });
     const existing = players.get(id);
+    if (!existing && players.size >= MAX_PLAYERS)
+      return json(res, 503, { error: 'game full' });
     players.set(id, existing
       ? { ...existing, name }
       : { name, score: 0, answer: null, answeredAt: 0, lastGain: 0 });
@@ -218,11 +230,20 @@ const server = http.createServer(async (req, res) => {
     const options = Array.isArray(body.options) ? body.options.map(String).slice(0, 6) : [];
     if (!body.question || options.length < 2)
       return json(res, 400, { error: 'need question + >=2 options' });
+    // Range-check correct against the options actually given — an out-of-range
+    // index would make the question unwinnable (no one can match it at reveal).
+    const correct = Number.isInteger(body.correct) ? body.correct : -1;
+    if (correct < 0 || correct >= options.length)
+      return json(res, 400, { error: `correct must be 0..${options.length - 1}` });
     game.phase = 'question';
     game.question = String(body.question);
     game.options = options;
-    game.correct = Number.isInteger(body.correct) ? body.correct : -1;
-    game.timeLimit = Number(body.timeLimit) > 0 ? Number(body.timeLimit) : DEFAULT_TIME_LIMIT;
+    game.correct = correct;
+    // Clamp timeLimit to a sane window so an extreme value can't distort scoring.
+    const t = Number(body.timeLimit);
+    game.timeLimit = Number.isFinite(t) && t > 0
+      ? Math.min(Math.max(t, MIN_TIME_LIMIT), MAX_TIME_LIMIT)
+      : DEFAULT_TIME_LIMIT;
     game.startedAt = Date.now();
     game.round++;
     for (const p of players.values()) { p.answer = null; p.answeredAt = 0; p.lastGain = 0; }
@@ -309,7 +330,6 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
  <div class=lb id=lb></div>
  <small>Game Master drives questions via <code>POST /host/ask</code>. Host token in this page's URL.</small>
 </div><script>
-const token = location.hash.slice(1);
 const stage = document.getElementById('stage');
 let qrSet = false;
 function setJoin(joinUrl){
@@ -345,7 +365,7 @@ function render(s){
     '<div><span>'+esc(p.name)+'</span><span>'+p.score+(p.lastGain?' <span class=g>(+'+p.lastGain+')</span>':'')+'</span></div>').join(''); }
   else lb.innerHTML='';
 }
-function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data));
 </script></body></html>`;
 
@@ -369,7 +389,7 @@ if(!clientId){ clientId = Math.random().toString(36).slice(2); localStorage.setI
 let name = localStorage.getItem('lg-name') || '';
 let myAnswer = null, myScore = 0, lastRound = -1;
 const app=document.getElementById('app');
-function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function post(p,b){return fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)})}
 
 function joinView(){

@@ -94,16 +94,38 @@ the exposure before opening it (per the security doctrine in `~/.claude/CLAUDE.m
   off the projected screen (it lives in the URL `#fragment`, which is not sent to the
   server and not shown in the QR).
 - **Audience input is the injection surface, and it's contained:** player names and
-  options are HTML-escaped on render (no stored XSS), votes are integer-validated and
-  range-checked, request bodies are capped at 1 MB, and a vote *locks* (no flooding a
-  re-vote). State is **in-memory only** — no persistence, no DB, nothing to corrupt.
+  options are HTML-escaped on render *including quotes* (`& < > " '`), so a name cannot
+  break out of an HTML attribute — no stored XSS. Votes are integer-validated and
+  range-checked, `correct`/`timeLimit` are range-checked/clamped server-side, request
+  bodies are capped at 1 MB, the player table is capped at `MAX_PLAYERS` (500), and a
+  vote *locks* (no flooding a re-vote). State is **in-memory only** — no persistence, no
+  DB, nothing to corrupt.
 - **No external quota is wired to audience actions.** The Game Master (Claude) generates
   questions out-of-band; an audience vote never triggers an LLM/API call. So there is no
   cost-amplification path from the public surface.
-- **Residual (named, not silent):** there's no per-IP rate limit on `join`/`vote`, so a
-  malicious actor on the tunnel could inflate the player count or spam votes within the
-  lock rules. Acceptable for a trusted-room demo; before an untrusted public game, add a
-  per-IP join cap. Tracked as a follow-up, not shipped in the prototype.
+
+### Named residuals (real, but prototype-acceptable in a *trusted* room)
+
+These are known compromises, stated explicitly rather than absorbed silently. Each is
+fine for a trusted-room demo; address before an untrusted public game.
+
+- **Identity is client-asserted, not server-issued.** A player's `clientId` is supplied
+  by the client, so on the tunnel a malicious peer who observes/guesses another's id
+  could overwrite their name or cast a vote as them. Trusted-room-acceptable; the real
+  fix is a server-issued opaque id + per-client secret required on `vote`.
+- **No per-IP rate limit** on `join`/`vote`. The `MAX_PLAYERS` cap bounds memory, but a
+  loop can still churn joins/votes within the cap. Add a per-IP limiter for public use.
+- **SSE fan-out has no backpressure / flow control.** `broadcast()` writes to every
+  client on each `join`/`vote` and never drops a slow consumer, so a deliberately-slow
+  client can accumulate buffered state. Fine at room scale; cap/drop slow clients for
+  large or hostile audiences.
+- **The host QR uses an external image service** (`api.qrserver.com`). "Zero-dependency"
+  means zero *npm* deps and offline *gameplay*; the QR convenience makes a runtime call
+  to a third party and leaks the (private-IP) join URL to it. Show the printed join URL
+  instead for a fully-offline/private setup, or self-host a QR encoder.
+- **The phone reveal view finds "you" by name within the top-10 leaderboard.** Duplicate
+  names or players outside the top 10 may see a wrong/missing self-score+gain (the
+  correct/incorrect verdict is always right — it's computed from the player's own vote).
 
 ## Pairing with a Google Slide (optional)
 

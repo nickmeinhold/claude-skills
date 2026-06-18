@@ -98,3 +98,20 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
   run post /vote '{"clientId":"a","option":0}'
   [ "$(field "$output" 's.error')" = "no live question" ]
 }
+
+@test "host/ask rejects an out-of-range correct index" {
+  run post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":5}'
+  [[ "$(field "$output" 's.error')" == correct\ must\ be* ]]
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.phase')" = "lobby" ]   # rejected → state untouched
+}
+
+@test "host/ask clamps an extreme timeLimit into range" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":0,"timeLimit":99999}' >/dev/null
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.timeLimit')" = "300" ]   # clamped to MAX_TIME_LIMIT
+}
+
+# NOTE: the name/option HTML-attribute escaping (esc() incl. quotes) runs
+# CLIENT-SIDE in the browser, so it can't be exercised by a server-side curl
+# here — it would need a headless-browser test, out of scope for this suite.
