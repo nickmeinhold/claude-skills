@@ -364,7 +364,7 @@ This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<se
 
 ### Spawn order
 
-1. **Burst 1 (parallel, single message)**: memory-writer (Sonnet) + knowledge-mapper (Sonnet). Two agent calls in one message. Neither reads a file the other writes (they share only the frozen orchestrator-owned read inputs), so neither gates the other. Wait for BOTH to complete before Burst 2.
+1. **Stamp the agent-phase start, then dispatch Burst 1 (parallel, single message)**: FIRST record the wall-clock start for the immune-response baseline — `date +%s > "$SD/.agent-phase-start"` (task #4; Wrap-up closes the timer and appends a `timing.jsonl` datapoint). THEN, in the same message, dispatch memory-writer (Sonnet) + knowledge-mapper (Sonnet). Two agent calls in one message. Neither reads a file the other writes (they share only the frozen orchestrator-owned read inputs), so neither gates the other. Wait for BOTH to complete before Burst 2.
 2. **Burst 2 (single agent)**: next-session-prompter (Opus). Reads `consolidation.md` (from knowledge-mapper) + `open-tasks.md` (from memory-writer) + everything else, writes `next-session-prompt.md`. This is the only genuinely gated burst.
 
 This is 2 phases of agent execution. The 2026-05-01 measurement (~2 min) reflects the v5 two-burst shape, which v7 restores; the expected gain over v6 is reclaiming the wall-clock of whichever Burst-1 Sonnet agent is shorter (the two now overlap instead of running in series), plus the token cost of two eliminated Haiku spawns and their validation passes.
@@ -642,6 +642,21 @@ Show Nick a **one-line** status per top-level agent (one line per agent). Read `
 ## Wrap-up
 
 After Phase 1 completes:
+- **Close the agent-phase timer + run the immune-response health check (task #4 — the system's self-audit).** This is the proactive counterpart to the manual audits below: instead of waiting for Nick to *notice* drift (the scorecard ran ~68% unresolvable for 132 cycles before anyone looked — `concept_system_reactive_no_immune_response`), the system self-reports a threshold breach. Silent unless something is actually wrong.
+  ```bash
+  # Close the agent-phase timer (started just before Burst 1) → one timing.jsonl datapoint.
+  if [ -f "$SD/.agent-phase-start" ]; then
+    START=$(cat "$SD/.agent-phase-start"); NOW=$(date +%s)
+    mkdir -p "$HOME/.claude/consolidation"
+    printf '{"ts":"%s","wall_s":%s,"session":"%s"}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((NOW-START))" "$(basename "$SD")" \
+      >> "$HOME/.claude/consolidation/timing.jsonl"
+  fi
+  # Immune response: SILENT when healthy (exit 0, no output); prints a breach block
+  # and exits 10 (informational, NOT an error — hence `|| true`) when a threshold trips.
+  bash "$HOME/.claude/scripts/consolidate-health-check.sh" || true
+  ```
+  The script checks three things over state that already exists: **scorecard-health** (unresolvable% + malformed-verdict% over the last 10 readtime files), **eviction-budget** (directive-layer bytes vs ~24KB — the SAME formula as Trigger A below, so this is the *automatic* preview of the eviction audit Nick used to have to invoke by hand), and **wall-clock drift** (active once ≥3 timing datapoints accrue). **When its output is non-empty, surface it to Nick verbatim** — each breach is Nick-gated (it reports the number; he decides whether to act). A green run prints nothing; do not announce "all healthy" unless he asks.
 - **Merge session wins to global log.** If `$SD/wins.md` exists and is non-empty, append it to `~/.claude/wins.md` under an exclusive mkdir-trap lock to prevent interleave from parallel `/consolidate` orchestrators:
   ```bash
   # Wrap-up step: append session-local wins to global wins file under exclusive lock.

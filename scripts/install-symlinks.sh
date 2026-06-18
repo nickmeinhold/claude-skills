@@ -109,3 +109,8 @@ link "$HOME/.claude/scripts/validate-memory-frontmatter.sh" "$REPO_ROOT/scripts/
 # SKILL.md step 4 calls it after writing scorecard.json so a drifted scorecard
 # (which silently breaks the next-session readtime grader) fails loudly instead.
 link "$HOME/.claude/scripts/validate-scorecard.sh" "$REPO_ROOT/scripts/validate-scorecard.sh"
+# The /consolidate immune response (task #4) — proactive health check the Wrap-up
+# step runs to self-report a threshold breach (scorecard noise, directive-layer
+# over budget, agent-phase wall-clock drift) instead of waiting for Nick to notice.
+# Reached by this stable path from any repo's session.
+link "$HOME/.claude/scripts/consolidate-health-check.sh" "$REPO_ROOT/scripts/consolidate-health-check.sh"
