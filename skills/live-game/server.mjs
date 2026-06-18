@@ -24,6 +24,7 @@
 
 import http from 'node:http';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { argv, env } from 'node:process';
 
 // ---- config ----------------------------------------------------------------
@@ -32,6 +33,21 @@ const PORT = Number(argFlag('--port') ?? env.LIVE_GAME_PORT ?? 7373);
 // at startup; the host view reads it from the URL fragment.
 const HOST_TOKEN = env.LIVE_GAME_HOST_TOKEN ?? crypto.randomBytes(4).toString('hex');
 const DEFAULT_TIME_LIMIT = 20; // seconds; speed bonus decays over this window
+
+// The address phones should hit. A host screen is usually opened on localhost,
+// but the QR/join URL must be a LAN-reachable address — so the SERVER resolves
+// its own LAN IP rather than letting the browser guess from location.origin
+// (which would be localhost). Override with LIVE_GAME_JOIN_HOST when tunnelling
+// (e.g. a Tailscale/ngrok hostname).
+function lanIp() {
+  const ifaces = Object.values(os.networkInterfaces()).flat();
+  const v4 = ifaces.filter((i) => i && i.family === 'IPv4' && !i.internal);
+  // Prefer private LAN ranges (192.168/10/172.16-31) over anything else.
+  const priv = v4.find((i) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address));
+  return (priv ?? v4[0])?.address ?? 'localhost';
+}
+const JOIN_HOST = env.LIVE_GAME_JOIN_HOST ?? `${lanIp()}:${PORT}`;
+const JOIN_URL = `http://${JOIN_HOST}/play`;
 
 // ---- game state ------------------------------------------------------------
 /** @type {{phase:'lobby'|'question'|'reveal', question:string, options:string[],
@@ -78,6 +94,7 @@ function publicState() {
   return {
     phase: game.phase,
     round: game.round,
+    joinUrl: JOIN_URL,
     question: game.question,
     options: game.options,
     timeLimit: game.timeLimit,
@@ -293,12 +310,18 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
  <small>Game Master drives questions via <code>POST /host/ask</code>. Host token in this page's URL.</small>
 </div><script>
 const token = location.hash.slice(1);
-const playUrl = location.origin + '/play';
-document.getElementById('joinurl').textContent = playUrl.replace(/^https?:\\/\\//,'');
-document.getElementById('qr').src =
-  'https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=' + encodeURIComponent(playUrl);
 const stage = document.getElementById('stage');
+let qrSet = false;
+function setJoin(joinUrl){
+  // The server resolves a LAN-reachable join URL; do NOT use location.origin
+  // (the host screen is usually on localhost, which a phone can't reach).
+  if(qrSet || !joinUrl) return; qrSet = true;
+  document.getElementById('joinurl').textContent = joinUrl.replace(/^https?:\\/\\//,'');
+  document.getElementById('qr').src =
+    'https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=' + encodeURIComponent(joinUrl);
+}
 function render(s){
+  setJoin(s.joinUrl);
   document.getElementById('pc').textContent = s.playerCount;
   document.getElementById('rd').textContent = s.round;
   if(s.phase==='lobby'){ stage.innerHTML='<div class=q>Waiting for the next question…</div>'; }
@@ -395,7 +418,7 @@ server.listen(PORT, () => {
   const host = `http://localhost:${PORT}`;
   console.log(`\n🎮 live-game running`);
   console.log(`   Host screen : ${host}/#${HOST_TOKEN}`);
-  console.log(`   Phones join : ${host}/play`);
+  console.log(`   Phones join : ${JOIN_URL}   ← LAN-reachable (QR encodes this)`);
   console.log(`   Host token  : ${HOST_TOKEN}  (POST /host/ask?token=${HOST_TOKEN})`);
   console.log(`   Snapshot    : ${host}/state\n`);
 });
