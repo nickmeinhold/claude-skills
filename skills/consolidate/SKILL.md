@@ -110,6 +110,7 @@ Agent({
   description: "Extract affective markers from session JSONL",
   subagent_type: "general-purpose",
   model: "haiku",
+  mode: "bypassPermissions",
   prompt: `
 Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
   jq -r 'select(.type=="user")
@@ -298,8 +299,12 @@ Then read $SD/session-summary.md — this is a summary of a session that just ha
 ... (rest of brief, with \$SD already substituted by the time Agent() is called)
 EOF
 )"
-Agent({ description: "...", subagent_type: "general-purpose", model: "sonnet", prompt: $MEMORY_WRITER_BRIEF })
+Agent({ description: "...", subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", prompt: $MEMORY_WRITER_BRIEF })
 ```
+
+**`mode: "bypassPermissions"` on EVERY spawn is load-bearing — do not strip it.** A spawned subagent does NOT inherit the orchestrator's permission mode; a child defaults to *prompting* mode — and consolidation's agents all write outside their own project workspace (to `~/.claude/projects/*/memory/`, `~/.claude/consolidation/$SD/`) and run validators / `gh` / `gemini` / `codex`, every one of which then surfaces a permission prompt to the user mid-consolidation. Passing `mode: "bypassPermissions"` on each `Agent()` call stops those prompts so consolidation runs unattended.
+
+**This is an INTENTIONAL PRIVILEGE GRANT, not posture inheritance — name the tradeoff honestly.** Because the value is hardcoded, the child runs in bypass mode *even if `/consolidate` was launched from a prompting/default session* — the skill cannot read the parent's mode from static markdown, so it grants rather than inherits. That is a deliberate, safe choice **only under consolidation's trust assumptions**: the agents ingest a Nick-authored `session-summary.md` (no untrusted/attacker-controlled input), write exclusively to Nick's own `~/.claude/{projects/*/memory,consolidation}` dirs, and invoke a fixed, known tool set (validators, `gh`, `gemini`, `codex`). The named tradeoff: if `/consolidate` is ever adapted to ingest untrusted input (a foreign repo, a web-fetched summary, an attacker-supplied path), this blanket bypass becomes a footgun and must be narrowed to `acceptEdits` + per-tool allow, or gated on a trusted-session precondition. (Diagnosed 2026-06-18, PR #77: the user was prompted repeatedly during `/consolidate` despite a `bypassPermissions` main session — spawns carried no `mode`, so each child fell back to prompting. The bash-driven Phase 0b retro / cage-match never had this problem because those run in the main loop, not as subagents.)
 
 The `{{SESSION_DIR}}` placeholders in the brief specifications below are **documentation conventions**. The orchestrator's job is to produce briefs in which they no longer appear — replaced by the absolute `$SD` path at heredoc-expansion time. By the time `Agent({prompt: ...})` is called, no `{{SESSION_DIR}}` token remains in the string. Cold readers: `$SD` is the heredoc variable; `{{SESSION_DIR}}` is how the spec writes it before substitution. They refer to the same path — the difference is pre- vs post-expansion.
 
@@ -377,6 +382,7 @@ Agent({
   description: "memory-writer — file-and-index side of consolidation",
   subagent_type: "general-purpose",
   model: "sonnet",
+  mode: "bypassPermissions",
   prompt: `
 ABSOLUTE PATHS ONLY. All paths below use $SD — the orchestrator has already substituted the literal absolute session-dir path at heredoc-expansion time. Use these paths directly; no substitution needed.
 
@@ -478,13 +484,13 @@ Actions:
      "errors_triaged": 0,
      "memory_index_over_budget": false,
      "predictions": [
-       {"text": "<falsifiable claim about the next session>", "basis": "<evidence>", "confidence": 0.8}
+       {"text": "<falsifiable claim verifiable from repo/file/issue state AT GRADING TIME>", "basis": "<evidence>"}
      ],
      "notes": "<optional free text — overflow goes here, never as a new top-level key>"
    }
    ```
 
-   Predictions: 3-5, graded at next-session-start by the readtime hook. Prefer claims checkable from repo/file/issue state over claims about what Nick will choose to do — in the first run of this experiment, 75% of predictions came back unresolvable because they needed days to resolve and grading happened within hours. Include at least one negative prediction ("X will NOT happen") — those are the honest bets.
+   **Predictions: AT MOST 2 (the validator enforces ≤2 and rejects a `confidence` key — both removed 2026-06-18).** Each MUST be checkable from repo/file/issue state *by the session that grades it* (next session start) — a `git log`, an `ls`, a `gh issue` query, a file's existence/content. Do NOT write predictions that need days to resolve or that turn on what Nick chooses to do: the 2026-06-18 results audit found **68% of all historical predictions came back unresolvable** (the grader couldn't verify them in time), and the resolvable third self-selected for easy checks — so the array was mostly noise and a recurring schema-drift surface (graders kept inventing free-text verdicts like "pending"/"untested"). The fix is fewer, sharper, same-session-verifiable bets. Make at least one a **negative** prediction ("X will NOT exist / will NOT have changed") — those are the honest bets. The `confidence` field is gone: it was theater on a 2-item list. (The two usefulness scores the readtime loop actually earns its keep on — `memory_usefulness` and `cold_start_quality`, graded in `readtime-score.json` — are unchanged; only the predictions sub-experiment was narrowed.)
 
    **4a. Post-write scorecard validation gate (HARD — do not skip).** Do NOT trust yourself to have reproduced the schema from the prose above — that is exactly what drifted on the 2026-06-17 run (predictions written as `{id, claim, verifiable_by}`, top-level `{project, session_label, scores, …}`), silently breaking the next-session readtime grader. After writing `$SD/scorecard.json`, validate it against **the canonical scorecard schema validator** — `scripts/validate-scorecard.sh` (installed at `$HOME/.claude/scripts/validate-scorecard.sh` by `scripts/install-symlinks.sh`). That ONE script IS the schema; do not re-state the keys here, just call it:
 
@@ -494,7 +500,7 @@ Actions:
    #  in the claude-skills repo first, or call the repo copy directly.)
    ```
 
-   It prints `INVALID scorecard.json: <why>` and exits non-zero on any drift (wrong/missing/alias top-level key, or a `predictions[]` entry that isn't exactly `{text, basis, confidence}` with a non-empty `text`). If it does, **rewrite the offending fields to the schema above and re-run until it exits 0.** This is the same fail-loudly discipline as step 2a's frontmatter gate; the scorecard is the receipt the entire readtime-scoring loop depends on.
+   It prints `INVALID scorecard.json: <why>` and exits non-zero on any drift (wrong/missing/alias top-level key, more than 2 `predictions[]` entries, or a `predictions[]` entry that isn't exactly `{text, basis}` with a non-empty `text` — a `confidence` key is now rejected as a forbidden extra). If it does, **rewrite the offending fields to the schema above and re-run until it exits 0.** This is the same fail-loudly discipline as step 2a's frontmatter gate; the scorecard is the receipt the entire readtime-scoring loop depends on.
 5. **Open-tasks dump (human-readable)**: write $SD/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
 
    > These tasks are session-scoped (they live in ~/.claude/tasks/<session-uuid>/ and won't be visible to a fresh session). To make them live again next session, recreate each via TaskCreate.
@@ -552,6 +558,7 @@ Agent({
   description: "knowledge-mapper — graph side of consolidation",
   subagent_type: "general-purpose",
   model: "sonnet",
+  mode: "bypassPermissions",
   prompt: `
 ABSOLUTE PATHS ONLY. All paths below use $SD — the orchestrator has already substituted the literal absolute session-dir path at heredoc-expansion time. Use these paths directly; no substitution needed. (Historical note: routing through a `latest/` symlink caused data loss on 2026-05-02→03 — knowledge-mapper's first-pass output was overwritten by a parallel tab. The symlink no longer exists; absolute paths are the only path.)
 
@@ -587,6 +594,7 @@ Agent({
   description: "next-session-prompter — craft the cold-reader onboarding prompt",
   subagent_type: "general-purpose",
   model: "opus",
+  mode: "bypassPermissions",
   prompt: `
 ABSOLUTE PATHS ONLY. All paths below use $SD — the orchestrator has already substituted the literal absolute session-dir path at heredoc-expansion time. Use these paths directly; no substitution needed.
 
@@ -668,7 +676,7 @@ After Phase 1 completes:
     - **Aging (marked set):** for each line that DOES carry `<!-- dir-id: xxxx -->`, look up `xxxx` in `~/.claude/directive-reinforcement.json` (the sidecar step 1a stamps, keyed by the same `dir-id`). If a `dir-id` has NO entry, create one with `last_reinforced` = today — this **grandfathers** existing directives (first audit stamps everything today; a directive ages toward staleness only if N days pass with no NEW reinforcement). Never evict on first-seen.
     - **FAIL SAFE (markerless set):** every line from Scan 2 is **NEVER an eviction candidate** — it has no stable key, so it cannot be aged; a missing marker must always degrade to keep, never to evict. **Surface the Scan-2 list to Nick as "needs a dir-id backfill" UNCONDITIONALLY — independent of whether Trigger A/B fire below.** (The "silent unless a trigger fires" rule governs *eviction* candidates only; the backfill note is maintenance observability and is always reported when Scan 2 is non-empty. This is the one exception to the silent-otherwise default.)
     - **Orphan keys (automatic prune — safe, not Nick-gated):** a sidecar entry whose `dir-id` no longer appears anywhere in CLAUDE.md (`grep -q "dir-id: $key" ~/.claude/CLAUDE.md` fails) is dead bookkeeping — the directive it tracked is provably gone. Delete the entry automatically; this is not eviction (no directive is removed, nothing to judge) and never a staleness signal. Note the prune in the scorecard.
-  - **Trigger A — directive-layer budget (the forcing function).** The budget caps the **evictable layer only** — the summed bytes of Scan-1's directive lines (`grep -E 'feedback_[a-z_]+\.md|concept_[a-z_]+\.md' ~/.claude/CLAUDE.md | wc -c`) — **NOT** the whole file. *Why not whole-file:* the prose floor (~25KB) is most of the file and is never evictable, so a whole-file cap is structurally unsatisfiable by eviction — its first firing would demand gutting ~70% of hard-won directives to compensate for prose the valve cannot touch (the 2026-06-17 first-live-audit finding, #866 — it would be self-harm, not de-bloating). If the **directive layer** exceeds **~5,000 tokens (~20KB)**, the audit MUST surface the **least-recently-reinforced** directives until the projected directive-layer size is back under budget. The threshold sits just above the current set (~27 directives / ~17KB): it holds this run (correctly — nothing is force-evicted) but applies real back-pressure as the always-on directive set grows, because 27 directives loaded every session everywhere is already substantial. (Both numbers are tunable — the load-bearing fix is *what* is measured, not the exact cap.) **Tie-break (matters on the first audit, when grandfathering has stamped every directive with the same `last_reinforced` date):** when `last_reinforced` ties, order by lowest reinforcement `count` first, then by largest byte-size (biggest bloat reduction per eviction). Without this, "least-recently-reinforced" is an N-way tie on the first run and the selection is undefined.
+  - **Trigger A — directive-layer budget (the forcing function).** The budget caps the **evictable layer only** — the summed bytes of Scan-1's directive lines (`grep -E 'feedback_[a-z_]+\.md|concept_[a-z_]+\.md' ~/.claude/CLAUDE.md | wc -c`) — **NOT** the whole file. *Why not whole-file:* the prose floor (~25KB) is most of the file and is never evictable, so a whole-file cap is structurally unsatisfiable by eviction — its first firing would demand gutting ~70% of hard-won directives to compensate for prose the valve cannot touch (the 2026-06-17 first-live-audit finding, #866 — it would be self-harm, not de-bloating). If the **directive layer** exceeds **~6,000 tokens (~24KB)**, the audit MUST surface the **least-recently-reinforced** directives until the projected directive-layer size is back under budget. (History: the cap was ~20KB through 2026-06-17; the 2026-06-18 audit raised it to ~24KB after compressing 5 cold directives recovered ~1.9KB and landed the layer at ~24.2KB — 36 hard-won directives genuinely justify more than 20KB, and the principled move that run was *compress-not-evict* on cold directives, leaving freshly-reinforced ones untouched. Both numbers are tunable — the load-bearing fix is *what* is measured, not the exact cap. Note the **compression lever**: an over-grown directive that is still hot/load-bearing should be COMPRESSED in place — trigger sentence + `feedback_*` pointer, detail stays in the backing file — before it is ever an eviction candidate; eviction removes a lesson, compression only removes prose.) **Tie-break (matters on the first audit, when grandfathering has stamped every directive with the same `last_reinforced` date):** when `last_reinforced` ties, order by lowest reinforcement `count` first, then by largest byte-size (biggest bloat reduction per eviction). Without this, "least-recently-reinforced" is an N-way tie on the first run and the selection is undefined.
   - **Whole-file advisory (prose visibility — NOT an eviction trigger).** Separately, if the WHOLE file exceeds **~40KB** (`wc -c ~/.claude/CLAUDE.md`), surface a one-line advisory to Nick: the file is N KB, the directive layer is within budget, but the non-evictable prose (philosophy / protocol / environment) has grown to ~X KB — *he* may want to review or trim those sections by hand. **This NEVER auto-evicts prose** — it is Nick-curated identity/philosophy, deliberately out of the valve's scope; the advisory only makes prose growth *visible* so a directive-layer budget can't silently mask a bloating always-on file. Advisory only, like the backfill note: maintenance observability, never a gated eviction. (Without this, Option-1's directive budget alone would stay green while the prose floor crept toward the context ceiling unnoticed.)
   - **Trigger B — staleness.** Surface any directive whose `last_reinforced` is **older than 60 days** as a stale eviction candidate (it graduated on a recurrence signal that has since gone quiet — possibly solved, possibly superseded by a broader directive).
   - **What eviction does (the guardrail):** removes the always-on **directive line only** from CLAUDE.md (its trailing `<!-- dir-id -->` marker goes with the line; afterwards prune the now-orphaned sidecar entry for that `dir-id`). **Never touch the backing `feedback_*.md` episodes** — they are the repo-scoped distributed evidence #738's merge pass protects. Demotion is directive→(optionally a pointer)→gone; the long-form memory stays. Eviction is **Nick-gated**, exactly like graduation — present candidates with their last-reinforced date + reinforcement count, he approves each. If neither trigger fires, say nothing.
