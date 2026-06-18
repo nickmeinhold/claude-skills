@@ -87,6 +87,14 @@ jobs:
             echo "No validate-scorecard bats tests."
           fi
 
+      - name: Run bats — consolidate-health-check (immune response) contract
+        run: |
+          if compgen -G 'tests/consolidate-health-check/*.bats' > /dev/null; then
+            bats tests/consolidate-health-check/*.bats
+          else
+            echo "No consolidate-health-check bats tests."
+          fi
+
       - name: Run bats — install-symlinks
         run: |
           if [ -d tests/install-symlinks ]; then
