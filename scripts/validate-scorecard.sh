@@ -23,10 +23,14 @@
 #     index_edits             int
 #     errors_triaged          int
 #     memory_index_over_budget bool
-#     predictions             array of objects, each EXACTLY {text, basis, confidence}
+#     predictions             array of AT MOST 2 objects, each EXACTLY {text, basis}
 #                               text   = non-empty string (the grader reads this)
 #                               basis  = string
-#                               confidence = finite number in [0, 1]
+#                             (Narrowed 2026-06-18: a results audit found 68% of
+#                              historical predictions were unresolvable at grading
+#                              time. The array is now capped at 2 same-session-
+#                              verifiable bets, and the old `confidence` field is
+#                              REMOVED — a `confidence` key is now a forbidden extra.)
 #     notes                   string (may be empty) — OPTIONAL (step 4 calls it
 #                               "optional free text"; absent is fine, present must be a string)
 #
@@ -42,7 +46,7 @@ if [ "$#" -lt 1 ]; then
 fi
 
 python3 - "$@" <<'PY'
-import sys, os, json, math, numbers
+import sys, os, json
 
 # `notes` is OPTIONAL (step 4 documents it as "optional free text"); the other 9
 # are required. ALLOWED = the full set; REQUIRED = the set that must be present.
@@ -52,15 +56,11 @@ TOP_REQUIRED = {
     "errors_triaged", "memory_index_over_budget", "predictions",
 }
 TOP_ALLOWED  = TOP_REQUIRED | {"notes"}
-PRED_REQUIRED = {"text", "basis", "confidence"}
+PRED_REQUIRED = {"text", "basis"}
+PRED_MAX = 2  # narrowed 2026-06-18: at most 2 same-session-verifiable bets
 
 def is_str(x):  return isinstance(x, str)
 def is_int(x):  return isinstance(x, int) and not isinstance(x, bool)
-def is_unit_confidence(x):
-    # finite number in [0,1] — rejects bool, NaN, and ±Infinity (which strict
-    # JSON forbids but json.load accepts by default; we also reject them at parse).
-    return (isinstance(x, numbers.Number) and not isinstance(x, bool)
-            and math.isfinite(x) and 0.0 <= x <= 1.0)
 def is_strlist(x): return isinstance(x, list) and all(isinstance(i, str) for i in x)
 def is_abs_strlist(x):
     # memories_written/updated are documented as absolute paths; enforce it so a
@@ -110,12 +110,15 @@ for f in sys.argv[1:]:
         if key in data and not pred(data[key]):
             reasons.append(f"{key} must be {want}")
 
-    # predictions: array of {text, basis, confidence} — text non-empty
+    # predictions: array of AT MOST 2 objects {text, basis} — text non-empty.
+    # `confidence` was removed 2026-06-18 (now a forbidden extra via pextra).
     preds = data.get("predictions")
     if "predictions" in data:
         if not isinstance(preds, list):
             reasons.append("predictions must be an array")
         else:
+            if len(preds) > PRED_MAX:
+                reasons.append(f"predictions has {len(preds)} entries; at most {PRED_MAX} allowed (narrowed 2026-06-18 to same-session-verifiable bets)")
             for i, p in enumerate(preds):
                 if not isinstance(p, dict):
                     reasons.append(f"predictions[{i}] is not an object"); continue
@@ -125,13 +128,11 @@ for f in sys.argv[1:]:
                 if pmiss:
                     reasons.append(f"predictions[{i}] missing {sorted(pmiss)}")
                 if pextra:
-                    reasons.append(f"predictions[{i}] forbidden keys {sorted(pextra)}")
+                    reasons.append(f"predictions[{i}] forbidden keys {sorted(pextra)} (note: `confidence` was removed 2026-06-18)")
                 if "text" in p and not (is_str(p["text"]) and p["text"].strip()):
                     reasons.append(f"predictions[{i}].text must be a non-empty string")
                 if "basis" in p and not is_str(p["basis"]):
                     reasons.append(f"predictions[{i}].basis must be a string")
-                if "confidence" in p and not is_unit_confidence(p["confidence"]):
-                    reasons.append(f"predictions[{i}].confidence must be a finite number in [0,1]")
 
     if reasons:
         bad.append((f, "; ".join(reasons)))

@@ -29,7 +29,7 @@ canonical() {
   "errors_triaged": 0,
   "memory_index_over_budget": false,
   "predictions": [
-    {"text": "X will happen", "basis": "evidence", "confidence": 0.8}
+    {"text": "X will happen", "basis": "evidence"}
   ],
   "notes": ""
 }
@@ -87,7 +87,7 @@ EOF
 # --- predictions[] shape ---------------------------------------------------
 @test "a prediction missing text is caught (the grader reads text)" {
   canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"basis":"b","confidence":0.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"basis":"b"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"predictions[0] missing"* ]]
@@ -96,35 +96,35 @@ EOF
 
 @test "an empty-string prediction text is caught" {
   canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"  ","basis":"b","confidence":0.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"  ","basis":"b"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"text must be a non-empty string"* ]]
 }
 
-@test "a non-numeric confidence is caught" {
+# --- predictions[] narrowing (2026-06-18): confidence removed, capped at 2 ---
+@test "a confidence key is now a forbidden extra (removed 2026-06-18)" {
   canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":"high"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":0.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"confidence must be a finite number in [0,1]"* ]]
+  [[ "$output" == *"predictions[0] forbidden keys"* ]]
+  [[ "$output" == *"confidence"* ]]
 }
 
-@test "an out-of-range confidence (>1) is caught" {
+@test "more than 2 predictions is caught (narrowed to same-session-verifiable bets)" {
   canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":1.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"a","basis":"b"},{"text":"c","basis":"d"},{"text":"e","basis":"f"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"confidence must be a finite number in [0,1]"* ]]
+  [[ "$output" == *"at most 2 allowed"* ]]
 }
 
-@test "an Infinity confidence (non-standard JSON) is rejected at parse" {
-  # json.load accepts Infinity by default — the validator must NOT. Caught either
-  # as invalid JSON (parse_constant) — confidence Infinity must never pass.
-  printf '%s' '{"schema_version":2,"session_date":"d","memory_dir":"/m","memories_written":[],"memories_updated":[],"index_edits":0,"errors_triaged":0,"memory_index_over_budget":false,"predictions":[{"text":"x","basis":"b","confidence":Infinity}],"notes":""}' > "$SANDBOX/s.json"
+@test "exactly 2 predictions passes (the cap boundary)" {
+  canonical "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"a","basis":"b"},{"text":"c","basis":"d"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"not valid JSON"* || "$output" == *"confidence must be a finite number"* ]]
+  [ "$status" -eq 0 ]
 }
 
 @test "notes is OPTIONAL — a scorecard without notes still passes" {
