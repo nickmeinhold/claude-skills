@@ -123,3 +123,10 @@ link "$HOME/.claude/scripts/memory_frontmatter.py" "$REPO_ROOT/scripts/memory_fr
 # /consolidate step 0 calls. Both reached by this stable path from any repo's session.
 link "$HOME/.claude/scripts/normalize-memory-frontmatter.sh" "$REPO_ROOT/scripts/normalize-memory-frontmatter.sh"
 link "$HOME/.claude/scripts/heal-memory-dir.sh" "$REPO_ROOT/scripts/heal-memory-dir.sh"
+# The GitHub App token minter — cage-match / ship / pr-review / review-respond /
+# ship-major-feature call it by this stable path to mint Maxwell/Kelvin/Carnot
+# installation tokens for the review+merge gate. Moved here from the legacy
+# ~/.claude-skills/github-app-token.sh location (2026-06-19) so all script entry
+# points live under ~/.claude/scripts and the ~/.claude-skills dir can be retired
+# (its secrets moved to ~/.claude/.env).
+link "$HOME/.claude/scripts/github-app-token.sh" "$REPO_ROOT/scripts/github-app-token.sh"

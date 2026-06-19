@@ -114,7 +114,7 @@ If your review surfaces **3 or more findings that look like they rhyme** (the sa
 First, source the environment file if not already loaded:
 
 ```bash
-source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Then generate an App token and post the review using the GitHub API:
@@ -124,7 +124,7 @@ Then generate an App token and post the review using the GitHub API:
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 
 # Generate a short-lived installation token for KelvinBitBrawler
-KELVIN_TOKEN=$(~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
+KELVIN_TOKEN=$(~/.claude/scripts/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
 
 # Post review as KelvinBitBrawler [bot]
 GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \

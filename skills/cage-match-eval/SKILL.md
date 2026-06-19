@@ -21,7 +21,7 @@ strict merge gate. Only the *persona prompts* swap. See
 ```bash
 PR=$1
 
-source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 # Use full owner__repo slug, not basename, so two repos with the same basename
 # under different owners (e.g. nickmeinhold/claude-skills vs other/claude-skills)
