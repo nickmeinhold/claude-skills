@@ -7,6 +7,8 @@
 # tests invoke it via its real path inside the repo (not a copy) and rely
 # on $HOME to redirect target paths.
 
+load ../helpers
+
 setup() {
   REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   SCRIPT="${REPO_ROOT}/scripts/install-symlinks.sh"
@@ -27,21 +29,21 @@ teardown() {
 
 @test "fresh install creates the expected symlink" {
   run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  [ -L "$TARGET" ]
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ]
-  [[ "$output" == *"$TARGET -> $EVAL_TALLY_SRC"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ -L "$TARGET" ] || fail
+  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
+  [[ "$output" == *"$TARGET -> $EVAL_TALLY_SRC"* ]] || fail "output=$output"
 }
 
 @test "second invocation is idempotent and reports already linked" {
   run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
 
   run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"already linked"* ]]
-  [ -L "$TARGET" ]
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"already linked"* ]] || fail "output=$output"
+  [ -L "$TARGET" ] || fail
+  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
 }
 
 @test "regular file at target without --force refuses and exits non-zero" {
@@ -49,12 +51,12 @@ teardown() {
   echo "stale local copy" > "$TARGET"
 
   run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"re-run with --force"* ]]
+  [ "$status" -ne 0 ] || fail "status=$status"
+  [[ "$output" == *"re-run with --force"* ]] || fail "output=$output"
   # File is untouched, no symlink created.
-  [ ! -L "$TARGET" ]
-  [ -f "$TARGET" ]
-  [ "$(cat "$TARGET")" = "stale local copy" ]
+  [ ! -L "$TARGET" ] || fail
+  [ -f "$TARGET" ] || fail
+  [ "$(cat "$TARGET")" = "stale local copy" ] || fail
 }
 
 @test "regular file at target with --force is moved to .bak and replaced with symlink" {
@@ -62,11 +64,11 @@ teardown() {
   echo "stale local copy" > "$TARGET"
 
   run bash "$SCRIPT" --force
-  [ "$status" -eq 0 ]
-  [ -L "$TARGET" ]
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ]
-  [ -f "$TARGET.bak" ]
-  [ "$(cat "$TARGET.bak")" = "stale local copy" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ -L "$TARGET" ] || fail
+  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
+  [ -f "$TARGET.bak" ] || fail
+  [ "$(cat "$TARGET.bak")" = "stale local copy" ] || fail
 }
 
 @test "stale symlink without --force refuses" {
@@ -74,10 +76,10 @@ teardown() {
   ln -s "/nonexistent/elsewhere.sh" "$TARGET"
 
   run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"expected"* ]]
+  [ "$status" -ne 0 ] || fail "status=$status"
+  [[ "$output" == *"expected"* ]] || fail "output=$output"
   # Stale symlink unchanged.
-  [ "$(readlink "$TARGET")" = "/nonexistent/elsewhere.sh" ]
+  [ "$(readlink "$TARGET")" = "/nonexistent/elsewhere.sh" ] || fail
 }
 
 @test "stale symlink with --force is moved aside and replaced" {
@@ -85,12 +87,12 @@ teardown() {
   ln -s "/nonexistent/elsewhere.sh" "$TARGET"
 
   run bash "$SCRIPT" --force
-  [ "$status" -eq 0 ]
-  [ -L "$TARGET" ]
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ -L "$TARGET" ] || fail
+  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
   # Old symlink moved to .bak
-  [ -L "$TARGET.bak" ]
-  [ "$(readlink "$TARGET.bak")" = "/nonexistent/elsewhere.sh" ]
+  [ -L "$TARGET.bak" ] || fail
+  [ "$(readlink "$TARGET.bak")" = "/nonexistent/elsewhere.sh" ] || fail
 }
 
 @test "dangling source guard refuses to create symlink when source is missing" {
@@ -109,40 +111,40 @@ teardown() {
   # Deliberately do NOT create $FAKE_REPO/scripts/eval-tally.sh.
 
   run bash "$FAKE_REPO/scripts/install-symlinks.sh"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"source missing"* ]]
-  [[ "$output" == *"refusing to create a dangling symlink"* ]]
-  [ ! -e "$TARGET" ]
-  [ ! -L "$TARGET" ]
+  [ "$status" -ne 0 ] || fail "status=$status"
+  [[ "$output" == *"source missing"* ]] || fail "output=$output"
+  [[ "$output" == *"refusing to create a dangling symlink"* ]] || fail "output=$output"
+  [ ! -e "$TARGET" ] || fail
+  [ ! -L "$TARGET" ] || fail
 }
 
 @test "repeated --force runs do not clobber prior backups" {
   mkdir -p "$(dirname "$TARGET")"
   echo "first" > "$TARGET"
   run bash "$SCRIPT" --force
-  [ "$status" -eq 0 ]
-  [ -f "$TARGET.bak" ]
-  [ "$(cat "$TARGET.bak")" = "first" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ -f "$TARGET.bak" ] || fail
+  [ "$(cat "$TARGET.bak")" = "first" ] || fail
 
   # Replace symlink with a regular file again, then force a second time.
   rm "$TARGET"
   echo "second" > "$TARGET"
   run bash "$SCRIPT" --force
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
   # First .bak preserved; new backup chosen at .bak.1
-  [ "$(cat "$TARGET.bak")" = "first" ]
-  [ -f "$TARGET.bak.1" ]
-  [ "$(cat "$TARGET.bak.1")" = "second" ]
+  [ "$(cat "$TARGET.bak")" = "first" ] || fail
+  [ -f "$TARGET.bak.1" ] || fail
+  [ "$(cat "$TARGET.bak.1")" = "second" ] || fail
 }
 
 @test "--help prints usage and exits 0" {
   run bash "$SCRIPT" --help
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Usage:"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"Usage:"* ]] || fail "output=$output"
 }
 
 @test "unknown flag exits with code 2" {
   run bash "$SCRIPT" --bogus
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown arg"* ]]
+  [ "$status" -eq 2 ] || fail "status=$status"
+  [[ "$output" == *"unknown arg"* ]] || fail "output=$output"
 }

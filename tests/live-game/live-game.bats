@@ -7,6 +7,8 @@
 # only at reveal, (B) the speed bonus orders faster-correct above slower-correct,
 # (C) a vote locks (no answer-switching), (D) host mutations require the token.
 
+load ../helpers
+
 setup() {
   REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   SERVER="${REPO_ROOT}/skills/live-game/server.mjs"
@@ -33,15 +35,15 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
 
 @test "server boots and serves a lobby snapshot" {
   run curl -s "$B/state"
-  [ "$status" -eq 0 ]
-  [ "$(field "$output" 's.phase')" = "lobby" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ "$(field "$output" 's.phase')" = "lobby" ] || fail "output=$output"
 }
 
 @test "host view and play view are served as HTML" {
   run curl -s "$B/"
-  [[ "$output" == *"Live Game"* ]]
+  [[ "$output" == *"Live Game"* ]] || fail "output=$output"
   run curl -s "$B/play"
-  [[ "$output" == *"Join the game"* ]]
+  [[ "$output" == *"Join the game"* ]] || fail "output=$output"
 }
 
 @test "counts and correct are hidden during a live question, revealed at reveal" {
@@ -50,13 +52,13 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
   post /vote '{"clientId":"a","option":1}' >/dev/null
 
   run curl -s "$B/state"
-  [ "$(field "$output" 's.counts')" = "null" ]
-  [ "$(field "$output" 's.correct')" = "null" ]
+  [ "$(field "$output" 's.counts')" = "null" ] || fail "output=$output"
+  [ "$(field "$output" 's.correct')" = "null" ] || fail "output=$output"
 
   post "/host/reveal?token=$TOKEN" '{}' >/dev/null
   run curl -s "$B/state"
-  [ "$(field "$output" 's.correct')" = "1" ]
-  [ "$(field "$output" 's.counts[1]')" = "1" ]
+  [ "$(field "$output" 's.correct')" = "1" ] || fail "output=$output"
+  [ "$(field "$output" 's.counts[1]')" = "1" ] || fail "output=$output"
 }
 
 @test "speed bonus: faster correct answer outscores slower correct answer" {
@@ -70,8 +72,8 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
   local ada bo
   ada=$(field "$output" 's.leaderboard.find(p=>p.name==="Ada").score')
   bo=$(field "$output" 's.leaderboard.find(p=>p.name==="Bo").score')
-  [ "$ada" -gt "$bo" ]
-  [ "$ada" -eq 1000 ]
+  [ "$ada" -gt "$bo" ] || fail
+  [ "$ada" -eq 1000 ] || fail
 }
 
 @test "a vote locks — answer cannot be changed" {
@@ -79,37 +81,37 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
   post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y","z"],"correct":0}' >/dev/null
   post /vote '{"clientId":"a","option":2}' >/dev/null    # first answer = z (wrong)
   run post /vote '{"clientId":"a","option":0}'           # try to switch to x (correct)
-  [ "$(field "$output" 's.locked')" = "true" ]
+  [ "$(field "$output" 's.locked')" = "true" ] || fail "output=$output"
   post "/host/reveal?token=$TOKEN" '{}' >/dev/null
   run curl -s "$B/state"
   # locked on the wrong answer → zero score
-  [ "$(field "$output" 's.leaderboard.find(p=>p.name==="Ada").score')" = "0" ]
+  [ "$(field "$output" 's.leaderboard.find(p=>p.name==="Ada").score')" = "0" ] || fail "output=$output"
 }
 
 @test "host mutations require the token" {
   run post "/host/ask?token=WRONG" '{"question":"Q","options":["x","y"],"correct":0}'
-  [ "$(field "$output" 's.error')" = "bad host token" ]
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "output=$output"
   run curl -s "$B/state"
-  [ "$(field "$output" 's.phase')" = "lobby" ]   # state untouched
+  [ "$(field "$output" 's.phase')" = "lobby" ] || fail "output=$output"   # state untouched
 }
 
 @test "voting requires an active question" {
   post /join '{"clientId":"a","name":"Ada"}' >/dev/null
   run post /vote '{"clientId":"a","option":0}'
-  [ "$(field "$output" 's.error')" = "no live question" ]
+  [ "$(field "$output" 's.error')" = "no live question" ] || fail "output=$output"
 }
 
 @test "host/ask rejects an out-of-range correct index" {
   run post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":5}'
-  [[ "$(field "$output" 's.error')" == correct\ must\ be* ]]
+  [[ "$(field "$output" 's.error')" == correct\ must\ be* ]] || fail "output=$output"
   run curl -s "$B/state"
-  [ "$(field "$output" 's.phase')" = "lobby" ]   # rejected → state untouched
+  [ "$(field "$output" 's.phase')" = "lobby" ] || fail "output=$output"   # rejected → state untouched
 }
 
 @test "host/ask clamps an extreme timeLimit into range" {
   post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":0,"timeLimit":99999}' >/dev/null
   run curl -s "$B/state"
-  [ "$(field "$output" 's.timeLimit')" = "300" ]   # clamped to MAX_TIME_LIMIT
+  [ "$(field "$output" 's.timeLimit')" = "300" ] || fail "output=$output"   # clamped to MAX_TIME_LIMIT
 }
 
 # NOTE: the name/option HTML-attribute escaping (esc() incl. quotes) runs
