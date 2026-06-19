@@ -16,14 +16,22 @@ ln -s "$(pwd)/skills" ~/.claude/skills
 # (or, if you already have your own ~/.claude/skills dir:
 #  ln -s "$(pwd)"/skills/* ~/.claude/skills/)
 
-# 3. Symlink the helper script
-mkdir -p ~/.claude-skills
-ln -s "$(pwd)/scripts/github-app-token.sh" ~/.claude-skills/github-app-token.sh
+# 3. Install the helper-script symlinks into ~/.claude/scripts
+#    (github-app-token.sh + the /consolidate scripts). Idempotent — re-run
+#    after any pull that adds or moves a script. REQUIRED on every fresh clone.
+bash scripts/install-symlinks.sh
 
-# 4. Create .env with App credentials (get from team lead)
-cp .env.example ~/.claude-skills/.env
-# Edit ~/.claude-skills/.env with actual values
+# 4. Add the App credentials to your main Claude env, ~/.claude/.env
+#    (get the values from the team lead). Append to an existing env, or seed
+#    a new one from the template:
+cat .env.example >> ~/.claude/.env
+# then edit ~/.claude/.env and fill in the real values
 ```
+
+> **Where things live:** secrets go in `~/.claude/.env` (your single env file) and
+> the helper scripts are symlinked into `~/.claude/scripts/` by
+> `install-symlinks.sh`. (Pre-2026-06-19 this repo used a separate
+> `~/.claude-skills/` dir for both — that's been retired.)
 
 Then install the reviewer GitHub Apps on your repos (one-time per repo):
 - [Install MaxwellMergeSlam](https://github.com/apps/maxwellmergeslam/installations/new)
@@ -43,6 +51,7 @@ Want to use `/ship`, `/pr-review`, or `/cage-match` on your own repos? You'll ne
 git clone git@github.com:nickmeinhold/claude-skills.git
 cd claude-skills
 ln -s "$(pwd)/skills" ~/.claude/skills
+bash scripts/install-symlinks.sh   # symlinks github-app-token.sh into ~/.claude/scripts
 ```
 
 ### Step 2: Register two GitHub Apps
@@ -72,11 +81,13 @@ base64 -i your-app.pem
 
 Copy the output — you'll need it for `.env`. Delete the `.pem` files after encoding.
 
-### Step 4: Create `.env`
+### Step 4: Add credentials to `~/.claude/.env`
+
+Credentials live in your main Claude env file. Append to an existing
+`~/.claude/.env`, or seed a new one from the template:
 
 ```bash
-mkdir -p ~/.claude-skills
-cp .env.example ~/.claude-skills/.env
+cat .env.example >> ~/.claude/.env
 ```
 
 Fill in the 4 required values:
@@ -88,13 +99,12 @@ KELVIN_APP_ID=<your Gemini reviewer App ID>
 KELVIN_PRIVATE_KEY_B64=<base64-encoded private key>
 ```
 
-### Step 5: Symlink helper script
+### Step 5: Helper script (already done)
 
-```bash
-ln -s "$(pwd)/scripts/github-app-token.sh" ~/.claude-skills/github-app-token.sh
-```
-
-This script generates short-lived installation tokens from your App credentials at runtime.
+`bash scripts/install-symlinks.sh` from Step 1 already symlinked
+`github-app-token.sh` into `~/.claude/scripts/`. The skills call it there to
+generate short-lived installation tokens from your App credentials at runtime —
+no separate step needed.
 
 ### Step 6: Install Apps on your repos
 
@@ -116,7 +126,7 @@ Required for `/cage-match` (the Gemini/Kelvin reviewer). See [Gemini CLI docs](h
 |-------|-------------|
 | `/ship` | Commit, push, create PR, review, and merge |
 | `/pr-review <pr>` | Code review as MaxwellMergeSlam [bot] (Claude) |
-| `/cage-match <pr>` | Adversarial review: Maxwell [bot] vs Kelvin [bot] (Gemini) |
+| `/cage-match <pr>` | Three-way adversarial review: Maxwell [bot] (Claude) vs Kelvin [bot] (Gemini) vs Carnot (Codex/GPT) |
 | `/review-respond` | Address PR review comments |
 | `/pm` | Project management (issues, boards) |
 | `/research` | Deep research with web search |
