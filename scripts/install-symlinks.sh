@@ -114,3 +114,12 @@ link "$HOME/.claude/scripts/validate-scorecard.sh" "$REPO_ROOT/scripts/validate-
 # over budget, agent-phase wall-clock drift) instead of waiting for Nick to notice.
 # Reached by this stable path from any repo's session.
 link "$HOME/.claude/scripts/consolidate-health-check.sh" "$REPO_ROOT/scripts/consolidate-health-check.sh"
+# The shared frontmatter module — THE single definition of the schema + preserve-first
+# repair. validate / normalize / heal all import it (so their verdicts can't drift —
+# issue #883). Linked alongside them so the import resolves whether a tool is invoked
+# via its symlink (which resolves back to the repo) or copied.
+link "$HOME/.claude/scripts/memory_frontmatter.py" "$REPO_ROOT/scripts/memory_frontmatter.py"
+# The single-file normalizer (bulk / manual repair) and the one-pass dir healer that
+# /consolidate step 0 calls. Both reached by this stable path from any repo's session.
+link "$HOME/.claude/scripts/normalize-memory-frontmatter.sh" "$REPO_ROOT/scripts/normalize-memory-frontmatter.sh"
+link "$HOME/.claude/scripts/heal-memory-dir.sh" "$REPO_ROOT/scripts/heal-memory-dir.sh"

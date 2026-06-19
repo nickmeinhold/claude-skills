@@ -1,134 +1,83 @@
 #!/usr/bin/env bash
-# validate-memory-frontmatter.sh — THE canonical memory-frontmatter schema.
+# validate-memory-frontmatter.sh — THE canonical memory-frontmatter schema (CLI).
 #
-# This script is the SINGLE SOURCE OF TRUTH for what a valid memory-file
-# frontmatter block looks like. Everything else REFERENCES it instead of
-# restating the rule:
+# The schema RULES now live in memory_frontmatter.py (this dir) as the single
+# definition; this script is the CLI front-end over `mf.schema_reasons`. Everything
+# else REFERENCES that one module instead of restating the rule:
 #   - /consolidate SKILL.md step 2a (the post-write gate) calls this script.
-#   - scripts/normalize-memory-frontmatter.sh calls this script as its
-#     apply-time gate (it builds the block, then this validates the result).
-#   - SKILL.md step 1 / step 0 prose point here for the authoritative rule.
-# Before this script existed those sites each stated the schema independently
-# and DRIFTED (the metadata.type three-way divergence that drove PR #68; the
-# step-2a gate checked the key allowlist but not the scope enum, the normalizer
-# checked the scope enum but not the key allowlist). One executable definition
-# can't drift from itself — that is the whole point (issue #883).
+#   - scripts/normalize-memory-frontmatter.sh + scripts/heal-memory-dir.sh import
+#     the same module, so a validate / normalize / heal verdict cannot disagree.
+# Before the module existed these sites each stated the schema independently and
+# DRIFTED (the metadata.type three-way divergence that drove PR #68). One executable
+# definition can't drift from itself — that is the whole point (issue #883).
 #
-# THE SCHEMA (the CODE below is authoritative; this comment only describes it —
-# if the two ever disagree, the code wins and the comment is the bug):
-#   A memory file MUST open with a `---`-fenced YAML block parsing to a mapping:
+# THE SCHEMA (described in memory_frontmatter.py; the CODE there is authoritative):
 #     ---
-#     name: <non-empty string>           # human-readable title / retrieval handle
-#     description: <non-empty string>    # one-line retrieval cue
+#     name: <non-empty string>
+#     description: <non-empty string>
 #     metadata:
-#       type: <non-empty string>         # OPEN descriptive tag (usually the filename
-#                                        #   prefix). NO enum — no tool branches on it.
-#       scope: repo | universal | meta   # CLOSED enum — graduation/eviction branch on it.
+#       type: <non-empty string>         # OPEN tag — no enum
+#       scope: repo | universal | meta   # CLOSED enum
 #     ---
-#   Rules enforced:
-#     (A) top-level keys ⊆ {name, description, metadata}      — no extra/provenance keys
-#     (B) metadata keys  ⊆ {type, scope}                      — no extra/provenance keys
-#     (C) name, description present and non-empty strings
-#     (D) metadata.type present and non-empty                 — value NOT enum-checked (open tag)
-#     (E) metadata.scope ∈ {repo, universal, meta}            — the one load-bearing enum
-#     (F) the frontmatter parses as a YAML mapping at all     — unparseable == the silent-drop bug
+#   Rules A-F: top-level keys ⊆ {name,description,metadata}; metadata keys ⊆ {type,scope};
+#   name+description non-empty; metadata.type non-empty; metadata.scope in the enum;
+#   the block parses as a YAML mapping.
+#
+# SKIPS (out of schema scope, exit-0-clean, never flagged):
+#   - index files ONLY: MEMORY.md and MEMORY.*.md (no frontmatter by design).
+#   When you HAND this validator a file, it validates that file — filtering non-memory
+#   artifacts (claude-md-candidates.md, notes) by prefix is the GLOBBER's job, done in
+#   heal-memory-dir.sh, NOT here. (issue #936 is fixed at the sweep layer; the per-file
+#   contract — flag any schema-violating file you're given — is the executable spec the
+#   validate bats suite pins, and must not be loosened by a name filter.)
 #
 # Usage:
 #   validate-memory-frontmatter.sh <file> [<file> ...]
-# Exit 0 iff EVERY file passes; exit 1 (and print one `INVALID <name>: <why>`
+# Exit 0 iff EVERY non-skipped file passes; exit 1 (and print one `INVALID <name>: <why>`
 # line per offender) if any fail; exit 2 on a usage error / missing PyYAML.
 set -euo pipefail
+
+# Resolve this script's real dir (following a symlink install) to import the module.
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  DIR="$(cd "$(dirname "$SRC")" && pwd)"; SRC="$(readlink "$SRC")"
+  [ "${SRC#/}" = "$SRC" ] && SRC="$DIR/$SRC"
+done
+HERE="$(cd "$(dirname "$SRC")" && pwd)"
 
 if [ "$#" -lt 1 ]; then
   echo "usage: validate-memory-frontmatter.sh <file> [<file> ...]" >&2
   exit 2
 fi
 
-python3 - "$@" <<'PY'
-import sys, re, os
+PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}" python3 - "$@" <<'PY'
+import sys, os
 
 try:
-    import yaml
+    import memory_frontmatter as mf
+except ImportError as e:
+    sys.stderr.write(f"ERROR: cannot import memory_frontmatter ({e}); run install-symlinks.sh\n")
+    sys.exit(2)
+
+try:
+    import yaml  # noqa: F401
 except ImportError:
     sys.stderr.write("ERROR: PyYAML required (pip install pyyaml)\n")
     sys.exit(2)
 
-TOP_ALLOWED  = {"name", "description", "metadata"}
-META_ALLOWED = {"type", "scope"}
-VALID_SCOPES = {"repo", "universal", "meta"}
-
 bad = []  # (path, reason)
 
 for f in sys.argv[1:]:
-    # The index is not a memory file: MEMORY.md is the human-readable corpus
-    # index and has no frontmatter by design, so it is out of scope for this
-    # schema. Skipping it (rather than flagging it) lets a whole-corpus sweep
-    # `validate-memory-frontmatter.sh <dir>/*.md` exit 0 cleanly, and matches
-    # the exact exclusion in memory_neighborhood.py (`if name == "MEMORY.md"`).
-    # This is a targeted skip of the ONE known non-memory file, NOT a broad
-    # name-prefix filter — a genuinely misnamed memory file must still be
-    # flagged, never silently skipped.
-    if os.path.basename(f) == "MEMORY.md":
+    base = os.path.basename(f)
+    # Skip ONLY index files (no frontmatter by design). Prefix-filtering of non-memory
+    # artifacts is the globber's job (heal-memory-dir.sh), not this per-file gate.
+    if mf.is_index_file(base):
         continue
-
     try:
         text = open(f, encoding="utf-8").read()
     except OSError as e:
         bad.append((f, f"unreadable: {e}")); continue
-
-    # (F) must open with a ---fenced block that parses to a mapping. The closing
-    # fence must be a line that is exactly `---` (optional trailing space), then a
-    # newline or EOF — NOT `---garbage`. Anchoring it this way keeps the validator's
-    # parseability contract exactly as strict as the block the normalizer emits, so
-    # the round-trip is genuinely exact (a body line like `---x` can't masquerade as
-    # the closing fence). re.S lets `.` span the YAML's newlines; the non-greedy
-    # `(.*?)` still stops at the FIRST real closing fence.
-    m = re.match(r"^---\n(.*?)\n---[ \t]*(?:\n|\Z)", text, re.S)
-    if not m:
-        bad.append((f, "no ---fenced frontmatter block")); continue
-    try:
-        fm = yaml.safe_load(m.group(1))
-    except Exception as e:
-        bad.append((f, f"UNPARSEABLE: {e}")); continue
-    if not isinstance(fm, dict):
-        bad.append((f, "frontmatter is not a YAML mapping")); continue
-
-    reasons = []
-
-    # (A) top-level key allowlist
-    extra_top = set(fm) - TOP_ALLOWED
-    if extra_top:
-        reasons.append(f"forbidden top-level keys {sorted(extra_top)}")
-
-    # (B) metadata key allowlist (metadata itself must be a mapping)
-    meta = fm.get("metadata")
-    if meta is None:
-        reasons.append("missing metadata")
-        meta = {}
-    elif not isinstance(meta, dict):
-        reasons.append("metadata is not a mapping")
-        meta = {}
-    else:
-        extra_meta = set(meta) - META_ALLOWED
-        if extra_meta:
-            reasons.append(f"forbidden metadata keys {sorted(extra_meta)}")
-
-    # (C) name + description present and non-empty
-    for k in ("name", "description"):
-        v = fm.get(k)
-        if not (isinstance(v, str) and v.strip()):
-            reasons.append(f"missing/empty {k}")
-
-    # (D) metadata.type present and non-empty (open tag — value not checked)
-    t = meta.get("type")
-    if not (isinstance(t, str) and t.strip()):
-        reasons.append("missing/empty metadata.type")
-
-    # (E) metadata.scope is the closed enum
-    s = meta.get("scope")
-    if s not in VALID_SCOPES:
-        reasons.append(f"metadata.scope {s!r} not in {sorted(VALID_SCOPES)}")
-
+    reasons = mf.schema_reasons(text)
     if reasons:
         bad.append((f, "; ".join(reasons)))
 
