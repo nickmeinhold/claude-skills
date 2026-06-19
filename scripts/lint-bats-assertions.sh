@@ -60,6 +60,12 @@ function mask(s,    i, c, q1, q2, out) {
   q1 = 0; q2 = 0; out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
+    # A backslash escapes the next char EVERYWHERE except inside single quotes
+    # (bash treats `\` literally in '...'). Mask the escaped pair to XX so an
+    # escaped quote `\"` does not toggle quote state, and an escaped `;`/`#`/`&`
+    # outside quotes is not misread as an operator. Trailing `\` (no next char)
+    # falls through — continuation joining already consumed real line-end `\`.
+    if (c == "\\" && !q1 && i < length(s)) { out = out "XX"; i++; continue }
     if (c == "\x27" && !q2)      { q1 = !q1; out = out c }
     else if (c == "\"" && !q1)   { q2 = !q2; out = out c }
     else if (q1 || q2)           { out = out "X" }
@@ -86,14 +92,18 @@ function is_bare_assertion(seg,    t) {
   if (seg ~ /^![ \t]/) return 1
   return 0
 }
-BEGIN { in_heredoc = 0; delim = ""; pending = "" }
+BEGIN { in_heredoc = 0; delim = ""; dash = 0; pending = "" }
 {
   raw = $0
 
-  # Inside a heredoc body: copy through, watch for the terminator.
+  # Inside a heredoc body: copy through, watch for the terminator. A plain
+  # `<<EOF` terminator must be at column 0; only `<<-EOF` permits leading TABS
+  # (POSIX — tabs only, not spaces). Stripping unconditionally would let an
+  # indented EOF inside fixture text close the heredoc early and then flag the
+  # fixture as shell.
   if (in_heredoc) {
     line = raw
-    sub(/^[ \t]*/, "", line)   # <<- allows tab-indented terminator
+    if (dash) sub(/^\t*/, "", line)
     if (line == delim) in_heredoc = 0
     next
   }
@@ -105,17 +115,25 @@ BEGIN { in_heredoc = 0; delim = ""; pending = "" }
   logical = raw
   lineno = NR
 
-  # Does this logical line OPEN a heredoc? Capture the delimiter; the body
-  # starts on the NEXT line, so we still lint THIS line normally.
-  if (match(logical, /<<-?[ \t]*["\x27]?[A-Za-z_][A-Za-z0-9_]*["\x27]?/)) {
+  # Mask quotes + strip comments BEFORE any structural analysis, so a quoted or
+  # commented `<<EOF` (e.g. printf "<<EOF" or `# <<EOF`) can never set heredoc
+  # state. A real heredoc opener lives in code, outside quotes, and survives.
+  code = strip_comment(mask(logical))
+
+  # Does this line OPEN a heredoc? Capture the delimiter + whether it is `<<-`.
+  # The body starts on the NEXT line, so we still lint THIS line normally.
+  # Detect on `code` (masked) so a quoted/commented `<<EOF` cannot trigger it,
+  # but slice the delimiter out of `logical` (the ORIGINAL) at the same offset —
+  # mask preserves length/positions 1:1, and a QUOTED delim `<<'EOF'` is masked
+  # to `<<'XXX'` in code, so extracting from code would give the wrong word.
+  if (match(code, /<<-?[ \t]*["\x27]?[A-Za-z_][A-Za-z0-9_]*["\x27]?/)) {
     d = substr(logical, RSTART, RLENGTH)
+    dash = (d ~ /^<<-/)
     sub(/^<<-?[ \t]*["\x27]?/, "", d)
     sub(/["\x27]?$/, "", d)
     delim = d
     in_heredoc = 1
   }
-
-  code = strip_comment(mask(logical))
 
   # Split the code on ; into segments; judge each. (code is masked, so any ;
   # inside a quoted glob is gone and never splits an assertion from its guard.)

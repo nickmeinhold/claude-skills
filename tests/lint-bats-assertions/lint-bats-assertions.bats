@@ -154,6 +154,66 @@ BATS
   [[ "$output" == *":5:"* ]] || fail "expected the violation on line 5, got: $output"
 }
 
+# --- Carnot PR #84 findings: parser must be conservative at its seams -------
+@test "a guarded assertion with an ESCAPED quote + ; in a glob is NOT flagged" {
+  # mask() must not let \" toggle quote-state; the ; stays masked, the [[ stays
+  # joined to its || fail. (Carnot finding 2 — backslash-escape in mask.)
+  mkbats '[[ "$out" == *"a\";b"* ]] || fail "output=$out"'
+  run bash "$LINT" "$SANDBOX/t.bats"
+  [ "$status" -eq 0 ] || fail "output=$output"
+}
+
+@test "a QUOTED string that looks like a heredoc opener does not desync state" {
+  # `printf "<<EOF"` must NOT enter heredoc mode and swallow the real bare
+  # assertion below it. (Carnot finding 1 — heredoc detected on raw text.)
+  cat > "$SANDBOX/t.bats" <<'BATS'
+#!/usr/bin/env bats
+@test "x" {
+  printf '%s\n' "<<EOF"
+  [[ 1 -eq 2 ]]
+}
+BATS
+  run bash "$LINT" "$SANDBOX/t.bats"
+  [ "$status" -eq 1 ] || fail "expected the bare [[ ]] to still be flagged: $output"
+}
+
+@test "a commented heredoc-looking token does not desync state" {
+  cat > "$SANDBOX/t.bats" <<'BATS'
+#!/usr/bin/env bats
+@test "x" {
+  # here is a <<EOF in a comment
+  [[ 1 -eq 2 ]]
+}
+BATS
+  run bash "$LINT" "$SANDBOX/t.bats"
+  [ "$status" -eq 1 ] || fail "expected the bare [[ ]] to still be flagged: $output"
+}
+
+@test "a plain <<EOF does not close on an INDENTED terminator inside fixture text" {
+  # Only <<- permits a tab-indented terminator. A space/tab-indented EOF inside
+  # a plain <<EOF body is fixture content, not the terminator — the heredoc must
+  # stay open so the trailing bare assertion is still caught. (Carnot finding 3.)
+  printf '#!/usr/bin/env bats\n@test "x" {\n  cat > /tmp/f <<EOF\nreal body\n\tEOF\n[ this is still fixture ]\nEOF\n  [[ 1 -eq 2 ]]\n}\n' > "$SANDBOX/t.bats"
+  run bash "$LINT" "$SANDBOX/t.bats"
+  [ "$status" -eq 1 ] || fail "expected the bare [[ ]] after the heredoc to be flagged: $output"
+}
+
+@test "a quoted-delimiter heredoc <<'EOF' still tracks its real terminator" {
+  # Regression guard: masking must not corrupt the delimiter word. The body
+  # (including a [-leading fixture line) must be skipped, and the real EOF closes.
+  cat > "$SANDBOX/t.bats" <<'BATS'
+#!/usr/bin/env bats
+@test "x" {
+  cat > /tmp/f <<'EOF'
+[ fixture line, not an assertion ]
+EOF
+  [ -f /tmp/f ] || fail "missing"
+}
+BATS
+  run bash "$LINT" "$SANDBOX/t.bats"
+  [ "$status" -eq 0 ] || fail "output=$output"
+}
+
 # --- the real suites must pass the lint -------------------------------------
 @test "all repo suites are lint-clean" {
   run bash "$LINT" "${REPO_ROOT}/tests"
