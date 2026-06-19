@@ -142,10 +142,11 @@ run_hc() {
 
 # --- wall-clock drift (robust + retry-aware) ----------------------------------
 @test "wall-clock stays INFO until 5 clean datapoints" {
-  printf '{"wall_s": 100}\n{"wall_s": 110}\n{"wall_s": 105}\n{"wall_s": 108}\n' > "$TIMING"
+  # 5 datapoints: the last is the "current run", leaving 4 baseline -> still accruing.
+  printf '{"wall_s":100}\n{"wall_s":110}\n{"wall_s":105}\n{"wall_s":108}\n{"wall_s":103}\n' > "$TIMING"
   run_hc --verbose
-  [[ "$output" == *"baseline accruing: 4/5"* ]]
-  [ "$status" -eq 0 ]   # INFO is not a breach
+  [ "$status" -eq 0 ]                                         # INFO is not a breach
+  [[ "$output" == *"baseline accruing: 4/5"* ]]              # 5 points - 1 current = 4 baseline
 }
 
 @test "wall-clock drift breaches when a RETRY-FREE latest run spikes past median+K·MAD" {
