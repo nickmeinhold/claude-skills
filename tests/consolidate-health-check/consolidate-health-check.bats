@@ -163,6 +163,15 @@ run_hc() {
   [[ "$output" == *"retry-inflated"* ]]
 }
 
+@test "retried is STRICT boolean — a string \"false\" is NOT treated as retried (finding 3)" {
+  # bool("false") would be True (non-empty string) and wrongly downgrade this spike to
+  # INFO; `is True` keeps it as a real, breaching drift. Strings fail safe to not-retried.
+  printf '{"wall_s":100}\n{"wall_s":102}\n{"wall_s":98}\n{"wall_s":101}\n{"wall_s":99}\n{"wall_s":300,"retried":"false"}\n' > "$TIMING"
+  run_hc
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"wall-clock-drift"* ]]
+}
+
 @test "a retried run is EXCLUDED from the baseline so it can't distort the fence" {
   # The 2500 retry is in the middle; without exclusion it would inflate the median
   # and mask the genuine 300 spike. With exclusion, the clean baseline (~100) flags 300.

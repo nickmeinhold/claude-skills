@@ -179,7 +179,10 @@ if os.path.isfile(timing_path):
             continue
         w = o.get("wall_s")
         if isinstance(w, (int, float)):
-            points.append((float(w), bool(o.get("retried", False))))
+            # STRICT boolean: only a real JSON `true` counts as retried. bool("false")
+            # would be True (non-empty string), wrongly excluding a clean run — so a
+            # string/garbage value fails SAFE to not-retried (Carnot PR #83 finding 3).
+            points.append((float(w), o.get("retried") is True))
 
 if not points:
     add("wall-clock-drift", "SKIP", "no timing datapoints yet")
@@ -205,8 +208,8 @@ else:
         breach = last_w > fence
         head = (f"last agent-phase {last_w:.0f}s vs baseline median {med:.0f}s "
                 f"({spread}, fence {fence:.0f}s, n={len(baseline)} clean)")
-        detail = (f"The most recent (non-retried) consolidation ran beyond median+{DRIFT_K:g}·MAD of the "
-                  f"clean baseline. BEFORE concluding a DAG perf regression, confirm this run had NO agent "
+        detail = (f"The most recent (non-retried) consolidation ran beyond the robust drift fence "
+                  f"({spread}, {fence:.0f}s). BEFORE concluding a DAG perf regression, confirm this run had NO agent "
                   f"retry / socket-death / API stall — those inflate the phase timer and are the common benign "
                   f"cause (mark such runs retried:true in timing.jsonl so they self-exclude). A real regression "
                   f"shows elevated wall-clock on a retry-free run; then compare DAG concurrency / model tiers.")
