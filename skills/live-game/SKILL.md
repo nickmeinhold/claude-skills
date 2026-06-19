@@ -76,8 +76,9 @@ and to read the final leaderboard aloud after a reveal.
 | GET | `/play` | audience | phone view (join + vote) |
 | GET | `/events` | all | SSE stream of public state |
 | GET | `/state` | all | JSON snapshot (slide updater / tests) |
-| POST | `/join` | audience | `{clientId, name}` |
-| POST | `/vote` | audience | `{clientId, option}` — first answer locks |
+| POST | `/join` | audience | `{name, playerId?, secret?}` → server issues `{playerId, secret}` |
+| POST | `/vote` | audience | `{playerId, secret, option}` — first answer locks |
+| POST | `/me` | audience | `{playerId, secret}` → caller's own score/gain/verdict |
 | POST | `/host/ask` | host | `{question, options[], correct, timeLimit?}` |
 | POST | `/host/reveal` | host | award points, reveal |
 | POST | `/host/next` | host | back to lobby (keep scores) |
@@ -86,46 +87,48 @@ and to read the final leaderboard aloud after a reveal.
 ## Going live to a real room (blast radius — read before exposing publicly)
 
 For a real audience the phones need to reach the server, so you tunnel it
-(Tailscale Funnel or `ngrok http 7373`). That makes it a **public endpoint** — name
-the exposure before opening it (per the security doctrine in `~/.claude/CLAUDE.md`):
+(Tailscale Funnel or `ngrok http 7373`). That makes it a **public endpoint**. The
+audience surface has been hardened for an *untrusted* public game (per the security
+doctrine in `~/.claude/CLAUDE.md`):
 
 - **Control is host-token-gated.** All state-mutating *game* actions (`ask`, `reveal`,
-  `next`, `reset`) require the token. Audience can only `join`/`vote`. Keep the token
-  off the projected screen (it lives in the URL `#fragment`, which is not sent to the
-  server and not shown in the QR).
-- **Audience input is the injection surface, and it's contained:** player names and
-  options are HTML-escaped on render *including quotes* (`& < > " '`), so a name cannot
-  break out of an HTML attribute — no stored XSS. Votes are integer-validated and
-  range-checked, `correct`/`timeLimit` are range-checked/clamped server-side, request
-  bodies are capped at 1 MB, the player table is capped at `MAX_PLAYERS` (500), and a
-  vote *locks* (no flooding a re-vote). State is **in-memory only** — no persistence, no
-  DB, nothing to corrupt.
+  `next`, `reset`) require the token. Audience can only `join`/`vote`/`me`. Keep the
+  token off the projected screen (it lives in the URL `#fragment`, which is not sent to
+  the server).
+- **Identity is SERVER-issued, not client-asserted.** On first `join` the server mints an
+  opaque `playerId` plus a `secret` bearer credential; `vote` and `me` require the
+  matching secret (constant-time compared), and the secret is *never* broadcast. A peer
+  who observes/guesses a `playerId` therefore can neither vote as that player nor rename
+  them — a stale/forged id just gets a fresh identity. This closes the hijack the
+  client-asserted-id prototype had.
+- **Audience input is the injection surface, and it's contained:** names/options are
+  HTML-escaped on render *including quotes* (`& < > " '`) — no stored XSS; votes are
+  integer/range-validated; `correct`/`timeLimit` are range-checked/clamped server-side;
+  bodies capped at 1 MB; the player table capped at `MAX_PLAYERS` (500); a vote *locks*.
+  State is **in-memory only** — nothing to persist or corrupt.
+- **Per-IP rate limiting** throttles `join`/`vote` (fixed window, `LIVE_GAME_RATE_MAX`
+  per `LIVE_GAME_RATE_WINDOW_MS`, default 60 / 10 s). Bounds request churn that
+  `MAX_PLAYERS` alone wouldn't.
+- **SSE fan-out drops a backed-up consumer.** `broadcast()` destroys any client whose
+  unsent buffer exceeds `LIVE_GAME_MAX_SSE_BUFFER` (default 1 MB), so a slow/hostile
+  client can't grow server memory unbounded.
 - **No external quota is wired to audience actions.** The Game Master (Claude) generates
-  questions out-of-band; an audience vote never triggers an LLM/API call. So there is no
-  cost-amplification path from the public surface.
+  questions out-of-band; an audience vote never triggers an LLM/API call — no
+  cost-amplification path. The host QR no longer calls a third party (the join URL is
+  rendered prominently instead — fully offline; an inline QR encoder is a tracked
+  follow-up).
 
-### Named residuals (real, but prototype-acceptable in a *trusted* room)
+### Remaining caveats (named, not absorbed)
 
-These are known compromises, stated explicitly rather than absorbed silently. Each is
-fine for a trusted-room demo; address before an untrusted public game.
-
-- **Identity is client-asserted, not server-issued.** A player's `clientId` is supplied
-  by the client, so on the tunnel a malicious peer who observes/guesses another's id
-  could overwrite their name or cast a vote as them. Trusted-room-acceptable; the real
-  fix is a server-issued opaque id + per-client secret required on `vote`.
-- **No per-IP rate limit** on `join`/`vote`. The `MAX_PLAYERS` cap bounds memory, but a
-  loop can still churn joins/votes within the cap. Add a per-IP limiter for public use.
-- **SSE fan-out has no backpressure / flow control.** `broadcast()` writes to every
-  client on each `join`/`vote` and never drops a slow consumer, so a deliberately-slow
-  client can accumulate buffered state. Fine at room scale; cap/drop slow clients for
-  large or hostile audiences.
-- **The host QR uses an external image service** (`api.qrserver.com`). "Zero-dependency"
-  means zero *npm* deps and offline *gameplay*; the QR convenience makes a runtime call
-  to a third party and leaks the (private-IP) join URL to it. Show the printed join URL
-  instead for a fully-offline/private setup, or self-host a QR encoder.
-- **The phone reveal view finds "you" by name within the top-10 leaderboard.** Duplicate
-  names or players outside the top 10 may see a wrong/missing self-score+gain (the
-  correct/incorrect verdict is always right — it's computed from the player's own vote).
+- **Rate limiting attributes by socket IP** unless `LIVE_GAME_TRUST_PROXY=1`, in which
+  case it reads the leftmost `X-Forwarded-For`. Behind a tunnel, set `TRUST_PROXY` (and
+  ensure the tunnel sets a trustworthy XFF) or *all* clients share the tunnel's IP and
+  the limit becomes global rather than per-player.
+- **The `secret` is a bearer token in `localStorage`.** Names are escaped (no stored
+  XSS path to read it), but it is device-local — clearing storage or switching devices
+  starts a fresh identity (score not transferred). Acceptable for a session-scoped game.
+- **The host token is a single shared secret** — fine for one operator; there is no
+  multi-host/role model.
 
 ## Pairing with a Google Slide (optional)
 

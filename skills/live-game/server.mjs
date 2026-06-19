@@ -15,8 +15,9 @@
 //   GET  /play        audience phone view (PWA-ish)
 //   GET  /events      SSE stream of public game state
 //   GET  /state       JSON snapshot (for the slide updater / tests)
-//   POST /join        {clientId, name}
-//   POST /vote        {clientId, option}
+//   POST /join        {name, playerId?, secret?}  -> {playerId, secret, name}
+//   POST /vote        {playerId, secret, option}
+//   POST /me          {playerId, secret}  -> own score/gain/verdict
 //   POST /host/ask    {question, options[], correct, timeLimit?}   (needs host token)
 //   POST /host/reveal                                              (needs host token)
 //   POST /host/next                                                (needs host token)
@@ -36,6 +37,19 @@ const DEFAULT_TIME_LIMIT = 20; // seconds; speed bonus decays over this window
 const MIN_TIME_LIMIT = 5;
 const MAX_TIME_LIMIT = 300;
 const MAX_PLAYERS = 500; // cap in-memory growth from a join loop
+
+// --- public-hardening knobs (see SKILL.md "Going live") ---------------------
+// Per-IP fixed-window rate limit on the audience endpoints (/join, /vote).
+// MAX_PLAYERS bounds memory; this bounds request CHURN from a single source.
+const RATE_WINDOW_MS = Number(env.LIVE_GAME_RATE_WINDOW_MS ?? 10_000);
+const RATE_MAX = Number(env.LIVE_GAME_RATE_MAX ?? 60); // requests / window / IP
+// Drop an SSE consumer that has let this many bytes pile up unsent (a slow or
+// hostile client that never drains). Bounds per-connection server memory.
+const MAX_SSE_BUFFER = Number(env.LIVE_GAME_MAX_SSE_BUFFER ?? 1_000_000); // 1MB
+// Behind a tunnel (ngrok / Tailscale Funnel) the socket peer is the tunnel
+// agent, so the real client IP arrives in X-Forwarded-For. Only trust XFF when
+// explicitly told to — otherwise a client could spoof its rate-limit bucket.
+const TRUST_PROXY = /^(1|true|yes)$/i.test(String(env.LIVE_GAME_TRUST_PROXY ?? ''));
 
 // The address phones should hit. A host screen is usually opened on localhost,
 // but the QR/join URL must be a LAN-reachable address — so the SERVER resolves
@@ -64,15 +78,52 @@ const game = {
   timeLimit: DEFAULT_TIME_LIMIT,
   round: 0,
 };
-/** clientId -> {name, score, answer, answeredAt, lastGain} */
+/** playerId (server-issued, opaque) -> {secret, name, score, answer, answeredAt, lastGain}
+ *  `secret` is a server-minted bearer credential: it is required to vote or read
+ *  one's own score, and is NEVER included in any broadcast / public state. */
 const players = new Map();
 /** live SSE response objects */
 const sseClients = new Set();
+/** per-IP request counts for the current fixed window (cleared on an interval) */
+let rateCounts = new Map();
 
 // ---- helpers ---------------------------------------------------------------
 function argFlag(name) {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
+}
+
+// Server-issued identity. playerId is the public handle (safe to store in the
+// client); secret is the bearer credential proving ownership of that handle.
+function mintId() { return crypto.randomBytes(9).toString('base64url'); }   // ~12 chars
+function mintSecret() { return crypto.randomBytes(24).toString('base64url'); }
+
+// Constant-time secret compare so a peer can't probe a secret byte-by-byte via
+// timing. Lengths differ → definitely not equal (and timingSafeEqual throws on
+// length mismatch), so guard that first.
+function secretOk(stored, given) {
+  if (typeof stored !== 'string' || typeof given !== 'string') return false;
+  const a = Buffer.from(stored), b = Buffer.from(given);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// The IP we attribute a request to for rate-limiting. Behind a trusted proxy,
+// the leftmost X-Forwarded-For entry is the origin client; otherwise the socket
+// peer. Trusting XFF without TRUST_PROXY would let a client forge its bucket.
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return String(xff).split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress ?? 'unknown';
+}
+
+// Fixed-window per-IP limiter. Returns true if the request is allowed. The
+// window is reset wholesale by a timer (see boot), which also bounds the map.
+function rateOk(ip) {
+  const n = (rateCounts.get(ip) ?? 0) + 1;
+  rateCounts.set(ip, n);
+  return n <= RATE_MAX;
 }
 
 function tallies() {
@@ -115,7 +166,19 @@ function publicState() {
 function broadcast() {
   const payload = `data: ${JSON.stringify(publicState())}\n\n`;
   for (const res of sseClients) {
-    try { res.write(payload); } catch { sseClients.delete(res); }
+    // Drop a consumer that isn't draining: if the socket already has a large
+    // unsent backlog, this client is slow/dead/hostile and would otherwise grow
+    // server memory unbounded. res.write() returning false signals kernel-buffer
+    // backpressure but is itself harmless for one frame; the buffered-bytes
+    // threshold is what actually bounds memory.
+    try {
+      if (res.writableLength > MAX_SSE_BUFFER) {
+        sseClients.delete(res);
+        res.destroy();
+        continue;
+      }
+      res.write(payload);
+    } catch { sseClients.delete(res); }
   }
 }
 
@@ -191,27 +254,42 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, publicState());
   }
 
-  // --- player join ---
+  // --- player join (server issues identity) ---
   if (req.method === 'POST' && path === '/join') {
+    if (!rateOk(clientIp(req))) return json(res, 429, { error: 'slow down' });
     const body = await readBody(req);
-    const id = String(body.clientId || '').slice(0, 64);
     const name = String(body.name || '').trim().slice(0, 24) || 'anon';
-    if (!id) return json(res, 400, { error: 'clientId required' });
-    const existing = players.get(id);
-    if (!existing && players.size >= MAX_PLAYERS)
-      return json(res, 503, { error: 'game full' });
-    players.set(id, existing
-      ? { ...existing, name }
-      : { name, score: 0, answer: null, answeredAt: 0, lastGain: 0 });
+
+    // Re-auth path: a returning client presents the {playerId, secret} the
+    // server issued earlier. Only a matching secret may reclaim that identity
+    // (and rename it) — this is what stops a peer from hijacking another's id.
+    const reqId = String(body.playerId || '');
+    const existing = reqId ? players.get(reqId) : undefined;
+    if (existing && secretOk(existing.secret, String(body.secret || ''))) {
+      existing.name = name;
+      broadcast();
+      return json(res, 200, { ok: true, playerId: reqId, secret: existing.secret, name });
+    }
+
+    // Fresh identity: mint a new opaque id + secret. A stale/forged playerId
+    // falls through to here and simply gets a brand-new identity (no hijack).
+    if (players.size >= MAX_PLAYERS) return json(res, 503, { error: 'game full' });
+    const playerId = mintId();
+    const secret = mintSecret();
+    players.set(playerId, { secret, name, score: 0, answer: null, answeredAt: 0, lastGain: 0 });
     broadcast();
-    return json(res, 200, { ok: true });
+    return json(res, 200, { ok: true, playerId, secret, name });
   }
 
-  // --- player vote ---
+  // --- player vote (secret-authenticated) ---
   if (req.method === 'POST' && path === '/vote') {
+    if (!rateOk(clientIp(req))) return json(res, 429, { error: 'slow down' });
     const body = await readBody(req);
-    const p = players.get(String(body.clientId || ''));
-    if (!p) return json(res, 404, { error: 'join first' });
+    const p = players.get(String(body.playerId || ''));
+    // A vote is only honored for the identity whose secret it proves. Unknown
+    // id OR wrong secret → same opaque 403 (don't reveal which ids exist).
+    if (!p || !secretOk(p.secret, String(body.secret || '')))
+      return json(res, 403, { error: 'bad credentials' });
     if (game.phase !== 'question') return json(res, 409, { error: 'no live question' });
     if (p.answer != null) return json(res, 200, { ok: true, locked: true }); // first answer locks
     const opt = Number(body.option);
@@ -221,6 +299,28 @@ const server = http.createServer(async (req, res) => {
     p.answeredAt = Date.now();
     broadcast();
     return json(res, 200, { ok: true });
+  }
+
+  // --- player self-state (secret-authenticated) ---
+  // The leaderboard is broadcast with NAMES only (never playerIds — that would
+  // leak the credential handle). So a phone can't reliably find itself in a
+  // shared broadcast when names collide or it's outside the top 10. This endpoint
+  // returns the caller's OWN authoritative score/gain/verdict, id-based and
+  // authenticated, with no public leak.
+  if (req.method === 'POST' && path === '/me') {
+    const body = await readBody(req);
+    const p = players.get(String(body.playerId || ''));
+    if (!p || !secretOk(p.secret, String(body.secret || '')))
+      return json(res, 403, { error: 'bad credentials' });
+    const revealed = game.phase === 'reveal';
+    return json(res, 200, {
+      ok: true,
+      name: p.name,
+      score: p.score,
+      lastGain: p.lastGain ?? 0,
+      answer: p.answer,
+      correct: revealed ? (p.answer === game.correct) : null,
+    });
   }
 
   // --- host: ask a new question ---
@@ -321,9 +421,8 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
 </style></head><body><div class=wrap>
  <h1>🎮 Live Game — Host screen</h1>
  <div class=join>
-   <img id=qr width=120 height=120 alt="join QR">
-   <div><div style="font-size:14px;color:#9aa">Players join at</div>
-   <div id=joinurl style="font-size:26px;font-weight:700;color:#fff"></div>
+   <div style="flex:1"><div style="font-size:14px;color:#9aa">Players join at</div>
+   <div id=joinurl style="font-size:40px;font-weight:800;color:#fff;letter-spacing:.5px"></div>
    <div class=meta><span id=pc>0</span> players · round <span id=rd>0</span></div></div>
  </div>
  <div id=stage></div>
@@ -331,14 +430,16 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
  <small>Game Master drives questions via <code>POST /host/ask</code>. Host token in this page's URL.</small>
 </div><script>
 const stage = document.getElementById('stage');
-let qrSet = false;
+let joinSet = false;
 function setJoin(joinUrl){
   // The server resolves a LAN-reachable join URL; do NOT use location.origin
   // (the host screen is usually on localhost, which a phone can't reach).
-  if(qrSet || !joinUrl) return; qrSet = true;
+  // We render the URL prominently rather than calling a third-party QR service:
+  // that kept the "zero-dependency / offline gameplay" promise and stopped
+  // leaking the (private) join URL to an external host. (A self-hosted inline
+  // QR encoder is a tracked follow-up.)
+  if(joinSet || !joinUrl) return; joinSet = true;
   document.getElementById('joinurl').textContent = joinUrl.replace(/^https?:\\/\\//,'');
-  document.getElementById('qr').src =
-    'https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=' + encodeURIComponent(joinUrl);
 }
 function render(s){
   setJoin(s.joinUrl);
@@ -384,13 +485,33 @@ const PLAY_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
  .me{color:#9aa;text-align:center;margin-top:auto;padding-top:16px}
  .gain{color:#3ddc84;font-weight:700}
 </style></head><body><div class=wrap id=app></div><script>
-let clientId = localStorage.getItem('lg-id');
-if(!clientId){ clientId = Math.random().toString(36).slice(2); localStorage.setItem('lg-id',clientId); }
+// Identity is SERVER-issued: we hold an opaque playerId + a secret credential,
+// both minted by /join and persisted locally. We never invent our own id — a
+// self-asserted id is exactly the hijack vector this view was hardened against.
+let playerId = localStorage.getItem('lg-id') || '';
+let secret = localStorage.getItem('lg-secret') || '';
 let name = localStorage.getItem('lg-name') || '';
-let myAnswer = null, myScore = 0, lastRound = -1;
+let myAnswer = null, lastRound = -1, lastPhase = '', mySelf = null;
 const app=document.getElementById('app');
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function post(p,b){return fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)})}
+
+// Join (or re-auth). The server returns our identity; store whatever it issues.
+async function join(){
+  const r=await post('/join',{name,playerId,secret});
+  const d=await r.json().catch(()=>null);
+  if(d&&d.playerId){ playerId=d.playerId; secret=d.secret;
+    localStorage.setItem('lg-id',playerId); localStorage.setItem('lg-secret',secret); }
+  return d;
+}
+// Fetch OUR authoritative score/verdict (id-based, authenticated — works even
+// with duplicate names or when we're outside the broadcast top-10).
+async function fetchMe(){
+  if(!playerId||!secret) return;
+  const r=await post('/me',{playerId,secret});
+  const d=await r.json().catch(()=>null);
+  if(d&&d.ok){ mySelf=d; render(lastState); }
+}
 
 function joinView(){
   app.innerHTML='<h2>🎮 Join the game</h2><input id=nm placeholder="Your name" value="'+esc(name)+'">'+
@@ -398,42 +519,51 @@ function joinView(){
   document.getElementById('go').onclick=async()=>{
     name=document.getElementById('nm').value.trim()||'anon';
     localStorage.setItem('lg-name',name);
-    await post('/join',{clientId,name}); joined=true; render(lastState);
+    await join(); render(lastState);
   };
 }
-let joined = !!name, lastState=null;
+let lastState=null;
+function joined(){ return !!playerId && !!name; }
 function render(s){
   lastState=s; if(!s) return;
-  if(!joined){ joinView(); return; }
-  if(s.round!==lastRound){ myAnswer=null; lastRound=s.round; }
+  if(!joined()){ joinView(); return; }
+  if(s.round!==lastRound){ myAnswer=null; mySelf=null; lastRound=s.round; }
+  // On entering reveal, pull our own authoritative score once.
+  if(s.phase!==lastPhase){ lastPhase=s.phase; if(s.phase==='reveal') fetchMe(); }
   const letters='ABCDEF';
-  if(s.phase==='lobby'){ app.innerHTML='<div class=big>Hang tight…<br>next question incoming</div>'+meId(); return; }
+  if(s.phase==='lobby'){ app.innerHTML='<div class=big>Hang tight…<br>next question incoming</div>'+meTag(); return; }
   if(s.phase==='question'){
     let html='<div class=q>'+esc(s.question)+'</div>';
     s.options.forEach((o,i)=>{ html+='<button class="opt o'+i+'" data-i="'+i+'" '+(myAnswer!=null?'disabled':'')+'>'+
       letters[i]+'. '+esc(o)+'</button>'; });
     if(myAnswer!=null) html+='<div class=big>✅ Locked in '+letters[myAnswer]+'</div>';
-    app.innerHTML=html+meId();
+    app.innerHTML=html+meTag();
     app.querySelectorAll('.opt').forEach(b=>b.onclick=async()=>{
-      myAnswer=Number(b.dataset.i); render(s); await post('/vote',{clientId,option:myAnswer});
+      myAnswer=Number(b.dataset.i); render(s); await post('/vote',{playerId,secret,option:myAnswer});
     });
     return;
   }
   if(s.phase==='reveal'){
-    const me=(s.leaderboard||[]).find(p=>p.name===name);
+    // Verdict is computed from our OWN vote (always correct); score/gain come
+    // from /me (mySelf) once it resolves.
     const right = myAnswer===s.correct;
     app.innerHTML='<div class=big>'+(myAnswer==null?'⏳ No answer':(right?'🎉 Correct!':'❌ '+letters[s.correct]+' was right'))+
-      (me&&me.lastGain?'<div class=gain>+'+me.lastGain+'</div>':'')+'</div>'+meId();
+      (mySelf&&mySelf.lastGain?'<div class=gain>+'+mySelf.lastGain+'</div>':'')+'</div>'+meTag();
     return;
   }
 }
-function meId(){ const me=(lastState&&lastState.leaderboard||[]).find(p=>p.name===name);
-  return '<div class=me>'+esc(name)+(me?' · '+me.score+' pts':'')+'</div>'; }
+function meTag(){ return '<div class=me>'+esc(name)+(mySelf?' · '+mySelf.score+' pts':'')+'</div>'; }
 const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data));
-if(joined) post('/join',{clientId,name});
+// Returning player (already has identity + name): re-auth on load.
+if(joined()) join();
 </script></body></html>`;
 
 // ---- boot ------------------------------------------------------------------
+// Reset the per-IP rate window wholesale on a timer. Swapping the map (rather
+// than mutating) also bounds its growth — stale IPs vanish each window. unref()
+// so this timer never by itself keeps the process alive.
+setInterval(() => { rateCounts = new Map(); }, RATE_WINDOW_MS).unref();
+
 server.listen(PORT, () => {
   const host = `http://localhost:${PORT}`;
   console.log(`\n🎮 live-game running`);
