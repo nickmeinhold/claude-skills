@@ -16,7 +16,7 @@ Three AI reviewers enter. One PR leaves (hopefully improved).
 Source the environment:
 
 ```bash
-source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 Get repo info:
@@ -411,15 +411,15 @@ Generate App tokens in parallel — independent calls to the same helper script.
 
 ```bash
 # Generate short-lived installation tokens for Maxwell + Kelvin (+ Carnot) Apps in parallel.
-~/.claude-skills/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
+~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
-  ~/.claude-skills/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" > /tmp/kelvin-token-$1 &
+  ~/.claude/scripts/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO" > /tmp/kelvin-token-$1 &
 fi
 # Carnot App token only if the App is configured AND Carnot produced a review.
 CARNOT_APP_CONFIGURED=0
 if [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNOT_PRIVATE_KEY_B64:-}" ]; then
   CARNOT_APP_CONFIGURED=1
-  ~/.claude-skills/github-app-token.sh "$CARNOT_APP_ID" "$CARNOT_PRIVATE_KEY_B64" "$REPO" > /tmp/carnot-token-$1 &
+  ~/.claude/scripts/github-app-token.sh "$CARNOT_APP_ID" "$CARNOT_PRIVATE_KEY_B64" "$REPO" > /tmp/carnot-token-$1 &
 fi
 wait
 MAXWELL_TOKEN=$(cat /tmp/maxwell-token-$1)

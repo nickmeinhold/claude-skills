@@ -26,7 +26,7 @@ Perform project management action: $1 $2
 **IMPORTANT:** Always source the environment file before running any `gh` commands:
 
 ```bash
-source ~/.claude-skills/.env 2>/dev/null || source .env 2>/dev/null
+source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 ```
 
 This loads the `CLAUDE_PM_PAT` token required for GitHub API operations.
