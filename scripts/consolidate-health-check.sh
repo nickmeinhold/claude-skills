@@ -28,10 +28,12 @@
 #      invisible for 132 cycles. Breach: unresolvable% > --unresolvable-pct.
 #   2. eviction-budget — directive-layer bytes vs --budget, using the SAME
 #      formula the eviction audit uses (grep feedback_*/concept_* pointer lines
-#      in CLAUDE.md, wc -c). Breach: layer bytes > budget.
-#   3. wall-clock baseline — reports timing.jsonl accrual (the Step-1 prerequisite
-#      for drift detection). Drift flag activates only once >=3 datapoints exist;
-#      until then it is informational (shown with --verbose/--json, never a breach).
+#      in CLAUDE.md, wc -c). Breach: layer bytes > budget. The --budget default
+#      (24576) is the SINGLE SOURCE for the cap; SKILL Trigger A references it.
+#   3. wall-clock drift — robust + retry-aware. Baseline = prior NON-retried runs;
+#      fence = median + K·MAD (immune to outliers). A retried LATEST run is annotated
+#      (INFO), never a breach. Activates once >=5 clean datapoints exist; until then
+#      informational. Breach: a retry-free run beyond the robust fence.
 #
 # CONFIG (flag overrides env overrides default):
 #   --window N              HEALTH_WINDOW            (default 10)
@@ -53,6 +55,10 @@ set -euo pipefail
 WINDOW="${HEALTH_WINDOW:-10}"
 UNRESOLVABLE_PCT="${HEALTH_UNRESOLVABLE_PCT:-60}"
 MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
+# *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
+# 24576 = 24 KiB (24*1024). This ONE number is the directive-layer budget; the
+# /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
+# than restating "~24KB" — so the two cannot drift. Tune here, nowhere else.
 BUDGET="${HEALTH_BUDGET:-24576}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
@@ -147,8 +153,21 @@ else:
               f"trigger+pointer before evicting cold ones. Run the Wrap-up eviction audit.")
     add("eviction-budget", "BREACH" if breach else "GREEN", head, detail if breach else "")
 
-# --- Check 3: wall-clock baseline (Step-1 prerequisite for drift) --------------
-times = []
+# --- Check 3: wall-clock drift (robust + retry-aware) --------------------------
+# The naive mean+2σ had two failure modes (task #6, the detector flagged its OWN
+# run): (a) a retry-inflated run — an agent socket-death + full re-run balloons
+# wall_s — false-positives as a "DAG perf regression" when the cause is a benign
+# retry; (b) a tiny/noisy baseline (n=2) makes the bound meaningless. Fixes:
+#   - read an optional per-datapoint "retried" flag; a retried LATEST run is
+#     annotated (INFO), never a breach — the timer counted a retry, not the DAG.
+#   - EXCLUDE retried runs from the baseline so they don't define "normal".
+#   - robust fence = median + K·MAD (MAD scaled to σ via 1.4826), so an UNflagged
+#     historical outlier (the old datapoints predate the flag) can't distort it;
+#     relative ×1.5 fallback when MAD==0 (degenerate identical baseline).
+#   - require >= MIN_BASELINE clean points before activating (was 3, too noisy).
+MIN_BASELINE = 5      # clean (non-retried) prior runs before drift activates
+DRIFT_K      = 3.0    # robust σ-equivalents above the median that counts as drift
+points = []           # [(wall_s, retried_bool)] in file order
 if os.path.isfile(timing_path):
     for line in open(timing_path, encoding="utf-8"):
         line = line.strip()
@@ -156,24 +175,42 @@ if os.path.isfile(timing_path):
             continue
         try:
             o = json.loads(line)
-            w = o.get("wall_s")
-            if isinstance(w, (int, float)):
-                times.append(float(w))
         except Exception:
             continue
-if len(times) < 3:
-    add("wall-clock-baseline", "INFO",
-        f"baseline accruing: {len(times)}/3 datapoints (drift detection inactive)")
+        w = o.get("wall_s")
+        if isinstance(w, (int, float)):
+            points.append((float(w), bool(o.get("retried", False))))
+
+if not points:
+    add("wall-clock-drift", "SKIP", "no timing datapoints yet")
 else:
-    prior, last = times[:-1], times[-1]
-    mean = statistics.fmean(prior)
-    sigma = statistics.pstdev(prior) if len(prior) > 1 else 0.0
-    bound = mean + 2 * sigma
-    breach = last > bound
-    head = f"last agent-phase {last:.0f}s vs baseline mean {mean:.0f}s (+2σ bound {bound:.0f}s, n={len(prior)})"
-    detail = ("The most recent consolidation ran beyond mean+2σ of the baseline — "
-              "a possible perf regression in the agent phase. Compare DAG concurrency / model tiers.")
-    add("wall-clock-baseline", "BREACH" if breach else "GREEN", head, detail if breach else "")
+    last_w, last_retried = points[-1]
+    baseline = [w for (w, r) in points[:-1] if not r]  # prior, non-retried runs only
+    if last_retried:
+        add("wall-clock-drift", "INFO",
+            f"latest run {last_w:.0f}s was retry-inflated — drift check skipped",
+            "wall_s includes a failed-agent retry/socket-death, not a DAG regression; excluded from the baseline too.")
+    elif len(baseline) < MIN_BASELINE:
+        add("wall-clock-drift", "INFO",
+            f"baseline accruing: {len(baseline)}/{MIN_BASELINE} clean datapoints (drift inactive)")
+    else:
+        med = statistics.median(baseline)
+        mad = statistics.median([abs(w - med) for w in baseline])
+        if mad > 0:
+            fence = med + DRIFT_K * 1.4826 * mad
+            spread = f"robust σ≈{1.4826*mad:.0f}s"
+        else:
+            fence = med * 1.5  # identical baseline — flag only a >50% jump
+            spread = "MAD=0, relative ×1.5"
+        breach = last_w > fence
+        head = (f"last agent-phase {last_w:.0f}s vs baseline median {med:.0f}s "
+                f"({spread}, fence {fence:.0f}s, n={len(baseline)} clean)")
+        detail = (f"The most recent (non-retried) consolidation ran beyond median+{DRIFT_K:g}·MAD of the "
+                  f"clean baseline. BEFORE concluding a DAG perf regression, confirm this run had NO agent "
+                  f"retry / socket-death / API stall — those inflate the phase timer and are the common benign "
+                  f"cause (mark such runs retried:true in timing.jsonl so they self-exclude). A real regression "
+                  f"shows elevated wall-clock on a retry-free run; then compare DAG concurrency / model tiers.")
+        add("wall-clock-drift", "BREACH" if breach else "GREEN", head, detail if breach else "")
 
 # --- emit ----------------------------------------------------------------------
 breaches = [c for c in checks if c["status"] == "BREACH"]
