@@ -63,58 +63,28 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
 
-      - name: Run bats — normalize-frontmatter contract
-        run: |
-          if compgen -G 'tests/normalize-frontmatter/*.bats' > /dev/null; then
-            bats tests/normalize-frontmatter/*.bats
-          else
-            echo "No normalize-frontmatter bats tests."
-          fi
+      # Guard the test harness itself BEFORE trusting it. bats runs bodies under
+      # `set -eET`, but the `[[ ]]` keyword and `!`-inverted commands are exempt
+      # from errexit — a false one that isn't a test's last command is silently
+      # swallowed, so the suite passes green while its assertion is a lie. The
+      # lint enforces the `|| fail` idiom so a green run is real evidence.
+      # See tests/helpers.bash + scripts/lint-bats-assertions.sh.
+      - name: Lint bats assertions (enforce the || fail guard)
+        run: bash scripts/lint-bats-assertions.sh tests
 
-      - name: Run bats — validate-frontmatter (canonical schema) contract
-        run: |
-          if compgen -G 'tests/validate-frontmatter/*.bats' > /dev/null; then
-            bats tests/validate-frontmatter/*.bats
-          else
-            echo "No validate-frontmatter bats tests."
-          fi
+      # Run EVERY suite, recursively. The previous per-suite steps enumerated
+      # suites by hand and silently OMITTED two that existed but never ran in CI
+      # (heal-memory-dir, live-game). `bats -r` can't drop a suite — a new
+      # tests/<name>/*.bats is picked up automatically, no CI edit required.
+      - name: Run all bats suites
+        run: bats -r tests
 
-      - name: Run bats — validate-scorecard (canonical scorecard schema) contract
-        run: |
-          if compgen -G 'tests/validate-scorecard/*.bats' > /dev/null; then
-            bats tests/validate-scorecard/*.bats
-          else
-            echo "No validate-scorecard bats tests."
-          fi
-
-      - name: Run bats — consolidate-health-check (immune response) contract
-        run: |
-          if compgen -G 'tests/consolidate-health-check/*.bats' > /dev/null; then
-            bats tests/consolidate-health-check/*.bats
-          else
-            echo "No consolidate-health-check bats tests."
-          fi
-
-      - name: Run bats — install-symlinks
-        run: |
-          if [ -d tests/install-symlinks ]; then
-            bats tests/install-symlinks/
-          else
-            echo "No install-symlinks bats tests."
-          fi
-
+      # Non-bats regression check (a plain bash script, not a .bats file, so the
+      # recursive bats run above does not cover it).
       - name: Run eval-tally regression test
         run: |
           if [ -f tests/eval-tally/run.sh ]; then
             bash tests/eval-tally/run.sh
           else
             echo "No eval-tally regression test."
-          fi
-
-      - name: Run bats — eval-tally writer/reader contract
-        run: |
-          if compgen -G 'tests/eval-tally/*.bats' > /dev/null; then
-            bats tests/eval-tally/*.bats
-          else
-            echo "No eval-tally bats tests."
           fi

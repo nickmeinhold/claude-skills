@@ -18,6 +18,8 @@
 # reader either finds it (test passes — both updated together) or doesn't
 # (test fails — drift detected at CI, not in production).
 
+load ../helpers
+
 setup() {
   REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   SCRIPT="${REPO_ROOT}/scripts/eval-tally.sh"
@@ -70,8 +72,8 @@ EOF
   write_minimal_fixtures "999"
 
   run env EVAL_ROOT_OVERRIDE="$EVAL_ROOT" bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Complete: 1 — 999"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"Complete: 1 — 999"* ]] || fail "output=$output"
 }
 
 @test "reader EXCLUDES dirs the writer creates for non-canonical (cross-fork) repos" {
@@ -83,7 +85,7 @@ EOF
   write_minimal_fixtures "999"
 
   run env EVAL_ROOT_OVERRIDE="$EVAL_ROOT" bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"None complete yet."* ]]
-  [[ "$output" != *"Complete:"*"999"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"None complete yet."* ]] || fail "output=$output"
+  [[ "$output" != *"Complete:"*"999"* ]] || fail "output=$output"
 }

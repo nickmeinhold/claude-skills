@@ -6,6 +6,8 @@
 # non-memory artifacts are skipped (issue #936), the --written fast path is scoped, and
 # heal's verdict can never disagree with the canonical validator (shared module).
 
+load ../helpers
+
 setup() {
   REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   HEAL="${REPO_ROOT}/scripts/heal-memory-dir.sh"
@@ -56,51 +58,52 @@ EOF
   canonical "$SANDBOX/feedback_a.md"
   canonical "$SANDBOX/concept_b.md"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"healed=0"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"healed=0"* ]] || fail "output=$output"
 }
 
 @test "a clean file is left byte-for-byte untouched (no spurious rewrite)" {
   canonical "$SANDBOX/feedback_a.md"
   before="$(cat "$SANDBOX/feedback_a.md")"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [ "$(cat "$SANDBOX/feedback_a.md")" = "$before" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [ "$(cat "$SANDBOX/feedback_a.md")" = "$before" ] || fail
 }
 
 # --- drift is healed, preserve-first ---------------------------------------
 @test "banned provenance is stripped and the file becomes valid" {
   drifted "$SANDBOX/feedback_a.md" repo
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"healed=1"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"healed=1"* ]] || fail "output=$output"
   run bash "$VALIDATE" "$SANDBOX/feedback_a.md"
-  [ "$status" -eq 0 ]
-  ! grep -q 'node_type\|originSessionId' "$SANDBOX/feedback_a.md"
+  [ "$status" -eq 0 ] || fail "status=$status"
+  ! grep -q 'node_type\|originSessionId' "$SANDBOX/feedback_a.md" || fail
 }
 
 @test "scope: universal is preserved through a heal, never clobbered to repo" {
   drifted "$SANDBOX/feedback_a.md" universal
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
   grep -q 'scope: universal' "$SANDBOX/feedback_a.md"
 }
 
 @test "the body survives a heal byte-for-byte" {
   drifted "$SANDBOX/feedback_a.md" repo
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
   grep -q 'body that must survive byte-for-byte.' "$SANDBOX/feedback_a.md"
 }
 
 @test "heal is idempotent — a second pass heals nothing" {
   drifted "$SANDBOX/feedback_a.md" meta
-  run bash "$HEAL" "$SANDBOX" --no-llm; [ "$status" -eq 0 ]
+  run bash "$HEAL" "$SANDBOX" --no-llm
+  [ "$status" -eq 0 ] || fail "status=$status"
   first="$(cat "$SANDBOX/feedback_a.md")"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"healed=0"* ]]
-  [ "$(cat "$SANDBOX/feedback_a.md")" = "$first" ]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"healed=0"* ]] || fail "output=$output"
+  [ "$(cat "$SANDBOX/feedback_a.md")" = "$first" ] || fail
 }
 
 # --- issue #936: non-memory artifacts are skipped, never flagged ------------
@@ -108,9 +111,9 @@ EOF
   canonical "$SANDBOX/feedback_a.md"
   printf -- '- a graduation candidate line\n' > "$SANDBOX/claude-md-candidates.md"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"skipped=1"* ]]
-  [[ "$output" != *"INVALID"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"skipped=1"* ]] || fail "output=$output"
+  [[ "$output" != *"INVALID"* ]] || fail "output=$output"
 }
 
 @test "index files (MEMORY.md / MEMORY.*.md) are skipped" {
@@ -118,8 +121,8 @@ EOF
   printf '# MEMORY index\n' > "$SANDBOX/MEMORY.md"
   printf '# feedback shard\n' > "$SANDBOX/MEMORY.feedback.md"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"skipped=2"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"skipped=2"* ]] || fail "output=$output"
 }
 
 # --- --written fast path ----------------------------------------------------
@@ -127,8 +130,8 @@ EOF
   drifted "$SANDBOX/feedback_a.md" repo
   drifted "$SANDBOX/concept_b.md" repo
   run bash "$HEAL" "$SANDBOX" --written feedback_a.md --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"scanned=1"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"scanned=1"* ]] || fail "output=$output"
   # concept_b.md was NOT named, so it stays drifted
   grep -q 'node_type' "$SANDBOX/concept_b.md"
 }
@@ -136,17 +139,17 @@ EOF
 @test "--written naming a non-memory file skips it without flagging" {
   printf 'not a memory file\n' > "$SANDBOX/notes.md"
   run bash "$HEAL" "$SANDBOX" --written notes.md --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"skip (not a memory file): notes.md"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"skip (not a memory file): notes.md"* ]] || fail "output=$output"
 }
 
 # --- unfixable files surface as INVALID, exit 1 ----------------------------
 @test "an unfixable file (missing description, --no-llm) is INVALID and exits 1" {
   printf -- '---\nname: "Has Name"\nmetadata:\n  type: concept\n  scope: repo\n---\n# x\nbody\n' > "$SANDBOX/concept_x.md"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"INVALID concept_x.md"* ]]
-  [[ "$output" == *"FAILED=1"* ]]
+  [ "$status" -eq 1 ] || fail "status=$status"
+  [[ "$output" == *"INVALID concept_x.md"* ]] || fail "output=$output"
+  [[ "$output" == *"FAILED=1"* ]] || fail "output=$output"
 }
 
 # --- equivalence: heal's post-pass state always validates ------------------
@@ -155,18 +158,18 @@ EOF
   drifted "$SANDBOX/concept_b.md" universal
   drifted "$SANDBOX/user_c.md" meta
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
   run bash "$VALIDATE" "$SANDBOX"/*.md
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
 }
 
 # --- Carnot PR #80 findings ------------------------------------------------
 @test "agent_* is treated as a memory file and healed (KNOWN_PREFIXES gap, finding 1)" {
   drifted "$SANDBOX/agent_x.md" repo
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"healed=1"* ]]   # not skipped as a non-memory file
-  ! grep -q 'node_type' "$SANDBOX/agent_x.md"
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"healed=1"* ]] || fail "output=$output"   # not skipped as a non-memory file
+  ! grep -q 'node_type' "$SANDBOX/agent_x.md" || fail
 }
 
 @test "a YAML-sensitive metadata.type survives a heal as a quoted scalar (finding 3)" {
@@ -175,26 +178,26 @@ EOF
   # boolean and fails certification). If the emitter quoted it wrong, heal would exit 1.
   printf -- '---\nname: "T"\ndescription: "d"\nmetadata:\n  type: "yes"\n  scope: repo\n  node_type: memory\n---\nbody\n' > "$SANDBOX/feedback_y.md"
   run bash "$HEAL" "$SANDBOX" --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"healed=1"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"healed=1"* ]] || fail "output=$output"
   run bash "$VALIDATE" "$SANDBOX/feedback_y.md"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || fail "status=$status"
   grep -q 'type: "yes"' "$SANDBOX/feedback_y.md"
 }
 
 @test "empty --written is a no-op (scanned=0, exit 0)" {
   canonical "$SANDBOX/feedback_a.md"
   run bash "$HEAL" "$SANDBOX" --written --no-llm
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"scanned=0"* ]]
+  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"scanned=0"* ]] || fail "output=$output"
 }
 
 @test "--written a path OUTSIDE MEMORY_DIR is refused, exit 1 (finding 2, fail-closed)" {
   OUTSIDE="$(mktemp -d)"
   drifted "$OUTSIDE/feedback_evil.md" repo
   run bash "$HEAL" "$SANDBOX" --written "$OUTSIDE/feedback_evil.md" --no-llm
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"refused"* ]]
+  [ "$status" -eq 1 ] || fail "status=$status"
+  [[ "$output" == *"refused"* ]] || fail "output=$output"
   # the outside file was NOT mutated
   grep -q 'node_type' "$OUTSIDE/feedback_evil.md"
   rm -rf "$OUTSIDE"
@@ -203,10 +206,10 @@ EOF
 # --- usage -----------------------------------------------------------------
 @test "a missing directory is a usage error (exit 2)" {
   run bash "$HEAL" "$SANDBOX/does-not-exist"
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 2 ] || fail "status=$status"
 }
 
 @test "no arguments is a usage error (exit 2)" {
   run bash "$HEAL"
-  [ "$status" -eq 2 ]
+  [ "$status" -eq 2 ] || fail "status=$status"
 }
