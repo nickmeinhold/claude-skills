@@ -39,7 +39,9 @@ set -euo pipefail
 
 # Resolve this script's real dir (following a symlink install) to import the module.
 SRC="${BASH_SOURCE[0]}"
+_hops=0
 while [ -L "$SRC" ]; do
+  _hops=$((_hops + 1)); [ "$_hops" -gt 40 ] && { echo "ERROR: symlink cycle resolving $0" >&2; exit 2; }
   DIR="$(cd "$(dirname "$SRC")" && pwd)"; SRC="$(readlink "$SRC")"
   [ "${SRC#/}" = "$SRC" ] && SRC="$DIR/$SRC"
 done

@@ -26,8 +26,11 @@
 #
 #   --written: the files this session wrote — the ONLY files the harness can have
 #     re-injected into. The per-run fast path; pass the same list step 2a validates.
-#     Files outside MEMORY_DIR are allowed (resolved as given); non-memory-prefix files
-#     and index files (MEMORY*.md) are skipped with a note, never flagged (issue #936).
+#     Paths may be basenames (resolved against MEMORY_DIR) or absolute, BUT any path
+#     resolving OUTSIDE MEMORY_DIR is REFUSED (exit 1) — the SKILL "within this repo
+#     only" guardrail, enforced fail-closed so a stray path can never mutate another
+#     project's memory dir (Carnot, PR #80). Non-memory-prefix files and index files
+#     (MEMORY*.md) are skipped with a note, never flagged (issue #936).
 #   --no-llm: skip the conditional headless-`claude` fill (unattended / test runs). A
 #     file genuinely missing name/description then fails as unfixable instead of calling
 #     the model.
@@ -40,7 +43,9 @@ set -euo pipefail
 # Resolve this script's real directory (following a symlink install) so the python
 # heredoc can import the sibling memory_frontmatter.py module.
 SRC="${BASH_SOURCE[0]}"
+_hops=0
 while [ -L "$SRC" ]; do
+  _hops=$((_hops + 1)); [ "$_hops" -gt 40 ] && { echo "ERROR: symlink cycle resolving $0" >&2; exit 2; }
   DIR="$(cd "$(dirname "$SRC")" && pwd)"
   SRC="$(readlink "$SRC")"
   [ "${SRC#/}" = "$SRC" ] && SRC="$DIR/$SRC"  # relative symlink -> resolve against DIR
@@ -90,6 +95,19 @@ except ImportError:
 MEMORY_DIR = os.environ["MEMORY_DIR"]
 MODE = os.environ["MODE"]
 ALLOW_LLM = os.environ.get("ALLOW_LLM", "1") == "1"
+MEM_REAL = os.path.realpath(MEMORY_DIR)
+
+
+def _inside_memory_dir(path):
+    """Fail-closed containment: the resolved path must live under MEMORY_DIR. realpath
+    on both sides resolves symlinks (so a file symlinked OUT is caught) and commonpath
+    avoids the /a/memory vs /a/memoryX prefix trap a startswith check would miss."""
+    real = os.path.realpath(path)
+    try:
+        return os.path.commonpath([real, MEM_REAL]) == MEM_REAL and real != MEM_REAL
+    except ValueError:  # different drives (not on POSIX) — treat as outside
+        return False
+
 
 # Build the candidate file list.
 if MODE == "written":
@@ -108,6 +126,10 @@ for path in candidates:
         skipped += 1
         if MODE == "written":  # be explicit when the caller named it
             print(f"skip (not a memory file): {base}")
+        continue
+    if not _inside_memory_dir(path):
+        # Fail-closed: never mutate a file outside MEMORY_DIR (Carnot PR #80 finding 2).
+        failures.append((path, f"refused: resolves outside MEMORY_DIR ({MEM_REAL})"))
         continue
     if not os.path.isfile(path):
         failures.append((path, "no such file"))

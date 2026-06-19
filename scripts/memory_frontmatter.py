@@ -49,8 +49,23 @@ VALID_SCOPES = ("repo", "universal", "meta")
 KNOWN_PREFIXES = {
     "feedback", "concept", "project", "reference", "user",
     "session", "plan", "next", "technical", "bug", "org", "architecture",
-    "dreamscape",
+    "dreamscape", "agent",
 }
+
+
+# A `type` value is emitted as a BARE YAML scalar when it is a safe plain identifier
+# (the common case — type is the filename prefix, e.g. `feedback`), preserving the
+# unquoted convention. Anything YAML-sensitive (`yes`/`no`/`true`/`null`, a value with
+# `: ` or special chars) is double-quoted via json.dumps so the re-emit can never turn a
+# valid file into invalid YAML or coerce type to a bool/None (Carnot, PR #80 finding 3).
+_YAML_PLAIN_SAFE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+_YAML_RESERVED = {"true", "false", "yes", "no", "on", "off", "null", "none", "~"}
+
+
+def _yaml_scalar(s):
+    if _YAML_PLAIN_SAFE.match(s) and s.lower() not in _YAML_RESERVED:
+        return s
+    return json.dumps(s, ensure_ascii=False)
 
 
 def prefix_of(basename):
@@ -294,7 +309,7 @@ def compute_canonical(file_path, text=None, allow_llm=True):
         f"name: {json.dumps(name, ensure_ascii=False)}\n"
         f"description: {json.dumps(desc, ensure_ascii=False)}\n"
         "metadata:\n"
-        f"  type: {ftype}\n"
+        f"  type: {_yaml_scalar(ftype)}\n"
         f"  scope: {scope}\n"
         "---"
     )

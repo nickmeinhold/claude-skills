@@ -160,6 +160,46 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+# --- Carnot PR #80 findings ------------------------------------------------
+@test "agent_* is treated as a memory file and healed (KNOWN_PREFIXES gap, finding 1)" {
+  drifted "$SANDBOX/agent_x.md" repo
+  run bash "$HEAL" "$SANDBOX" --no-llm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"healed=1"* ]]   # not skipped as a non-memory file
+  ! grep -q 'node_type' "$SANDBOX/agent_x.md"
+}
+
+@test "a YAML-sensitive metadata.type survives a heal as a quoted scalar (finding 3)" {
+  # A VALID file carrying a quoted reserved-word type ("yes") plus drift (node_type).
+  # The rebuild must re-quote the type, not emit bare `type: yes` (which re-parses to a
+  # boolean and fails certification). If the emitter quoted it wrong, heal would exit 1.
+  printf -- '---\nname: "T"\ndescription: "d"\nmetadata:\n  type: "yes"\n  scope: repo\n  node_type: memory\n---\nbody\n' > "$SANDBOX/feedback_y.md"
+  run bash "$HEAL" "$SANDBOX" --no-llm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"healed=1"* ]]
+  run bash "$VALIDATE" "$SANDBOX/feedback_y.md"
+  [ "$status" -eq 0 ]
+  grep -q 'type: "yes"' "$SANDBOX/feedback_y.md"
+}
+
+@test "empty --written is a no-op (scanned=0, exit 0)" {
+  canonical "$SANDBOX/feedback_a.md"
+  run bash "$HEAL" "$SANDBOX" --written --no-llm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scanned=0"* ]]
+}
+
+@test "--written a path OUTSIDE MEMORY_DIR is refused, exit 1 (finding 2, fail-closed)" {
+  OUTSIDE="$(mktemp -d)"
+  drifted "$OUTSIDE/feedback_evil.md" repo
+  run bash "$HEAL" "$SANDBOX" --written "$OUTSIDE/feedback_evil.md" --no-llm
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused"* ]]
+  # the outside file was NOT mutated
+  grep -q 'node_type' "$OUTSIDE/feedback_evil.md"
+  rm -rf "$OUTSIDE"
+}
+
 # --- usage -----------------------------------------------------------------
 @test "a missing directory is a usage error (exit 2)" {
   run bash "$HEAL" "$SANDBOX/does-not-exist"
