@@ -121,9 +121,13 @@ doctrine in `~/.claude/CLAUDE.md`):
 ### Remaining caveats (named, not absorbed)
 
 - **Rate limiting attributes by socket IP** unless `LIVE_GAME_TRUST_PROXY=1`, in which
-  case it reads the leftmost `X-Forwarded-For`. Behind a tunnel, set `TRUST_PROXY` (and
-  ensure the tunnel sets a trustworthy XFF) or *all* clients share the tunnel's IP and
-  the limit becomes global rather than per-player.
+  case it reads the **rightmost** `X-Forwarded-For` entry — the address the nearest
+  (trusted) proxy actually observed, not the spoofable client-seeded leftmost entry.
+  This is correct for a **single** trusted proxy (the common tunnel case). With a
+  multi-proxy chain the rightmost is the nearest proxy rather than the origin client, so
+  per-player attribution can collapse to a proxy IP — set `TRUST_PROXY` only when exactly
+  one proxy you trust sits in front, otherwise the limit becomes coarser (per-proxy /
+  global) rather than per-player.
 - **The `secret` is a bearer token in `localStorage`.** Names are escaped (no stored
   XSS path to read it), but it is device-local — clearing storage or switching devices
   starts a fresh identity (score not transferred). Acceptable for a session-scoped game.

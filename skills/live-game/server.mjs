@@ -322,7 +322,7 @@ const server = http.createServer(async (req, res) => {
     // A vote is only honored for the identity whose secret it proves. Malformed
     // creds, unknown id, OR wrong secret → same opaque 403 (don't reveal which
     // ids exist, and enforce the string contract before the compare).
-    if (!p || !secretOk(p.secret, c.sec))
+    if (!c || !p || !secretOk(p.secret, c.sec))
       return json(res, 403, { error: 'bad credentials' });
     if (game.phase !== 'question') return json(res, 409, { error: 'no live question' });
     if (p.answer != null) return json(res, 200, { ok: true, locked: true }); // first answer locks
@@ -346,7 +346,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const c = creds(body);
     const p = c && players.get(c.id);
-    if (!p || !secretOk(p.secret, c.sec))
+    if (!c || !p || !secretOk(p.secret, c.sec))
       return json(res, 403, { error: 'bad credentials' });
     const revealed = game.phase === 'reveal';
     return json(res, 200, {
@@ -541,12 +541,20 @@ async function join(){
   return d;
 }
 // Fetch OUR authoritative score/verdict (id-based, authenticated — works even
-// with duplicate names or when we're outside the broadcast top-10).
-async function fetchMe(){
-  if(!playerId||!secret) return;
-  const r=await post('/me',{playerId,secret});
-  const d=await r.json().catch(()=>null);
-  if(d&&d.ok){ mySelf=d; render(lastState); }
+// with duplicate names or when we're outside the broadcast top-10). Retries a
+// couple of times so a transient throttle/network blip doesn't strand the
+// reveal view on its pending state.
+let meFetching=false;
+async function fetchMe(tries){
+  if(!playerId||!secret||meFetching) return;
+  meFetching=true;
+  try{
+    const r=await post('/me',{playerId,secret});
+    const d=await r.json().catch(()=>null);
+    if(d&&d.ok){ mySelf=d; render(lastState); return; }
+  }catch(e){}
+  finally{ meFetching=false; }
+  if((tries||0)<3) setTimeout(()=>fetchMe((tries||0)+1), 400);
 }
 
 function joinView(){
@@ -580,14 +588,13 @@ function render(s){
     return;
   }
   if(s.phase==='reveal'){
-    // Verdict + gain come from the SERVER (mySelf, via /me) once it resolves —
-    // authoritative and refresh-proof. Fall back to the local click cache only
-    // for the brief window before /me returns (a fresh refresh has myAnswer=null
-    // but mySelf will carry the real recorded answer).
-    const myA = mySelf ? mySelf.answer : myAnswer;
-    const right = mySelf ? mySelf.correct : (myAnswer===s.correct);
-    app.innerHTML='<div class=big>'+(myA==null?'⏳ No answer':(right?'🎉 Correct!':'❌ '+letters[s.correct]+' was right'))+
-      (mySelf&&mySelf.lastGain?'<div class=gain>+'+mySelf.lastGain+'</div>':'')+'</div>'+meTag();
+    // Verdict + gain are ALWAYS the SERVER's (mySelf, via /me) — never the local
+    // click cache, which can be optimistically set for a vote the server
+    // throttled/never recorded. Until /me resolves we show a pending state
+    // rather than risk a wrong correct/incorrect flash.
+    if(!mySelf){ if(!meFetching) fetchMe(); app.innerHTML='<div class=big>⏳ Checking your answer…</div>'+meTag(); return; }
+    app.innerHTML='<div class=big>'+(mySelf.answer==null?'⏳ No answer':(mySelf.correct?'🎉 Correct!':'❌ '+letters[s.correct]+' was right'))+
+      (mySelf.lastGain?'<div class=gain>+'+mySelf.lastGain+'</div>':'')+'</div>'+meTag();
     return;
   }
 }
