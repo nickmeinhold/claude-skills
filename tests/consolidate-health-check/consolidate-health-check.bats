@@ -140,19 +140,46 @@ run_hc() {
   [[ "$output" == *"not found"* ]]
 }
 
-# --- wall-clock baseline ------------------------------------------------------
-@test "wall-clock stays INFO until 3 datapoints" {
-  printf '{"wall_s": 100}\n{"wall_s": 110}\n' > "$TIMING"
+# --- wall-clock drift (robust + retry-aware) ----------------------------------
+@test "wall-clock stays INFO until 5 clean datapoints" {
+  # 5 datapoints: the last is the "current run", leaving 4 baseline -> still accruing.
+  printf '{"wall_s":100}\n{"wall_s":110}\n{"wall_s":105}\n{"wall_s":108}\n{"wall_s":103}\n' > "$TIMING"
   run_hc --verbose
-  [[ "$output" == *"baseline accruing: 2/3"* ]]
-  [ "$status" -eq 0 ]   # INFO is not a breach
+  [ "$status" -eq 0 ]                                         # INFO is not a breach
+  [[ "$output" == *"baseline accruing: 4/5"* ]]              # 5 points - 1 current = 4 baseline
 }
 
-@test "wall-clock drift breaches when latest run spikes past mean+2sigma" {
-  printf '{"wall_s": 100}\n{"wall_s": 102}\n{"wall_s": 98}\n{"wall_s": 300}\n' > "$TIMING"
+@test "wall-clock drift breaches when a RETRY-FREE latest run spikes past median+K·MAD" {
+  printf '{"wall_s":100}\n{"wall_s":102}\n{"wall_s":98}\n{"wall_s":101}\n{"wall_s":99}\n{"wall_s":300}\n' > "$TIMING"
   run_hc
   [ "$status" -eq 10 ]
-  [[ "$output" == *"wall-clock-baseline"* ]]
+  [[ "$output" == *"wall-clock-drift"* ]]
+  [[ "$output" == *"NO agent retry"* ]]   # honest message: check for retries before regression
+}
+
+@test "a retry-inflated LATEST run is INFO, never a breach (the #6 fix)" {
+  printf '{"wall_s":100}\n{"wall_s":102}\n{"wall_s":98}\n{"wall_s":101}\n{"wall_s":99}\n{"wall_s":2500,"retried":true}\n' > "$TIMING"
+  run_hc --verbose
+  [ "$status" -eq 0 ]   # NOT a breach
+  [[ "$output" == *"retry-inflated"* ]]
+}
+
+@test "retried is STRICT boolean — a string \"false\" is NOT treated as retried (finding 3)" {
+  # bool("false") would be True (non-empty string) and wrongly downgrade this spike to
+  # INFO; `is True` keeps it as a real, breaching drift. Strings fail safe to not-retried.
+  printf '{"wall_s":100}\n{"wall_s":102}\n{"wall_s":98}\n{"wall_s":101}\n{"wall_s":99}\n{"wall_s":300,"retried":"false"}\n' > "$TIMING"
+  run_hc
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"wall-clock-drift"* ]]
+}
+
+@test "a retried run is EXCLUDED from the baseline so it can't distort the fence" {
+  # The 2500 retry is in the middle; without exclusion it would inflate the median
+  # and mask the genuine 300 spike. With exclusion, the clean baseline (~100) flags 300.
+  printf '{"wall_s":100}\n{"wall_s":102}\n{"wall_s":2500,"retried":true}\n{"wall_s":98}\n{"wall_s":101}\n{"wall_s":99}\n{"wall_s":300}\n' > "$TIMING"
+  run_hc
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"wall-clock-drift"* ]]
 }
 
 # --- output modes -------------------------------------------------------------
