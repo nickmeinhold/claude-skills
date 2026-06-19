@@ -95,8 +95,25 @@ function argFlag(name) {
 
 // Server-issued identity. playerId is the public handle (safe to store in the
 // client); secret is the bearer credential proving ownership of that handle.
-function mintId() { return crypto.randomBytes(9).toString('base64url'); }   // ~12 chars
+// Regenerate on the (astronomically unlikely) collision so the id is provably
+// unique — keeps "one playerId = one identity" an exact invariant, not a
+// probabilistic one.
+function mintId() {
+  let id;
+  do { id = crypto.randomBytes(9).toString('base64url'); } while (players.has(id)); // ~12 chars
+  return id;
+}
 function mintSecret() { return crypto.randomBytes(24).toString('base64url'); }
+
+// Extract the bearer credential pair, enforcing the {playerId, secret} CONTRACT
+// at the boundary: both must be STRINGS. Rejecting array/object/missing here
+// (rather than String()-coercing) stops a payload like {"secret":["..."]} from
+// smuggling a scalar past the type-strict compare. Returns null if malformed.
+function creds(body) {
+  const id = body?.playerId, sec = body?.secret;
+  if (typeof id !== 'string' || typeof sec !== 'string') return null;
+  return { id, sec };
+}
 
 // Constant-time secret compare so a peer can't probe a secret byte-by-byte via
 // timing. Lengths differ → definitely not equal (and timingSafeEqual throws on
@@ -113,7 +130,14 @@ function secretOk(stored, given) {
 function clientIp(req) {
   if (TRUST_PROXY) {
     const xff = req.headers['x-forwarded-for'];
-    if (xff) return String(xff).split(',')[0].trim();
+    if (xff) {
+      // X-Forwarded-For is `client, proxy1, proxy2…`, each hop APPENDING. A
+      // client can pre-seed a forged leftmost entry, so the leftmost is
+      // attacker-controlled. The RIGHTMOST entry is what our (single, trusted)
+      // proxy actually observed — use that for rate-limit attribution.
+      const parts = String(xff).split(',').map((s) => s.trim()).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
   }
   return req.socket?.remoteAddress ?? 'unknown';
 }
@@ -244,7 +268,14 @@ const server = http.createServer(async (req, res) => {
     });
     res.write(`data: ${JSON.stringify(publicState())}\n\n`);
     sseClients.add(res);
-    const keepAlive = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15000);
+    // Keep-alive ping also honors the backpressure bound, so an idle-but-stuck
+    // consumer can't slip past the broadcast-side drop between questions.
+    const keepAlive = setInterval(() => {
+      try {
+        if (res.writableLength > MAX_SSE_BUFFER) { clearInterval(keepAlive); sseClients.delete(res); res.destroy(); return; }
+        res.write(': ping\n\n');
+      } catch {}
+    }, 15000);
     req.on('close', () => { clearInterval(keepAlive); sseClients.delete(res); });
     return;
   }
@@ -261,14 +292,15 @@ const server = http.createServer(async (req, res) => {
     const name = String(body.name || '').trim().slice(0, 24) || 'anon';
 
     // Re-auth path: a returning client presents the {playerId, secret} the
-    // server issued earlier. Only a matching secret may reclaim that identity
-    // (and rename it) — this is what stops a peer from hijacking another's id.
-    const reqId = String(body.playerId || '');
-    const existing = reqId ? players.get(reqId) : undefined;
-    if (existing && secretOk(existing.secret, String(body.secret || ''))) {
+    // server issued earlier. Only well-formed (string) creds whose secret
+    // matches may reclaim that identity (and rename it) — this is what stops a
+    // peer from hijacking another's id. Anything else falls through to a mint.
+    const c = creds(body);
+    const existing = c && players.get(c.id);
+    if (existing && secretOk(existing.secret, c.sec)) {
       existing.name = name;
       broadcast();
-      return json(res, 200, { ok: true, playerId: reqId, secret: existing.secret, name });
+      return json(res, 200, { ok: true, playerId: c.id, secret: existing.secret, name });
     }
 
     // Fresh identity: mint a new opaque id + secret. A stale/forged playerId
@@ -285,10 +317,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/vote') {
     if (!rateOk(clientIp(req))) return json(res, 429, { error: 'slow down' });
     const body = await readBody(req);
-    const p = players.get(String(body.playerId || ''));
-    // A vote is only honored for the identity whose secret it proves. Unknown
-    // id OR wrong secret → same opaque 403 (don't reveal which ids exist).
-    if (!p || !secretOk(p.secret, String(body.secret || '')))
+    const c = creds(body);
+    const p = c && players.get(c.id);
+    // A vote is only honored for the identity whose secret it proves. Malformed
+    // creds, unknown id, OR wrong secret → same opaque 403 (don't reveal which
+    // ids exist, and enforce the string contract before the compare).
+    if (!p || !secretOk(p.secret, c.sec))
       return json(res, 403, { error: 'bad credentials' });
     if (game.phase !== 'question') return json(res, 409, { error: 'no live question' });
     if (p.answer != null) return json(res, 200, { ok: true, locked: true }); // first answer locks
@@ -308,9 +342,11 @@ const server = http.createServer(async (req, res) => {
   // returns the caller's OWN authoritative score/gain/verdict, id-based and
   // authenticated, with no public leak.
   if (req.method === 'POST' && path === '/me') {
+    if (!rateOk(clientIp(req))) return json(res, 429, { error: 'slow down' });
     const body = await readBody(req);
-    const p = players.get(String(body.playerId || ''));
-    if (!p || !secretOk(p.secret, String(body.secret || '')))
+    const c = creds(body);
+    const p = c && players.get(c.id);
+    if (!p || !secretOk(p.secret, c.sec))
       return json(res, 403, { error: 'bad credentials' });
     const revealed = game.phase === 'reveal';
     return json(res, 200, {
@@ -544,10 +580,13 @@ function render(s){
     return;
   }
   if(s.phase==='reveal'){
-    // Verdict is computed from our OWN vote (always correct); score/gain come
-    // from /me (mySelf) once it resolves.
-    const right = myAnswer===s.correct;
-    app.innerHTML='<div class=big>'+(myAnswer==null?'⏳ No answer':(right?'🎉 Correct!':'❌ '+letters[s.correct]+' was right'))+
+    // Verdict + gain come from the SERVER (mySelf, via /me) once it resolves —
+    // authoritative and refresh-proof. Fall back to the local click cache only
+    // for the brief window before /me returns (a fresh refresh has myAnswer=null
+    // but mySelf will carry the real recorded answer).
+    const myA = mySelf ? mySelf.answer : myAnswer;
+    const right = mySelf ? mySelf.correct : (myAnswer===s.correct);
+    app.innerHTML='<div class=big>'+(myA==null?'⏳ No answer':(right?'🎉 Correct!':'❌ '+letters[s.correct]+' was right'))+
       (mySelf&&mySelf.lastGain?'<div class=gain>+'+mySelf.lastGain+'</div>':'')+'</div>'+meTag();
     return;
   }

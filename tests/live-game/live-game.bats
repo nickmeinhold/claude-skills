@@ -147,6 +147,20 @@ join() {
   [ "$(field "$output" 's.answered')" = "0" ] || fail "output=$output"
 }
 
+@test "credentials must be strings — an array-wrapped secret is rejected, not coerced" {
+  read AID ASEC < <(join Ada)
+  post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
+  # {"secret":["<real secret>"]} must NOT authenticate even though String() of it
+  # would equal the real secret — the bearer contract is string-typed at the gate.
+  run post /vote "{\"playerId\":\"$AID\",\"secret\":[\"$ASEC\"],\"option\":0}"
+  [ "$(field "$output" 's.error')" = "bad credentials" ] || fail "output=$output"
+  run post /me "{\"playerId\":[\"$AID\"],\"secret\":\"$ASEC\"}"
+  [ "$(field "$output" 's.error')" = "bad credentials" ] || fail "output=$output"
+  # Ada cast no real vote.
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.answered')" = "0" ] || fail "output=$output"
+}
+
 @test "a vote with an unknown playerId is rejected" {
   post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
   run post /vote '{"playerId":"nope","secret":"nope","option":0}'
