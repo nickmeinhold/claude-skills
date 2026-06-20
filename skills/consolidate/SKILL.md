@@ -25,6 +25,15 @@ Before starting, write a session summary to prime the agents. This is the critic
    SID="$(date +%Y-%m-%dT%H-%M-%S)"  # absolute timestamp, second-granularity (e.g. 2026-04-05T19-48-30)
    SD="$HOME/.claude/consolidation/$SID"   # absolute path; this is what agents receive
    mkdir -p "$SD/raw"                       # orchestrator-owned precondition for Phase 0a's marker-extractor (the only surviving raw/ writer)
+   # Self-heal the skill symlinks before any phase relies on them. The frontmatter
+   # normalizer + validators in ~/.claude/scripts/ are symlinks into this repo and
+   # have silently vanished mid-consolidation, forcing a manual re-link (the
+   # memory-writer then fell back to ad-hoc Python). install-symlinks.sh is
+   # idempotent (leaves correct links alone), so this is a cheap, always-safe
+   # precondition that makes the normalizer durable by construction (claude-tasks#983).
+   SKILLS_REPO="$HOME/git/individuals/nickmeinhold/claude-skills"
+   [ -f "$SKILLS_REPO/scripts/install-symlinks.sh" ] && \
+     bash "$SKILLS_REPO/scripts/install-symlinks.sh" >/dev/null 2>&1 || true
    ```
    All files for this run go into `$SD`. Parallel sessions get their own dated directories and never collide.
 
