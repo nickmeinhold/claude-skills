@@ -63,6 +63,13 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
 
+      # The live-game QR test (tests/live-game/qr.bats) diffs the offline encoder
+      # bit-for-bit against `qrencode` and round-trips its output through `zbarimg`.
+      # Install both so CI actually runs the foreign-oracle gate (the bats test
+      # skips LOUDLY if they're missing, but we want it RUN in CI, not skipped).
+      - name: Install qrencode + zbar (for the QR encoder oracle tests)
+        run: sudo apt-get update && sudo apt-get install -y qrencode zbar-tools
+
       # Guard the test harness itself BEFORE trusting it. bats runs bodies under
       # `set -eET`, but the `[[ ]]` keyword and `!`-inverted commands are exempt
       # from errexit — a false one that isn't a test's last command is silently
