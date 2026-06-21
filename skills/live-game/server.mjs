@@ -674,13 +674,9 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 // Re-render once a second while a timer/countdown is ticking (cheap; bars only
 // exist at reveal, so nothing animated is disrupted).
 setInterval(()=>{ if(last&&(last.phase==='question'||last.phase==='countdown')) render(last); },300);
-// Realtime via SSE, but never depend on it for correctness: first paint + a slow
-// poll come from plain GET /state, so a proxy that buffers the event-stream
-// (e.g. a Cloudflare tunnel) can't leave the board blank.
-function pull(){ fetch('/state').then(r=>r.json()).then(render).catch(()=>{}); }
-pull();
-try{ const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data)); }catch(e){}
-setInterval(pull, 2000);
+// Realtime via SSE only — EventSource auto-reconnects on a drop and the server
+// re-sends a full snapshot on connect, so no polling is needed.
+const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data));
 </script></body></html>`;
 
 const PLAY_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
@@ -843,13 +839,10 @@ setInterval(()=>{
   if(lastState.phase==='countdown') render(lastState);
   else if(lastState.phase==='question'){ const t=document.getElementById('qt'); if(t){ const n=secsLeft(lastState); t.textContent='⏱ '+n; t.className='qtimer'+(n<=5?' low':''); } }
 },300);
-// Realtime via SSE, with a /state poll fallback so a proxy that buffers the
-// event-stream (Cloudflare tunnel) can't strand the phone on a blank screen.
-function pull(){ fetch('/state').then(r=>r.json()).then(render).catch(()=>{}); }
-if(joined()) join();   // re-auth a returning player before the first pull
-pull();
-try{ const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data)); }catch(e){}
-setInterval(pull, 1500);
+// Realtime via SSE only — EventSource auto-reconnects on a drop and the server
+// re-sends a full snapshot on connect, so no polling is needed.
+const ev=new EventSource('/events'); ev.onmessage=e=>render(JSON.parse(e.data));
+if(joined()) join();   // re-auth a returning player on load
 </script></body></html>`;
 
 // ---- boot ------------------------------------------------------------------
