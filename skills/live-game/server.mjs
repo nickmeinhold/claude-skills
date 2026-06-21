@@ -71,7 +71,13 @@ function lanIp() {
   return (priv ?? v4[0])?.address ?? 'localhost';
 }
 const JOIN_HOST = env.LIVE_GAME_JOIN_HOST ?? `${lanIp()}:${PORT}`;
-const JOIN_URL = `http://${JOIN_HOST}/play`;
+// Scheme: an explicitly-provided host (LIVE_GAME_JOIN_HOST, i.e. a tunnel like
+// *.trycloudflare.com) terminates TLS at the edge, so it is HTTPS by default; a
+// resolved LAN host is plain HTTP. Hardcoding http:// here used to emit an
+// http:// QR for an https-only tunnel (phones hit a redirect or fail). Override
+// either way with LIVE_GAME_JOIN_SCHEME.
+const JOIN_SCHEME = env.LIVE_GAME_JOIN_SCHEME ?? (env.LIVE_GAME_JOIN_HOST ? 'https' : 'http');
+const JOIN_URL = `${JOIN_SCHEME}://${JOIN_HOST}/play`;
 
 // ---- game state ------------------------------------------------------------
 /** @type {{phase:'lobby'|'question'|'reveal', question:string, options:string[],
