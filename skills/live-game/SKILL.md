@@ -114,9 +114,13 @@ doctrine in `~/.claude/CLAUDE.md`):
   client can't grow server memory unbounded.
 - **No external quota is wired to audience actions.** The Game Master (Claude) generates
   questions out-of-band; an audience vote never triggers an LLM/API call — no
-  cost-amplification path. The host QR no longer calls a third party (the join URL is
-  rendered prominently instead — fully offline; an inline QR encoder is a tracked
-  follow-up).
+  cost-amplification path.
+- **The join QR is encoded in-process, fully offline.** `qr.mjs` is a dependency-free QR
+  encoder (byte mode, versions 1–6, Reed–Solomon EC) served at `GET /qr.mjs` and rendered
+  to inline SVG on the host screen — no `api.qrserver.com`, no npm dep, no leak of the
+  private LAN join URL. Verified bit-for-bit against `qrencode` (structural identity at a
+  shared mask) and round-tripped through `zbarimg` (the auto-masked output decodes back to
+  the join URL). See `tests/live-game/qr-matrixdiff.mjs` + `qr-unit.mjs`.
 
 ### Remaining caveats (named, not absorbed)
 

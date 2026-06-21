@@ -26,7 +26,14 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { readFileSync } from 'node:fs';
 import { argv, env } from 'node:process';
+
+// The QR encoder is a sibling ESM served verbatim to the host browser at
+// GET /qr.mjs (the host page does `await import('/qr.mjs')`). Reading it here
+// keeps ONE source of truth: the same file the test harness diffs against
+// `qrencode` is the one the browser runs — no inlined copy to drift.
+const QR_MODULE_SRC = readFileSync(new URL('./qr.mjs', import.meta.url), 'utf8');
 
 // ---- config ----------------------------------------------------------------
 const PORT = Number(argFlag('--port') ?? env.LIVE_GAME_PORT ?? 7373);
@@ -258,6 +265,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(PLAY_HTML);
   }
+  if (req.method === 'GET' && path === '/qr.mjs') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+    return res.end(QR_MODULE_SRC);
+  }
 
   // --- SSE stream ---
   if (req.method === 'GET' && path === '/events') {
@@ -444,7 +455,9 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
  .wrap{max-width:900px;margin:0 auto;padding:24px}
  h1{font-size:20px;color:#6cf;margin:0 0 4px}
  .join{display:flex;gap:20px;align-items:center;background:#1f1f2b;border-radius:12px;padding:16px;margin:16px 0}
- .join img{background:#fff;border-radius:8px}
+ .qr{background:#fff;border-radius:8px;padding:8px;line-height:0;flex:0 0 auto}
+ .qr svg{display:block;width:200px;height:200px}
+ .qr:empty{display:none}
  .q{font-size:34px;font-weight:700;margin:18px 0}
  .opt{display:flex;align-items:center;gap:12px;margin:10px 0;font-size:22px}
  .bar{height:34px;border-radius:6px;background:#3a3a52;min-width:4px;transition:width .4s}
@@ -457,6 +470,7 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
 </style></head><body><div class=wrap>
  <h1>🎮 Live Game — Host screen</h1>
  <div class=join>
+   <div id=qr class=qr></div>
    <div style="flex:1"><div style="font-size:14px;color:#9aa">Players join at</div>
    <div id=joinurl style="font-size:40px;font-weight:800;color:#fff;letter-spacing:.5px"></div>
    <div class=meta><span id=pc>0</span> players · round <span id=rd>0</span></div></div>
@@ -467,15 +481,25 @@ const HOST_HTML = /* html */ `<!doctype html><html><head><meta charset=utf-8>
 </div><script>
 const stage = document.getElementById('stage');
 let joinSet = false;
+// The QR encoder is served by THIS server at /qr.mjs (no external call, no npm
+// dep). We load it once; if the join URL arrives before it finishes loading, the
+// pending URL is drawn as soon as the module resolves.
+let qrLib = null, pendingQr = null;
+import('/qr.mjs').then(m => { qrLib = m; if(pendingQr) drawQr(pendingQr); })
+  .catch(e => console.error('QR module load failed', e));
+function drawQr(joinUrl){
+  if(!qrLib){ pendingQr = joinUrl; return; }
+  try {
+    // ECC level Q tolerates a projector glare / phone-camera angle better than L.
+    document.getElementById('qr').innerHTML = qrLib.qrSvg(qrLib.qrMatrix(joinUrl, 'Q'));
+  } catch(e){ console.error('QR render failed', e); }
+}
 function setJoin(joinUrl){
   // The server resolves a LAN-reachable join URL; do NOT use location.origin
   // (the host screen is usually on localhost, which a phone can't reach).
-  // We render the URL prominently rather than calling a third-party QR service:
-  // that kept the "zero-dependency / offline gameplay" promise and stopped
-  // leaking the (private) join URL to an external host. (A self-hosted inline
-  // QR encoder is a tracked follow-up.)
   if(joinSet || !joinUrl) return; joinSet = true;
   document.getElementById('joinurl').textContent = joinUrl.replace(/^https?:\\/\\//,'');
+  drawQr(joinUrl);
 }
 function render(s){
   setJoin(s.joinUrl);
