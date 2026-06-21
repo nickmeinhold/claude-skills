@@ -716,6 +716,10 @@ let playerId = localStorage.getItem('lg-id') || '';
 let secret = localStorage.getItem('lg-secret') || '';
 let name = localStorage.getItem('lg-name') || '';
 let myAnswer = null, lastRound = -1, lastPhase = '', mySelf = null;
+// Guard so a /state poll or SSE tick can't rebuild the join <input> while the
+// player is typing in it (innerHTML= would drop focus + wipe the field — it
+// "jumped to the button"). Render the join form once; the user's typing owns it.
+let joinShown = false;
 const app=document.getElementById('app');
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function post(p,b){return fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)})}
@@ -760,7 +764,8 @@ function secsLeft(s){ return Math.max(0,Math.ceil((s.startedAt+s.timeLimit*1000-
 function ord(n){ const t=n%100; if(t>=11&&t<=13) return n+'th'; return n+({1:'st',2:'nd',3:'rd'}[n%10]||'th'); }
 function render(s){
   lastState=s; if(!s) return;
-  if(!joined()){ joinView(); return; }
+  if(!joined()){ if(!joinShown){ joinView(); joinShown=true; } return; }
+  joinShown=false;
   if(s.round!==lastRound){ myAnswer=null; mySelf=null; lastRound=s.round; }
   if(s.phase!==lastPhase){
     lastPhase=s.phase;
@@ -853,7 +858,11 @@ setInterval(pull, 1500);
 // so this timer never by itself keeps the process alive.
 setInterval(() => { rateCounts = new Map(); }, RATE_WINDOW_MS).unref();
 
-server.listen(PORT, () => {
+// Bind address. Defaults to all interfaces (LAN play: phones hit the Mac's IP).
+// Behind a reverse proxy (e.g. Caddy on a server) set LIVE_GAME_BIND=127.0.0.1
+// so the port isn't reachable except through the proxy.
+const BIND = env.LIVE_GAME_BIND || '0.0.0.0';
+server.listen(PORT, BIND, () => {
   const host = `http://localhost:${PORT}`;
   console.log(`\n🎮 live-game running`);
   console.log(`   Host screen : ${host}/#${HOST_TOKEN}`);
