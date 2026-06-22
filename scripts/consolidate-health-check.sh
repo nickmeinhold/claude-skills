@@ -39,7 +39,7 @@
 #   --window N              HEALTH_WINDOW            (default 10)
 #   --unresolvable-pct PCT  HEALTH_UNRESOLVABLE_PCT  (default 60)
 #   --malformed-pct PCT     HEALTH_MALFORMED_PCT     (default 25)
-#   --budget BYTES          HEALTH_BUDGET            (default 24576)
+#   --budget BYTES          HEALTH_BUDGET            (default 28672)
 #   --claude-md PATH        HEALTH_CLAUDE_MD         (default ~/.claude/CLAUDE.md)
 #   --corpus-glob GLOB      HEALTH_CORPUS_GLOB       (default ~/.claude/consolidation/*/readtime-score.json)
 #   --timing PATH           HEALTH_TIMING            (default ~/.claude/consolidation/timing.jsonl)
@@ -56,10 +56,10 @@ WINDOW="${HEALTH_WINDOW:-10}"
 UNRESOLVABLE_PCT="${HEALTH_UNRESOLVABLE_PCT:-60}"
 MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
-# 24576 = 24 KiB (24*1024). This ONE number is the directive-layer budget; the
+# 28672 = 28 KiB (28*1024). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
 # than restating "~24KB" — so the two cannot drift. Tune here, nowhere else.
-BUDGET="${HEALTH_BUDGET:-24576}"
+BUDGET="${HEALTH_BUDGET:-28672}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
