@@ -32,35 +32,11 @@ Apply any local review criteria in addition to the standard review process.
    gh pr view $1 --json title,body,author,baseRefName,headRefName
    ```
 
-2. **Fetch the PR diff — verify the instrument is fresh before trusting the reading.**
-
-   `gh pr diff <n>` queries GitHub's API, which lags `git push` by seconds-to-minutes (propagation). When `/pr-review` is invoked right after a push (it is, in the `/ship` flow), the diff returned can be the **pre-push** code — so you review the wrong bytes and may REQUEST_CHANGES on "missing" fixes that are actually present. Pick the freshest source available:
+2. **Fetch the PR diff:**
 
    ```bash
-   PR_BASE=$(gh pr view $1 --json baseRefName --jq .baseRefName)
-   PR_HEAD_SHA=$(gh pr view $1 --json headRefOid --jq .headRefOid)
-   LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null)
-
-   if [ -n "$LOCAL_SHA" ] && [ "$LOCAL_SHA" = "$PR_HEAD_SHA" ] && git rev-parse --verify "origin/$PR_BASE" >/dev/null 2>&1; then
-     # The PR head is checked out locally → local diff has zero propagation lag.
-     git fetch origin "$PR_BASE" >/dev/null 2>&1
-     git diff "origin/$PR_BASE...HEAD"
-   else
-     # Reviewing a PR we didn't just push (or branch not checked out): use
-     # gh pr diff, but FRESHNESS-GATE it first — poll until GitHub's head SHA
-     # is stable, so we never review a still-propagating (stale) diff. When we
-     # DID just push (LOCAL_SHA set), gate on GitHub agreeing with our SHA.
-     for _ in $(seq 1 15); do
-       GH_SHA=$(gh pr view $1 --json headRefOid --jq .headRefOid 2>/dev/null)
-       [ -n "$LOCAL_SHA" ] && [ "$GH_SHA" = "$LOCAL_SHA" ] && break   # GitHub caught up to our push
-       [ -z "$LOCAL_SHA" ] && break                                   # not our push; take current head
-       sleep 2
-     done
-     gh pr diff $1
-   fi
+   gh pr diff $1
    ```
-
-   **Stale-diff canary (conservation-law check):** on a *re-review* after the author pushed fixes, if the new diff's line count is identical to the prior round's despite known edits, the diff is almost certainly stale — re-gather (re-fetch / re-poll the head SHA) before reviewing. A coherent-but-stale diff produces a coherent-but-wrong verdict; the line count is the cheap canary. (Root cause class: verify the instrument, not just the reading.)
 
 3. **Identify changed files:**
 

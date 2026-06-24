@@ -115,16 +115,8 @@ Create a new GitHub issue with proper labels.
 
 Types: bug, enhancement, task, research, performance, documentation
 
-**Backtick guard (this template is a model — don't copy the unsafe shape).** The `--body "Description"` / `--title "..."` forms below are placeholders. The moment real issue text contains a backtick, `$(...)`, or `$var` — and issue/PR text is FULL of `` `code_identifiers` `` — a double-quoted `--body "..."` command-substitutes it: bash runs the backtick span as a command, the issue silently gets a corrupted/truncated body (or a `command not found` swallows the span). This bit a real `git commit -m "...`pred`..."` on 2026-06-24. **When the body/title may contain backticks/`$()`/`$var`, write it to a file via a SINGLE-quoted heredoc and use `--body-file`** (or `git commit -F -`), never inline `--body "..."`:
 ```bash
-BODY_FILE="$(mktemp)"; cat > "$BODY_FILE" <<'BODY_EOF'
-...description text with `backticks` and $(whatever) — verbatim, never executed...
-BODY_EOF
-gh issue create --title "$TITLE" --body-file "$BODY_FILE" --label "type"; rm -f "$BODY_FILE"
-```
-
-```bash
-# Create issue (placeholder form — see backtick guard above before filling in real text)
+# Create issue
 gh issue create --title "[Type]: Title" --body "Description" --label "type"
 
 # If project board configured, add to board:

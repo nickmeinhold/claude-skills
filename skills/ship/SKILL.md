@@ -295,8 +295,6 @@ If there are uncommitted changes:
    - Otherwise, analyze the diff and generate a descriptive commit message
    - Follow conventional commits format: `type(scope): description`
 
-The `$(cat <<'EOF' ... EOF)` form below is **load-bearing — do not "simplify" it to `git commit -m "message"`.** The single-quoted `'EOF'` delimiter stops bash from command-substituting backticks / `$(...)` / `$var` in the message — and commit messages routinely contain `` `code_identifiers` `` (e.g. a `` `_readable_predicate` `` span got run as a command and silently dropped from a real commit on 2026-06-24). Same rule for the PR `--body` (Step 5 uses the same heredoc form). When the text has backticks, it's heredoc-or-`-F -`, never inline `-m "..."`.
-
 ```bash
 git add -A  # or specific files
 git commit -m "$(cat <<'EOF'
@@ -407,8 +405,6 @@ This runs **before** the regular review/merge gates so the eval inspects the liv
 If `~/.claude/persona-eval/` does not exist, skip silently — the experiment is over or never started.
 
 ### Step 6: Review the PR
-
-**Stale-diff note (you just pushed in Step 4).** `gh pr diff` lags `git push` by GitHub propagation, so a review fired immediately after a push can inspect the PRE-push code. The downstream review skills (`/cage-match`, `/pr-review`, `/cage-match-eval`) now each prefer a local `git diff origin/<base>...HEAD` or freshness-gate `gh pr diff` on the head SHA — so don't add a manual `sleep` here; the gate lives where the diff is actually gathered. If a reviewer ever REQUEST_CHANGES on a fix you know is present, suspect a stale diff (conservation-law canary: identical line count across rounds despite edits) and re-trigger the review.
 
 Wait briefly for CI to start, then determine the review approach based on change size:
 
