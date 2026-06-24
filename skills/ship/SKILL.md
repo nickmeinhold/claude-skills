@@ -406,6 +406,8 @@ If `~/.claude/persona-eval/` does not exist, skip silently — the experiment is
 
 ### Step 6: Review the PR
 
+**Stale-diff note (you just pushed in Step 4).** `gh pr diff` lags `git push` by GitHub propagation, so a review fired immediately after a push can inspect the PRE-push code. The downstream review skills (`/cage-match`, `/pr-review`, `/cage-match-eval`) now each prefer a local `git diff origin/<base>...HEAD` or freshness-gate `gh pr diff` on the head SHA — so don't add a manual `sleep` here; the gate lives where the diff is actually gathered. If a reviewer ever REQUEST_CHANGES on a fix you know is present, suspect a stale diff (conservation-law canary: identical line count across rounds despite edits) and re-trigger the review.
+
 Wait briefly for CI to start, then determine the review approach based on change size:
 
 ```bash

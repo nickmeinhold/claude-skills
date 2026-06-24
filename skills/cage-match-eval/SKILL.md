@@ -43,10 +43,26 @@ mkdir -p $EVAL_DIR
 
 ## Round 1: Gather PR context (once, shared by both sets)
 
+**Prefer a local diff; freshness-gate `gh pr diff`.** This skill is fired by `/ship`'s Step 5.6 immediately after a push, so `gh pr diff` can return the PRE-push (stale) diff (GitHub propagation lag) — and since both persona sets share this one gather, a stale diff poisons the entire A/B comparison. Prefer the local diff when the PR head is checked out; otherwise gate `gh pr diff` on GitHub's head SHA matching the pushed SHA.
+
 ```bash
-gh pr diff $PR > /tmp/pr-$PR-diff.txt &
-gh pr view $PR --json title,body,author,baseRefName,headRefName,files > /tmp/pr-$PR-info.json &
-wait
+PR_BASE=$(gh pr view $PR --json baseRefName --jq .baseRefName)
+PR_HEAD_SHA=$(gh pr view $PR --json headRefOid --jq .headRefOid)
+LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null)
+
+if [ -n "$LOCAL_SHA" ] && [ "$LOCAL_SHA" = "$PR_HEAD_SHA" ] && git rev-parse --verify "origin/$PR_BASE" >/dev/null 2>&1; then
+  git fetch origin "$PR_BASE" >/dev/null 2>&1
+  git diff "origin/$PR_BASE...HEAD" > /tmp/pr-$PR-diff.txt
+else
+  for _ in $(seq 1 15); do
+    GH_SHA=$(gh pr view $PR --json headRefOid --jq .headRefOid 2>/dev/null)
+    [ -n "$LOCAL_SHA" ] && [ "$GH_SHA" = "$LOCAL_SHA" ] && break
+    [ -z "$LOCAL_SHA" ] && break
+    sleep 2
+  done
+  gh pr diff $PR > /tmp/pr-$PR-diff.txt
+fi
+gh pr view $PR --json title,body,author,baseRefName,headRefName,files > /tmp/pr-$PR-info.json
 
 PR_INFO=$(cat /tmp/pr-$PR-info.json)
 PR_DIFF=$(cat /tmp/pr-$PR-diff.txt)
