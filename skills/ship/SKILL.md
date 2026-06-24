@@ -295,6 +295,8 @@ If there are uncommitted changes:
    - Otherwise, analyze the diff and generate a descriptive commit message
    - Follow conventional commits format: `type(scope): description`
 
+The `$(cat <<'EOF' ... EOF)` form below is **load-bearing — do not "simplify" it to `git commit -m "message"`.** The single-quoted `'EOF'` delimiter stops bash from command-substituting backticks / `$(...)` / `$var` in the message — and commit messages routinely contain `` `code_identifiers` `` (e.g. a `` `_readable_predicate` `` span got run as a command and silently dropped from a real commit on 2026-06-24). Same rule for the PR `--body` (Step 5 uses the same heredoc form). When the text has backticks, it's heredoc-or-`-F -`, never inline `-m "..."`.
+
 ```bash
 git add -A  # or specific files
 git commit -m "$(cat <<'EOF'

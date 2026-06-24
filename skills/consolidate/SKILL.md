@@ -551,12 +551,24 @@ Actions:
 
    - **6.5b. List existing open issues** for this project, using the GIVEN label verbatim: `gh issue list -R nickmeinhold/claude-tasks --label "$PROJECT_LABEL" --state open --json number,title,body --limit 200` (where `$PROJECT_LABEL` is the literal string the orchestrator passed, e.g. `project:aiko_chat`). Extract each issue's `claude-task-id` marker from the body (line of the form `<!-- claude-task-id: <16-hex> -->`).
 
-   - **6.5c. Cross-reference with the TaskList snapshot.** For each task in the snapshot, compute the id with the EXACT formula the hook uses: `id="$(printf '%s::%s' "<subject>" "<project_slug>" | shasum -a 256 | cut -c1-16)"` (note the `::` separator; `<project_slug>` is the GIVEN slug — the `$PROJECT_LABEL` with the `project:` prefix stripped, NOT a value you re-derive — any divergence here re-mints duplicates). Prefer matching on an issue's existing `<!-- claude-task-id: ... -->` marker first; fall back to the computed id only when a task carries no marker. If no open issue carries that marker, the hook missed it — create the issue inline (again using the given label verbatim):
+   - **6.5c. Cross-reference with the TaskList snapshot.** For each task in the snapshot, compute the id with the EXACT formula the hook uses: `id="$(printf '%s::%s' "<subject>" "<project_slug>" | shasum -a 256 | cut -c1-16)"` (note the `::` separator; `<project_slug>` is the GIVEN slug — the `$PROJECT_LABEL` with the `project:` prefix stripped, NOT a value you re-derive — any divergence here re-mints duplicates). Prefer matching on an issue's existing `<!-- claude-task-id: ... -->` marker first; fall back to the computed id only when a task carries no marker. If no open issue carries that marker, the hook missed it — create the issue inline (again using the given label verbatim).
+
+     **Build the body via a file, not an inline `--body "..."` — task descriptions contain backticks.** A `--body "<description>"` double-quoted string command-substitutes any `` `code` `` / `$(...)` / `$var` in the description (task descriptions are FULL of backtick-quoted code identifiers — this very reconciliation handles tasks like `` `_readable_predicate` ``), silently corrupting or truncating the body (the 2026-06-24 `git commit -m` recurrence of this exact class). Write the body to a temp file with a SINGLE-quoted heredoc (no expansion), then `--body-file`. Same for a `<subject>` that might carry backticks: pass it through a variable, not re-typed into the string.
      ```bash
+     # SUBJECT/DESC/ID/SESSION_ID are shell variables holding the literal values.
+     # The single-quoted 'BODY_EOF' delimiter means NOTHING inside is expanded —
+     # backticks/$()/$var in the description arrive verbatim. We append the
+     # provenance trailer with printf so the variable interpolation is explicit
+     # and controlled (only OUR vars, never the untrusted description, get expanded).
+     BODY_FILE="$(mktemp)"
+     printf '%s\n' "$DESC" > "$BODY_FILE"
+     printf '\n---\nReconciled at consolidation (session %s).\n<!-- claude-task-id: %s -->\n' \
+       "$SESSION_ID" "$ID" >> "$BODY_FILE"
      gh issue create -R nickmeinhold/claude-tasks \
-       --title "<subject>" \
-       --body "<description>\n\n---\nReconciled at consolidation (session <session-id>).\n<!-- claude-task-id: <id> -->" \
+       --title "$SUBJECT" \
+       --body-file "$BODY_FILE" \
        --label "$PROJECT_LABEL"
+     rm -f "$BODY_FILE"
      ```
 
    - **6.5d. Do NOT close issues here.** Closing is the `TaskUpdate→completed` hook's job. Consolidation only creates missing issues — a task being absent from the current snapshot doesn't mean it was completed (could be deleted, deferred, or never captured this session). Hook owns closure; consolidation owns catch-up.
