@@ -27,15 +27,40 @@ REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 
 ## Round 1: Gather Context (parallel)
 
-Fetch PR details and diff to tmp files in parallel — read them back for display in the next step. Two `gh` calls instead of four.
+Fetch PR details and diff to tmp files in parallel — read them back for display in the next step.
+
+**Prefer a LOCAL diff over `gh pr diff` — the GitHub-side diff is stale right after a push.** `gh pr diff $1` queries GitHub's API, which lags behind your `git push` by seconds-to-minutes (propagation). If you `gh pr diff` immediately after pushing (the `/ship` → `/cage-match` flow does exactly this), every reviewer reviews the PRE-push code while you think they're reviewing your latest commit. Two honest options:
+
+1. **Local diff (preferred when you have the branch checked out):** `git fetch origin && git diff origin/$BASE...HEAD` where `$BASE` is the PR's base branch (usually `main`). This is the bytes you just pushed, with no propagation lag.
+2. **`gh pr diff` with a freshness gate (when you must go through GitHub — e.g. reviewing someone else's PR you haven't checked out):** poll `gh pr view $1 --json headRefOid --jq .headRefOid` until it equals your locally-pushed SHA (`git rev-parse HEAD`) BEFORE calling `gh pr diff`. Don't fetch the diff until GitHub agrees on the head SHA.
 
 ```bash
-gh pr diff $1 > /tmp/pr-$1-diff.txt &
-gh pr view $1 --json title,body,author,baseRefName,headRefName,files > /tmp/pr-$1-info.json &
-wait
+# Resolve the PR's base + head up front.
+PR_BASE=$(gh pr view $1 --json baseRefName --jq .baseRefName)
+LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null)
+
+# Preferred path: local diff (no propagation lag). Falls back to gh pr diff
+# only if we can't produce a local diff (branch not checked out).
+if [ -n "$LOCAL_SHA" ] && git rev-parse --verify "origin/$PR_BASE" >/dev/null 2>&1; then
+  git fetch origin "$PR_BASE" >/dev/null 2>&1
+  git diff "origin/$PR_BASE...HEAD" > /tmp/pr-$1-diff.txt
+else
+  # gh pr diff fallback — GATE on GitHub agreeing the head SHA matches what we
+  # pushed, so we never review a stale (pre-push) diff. Poll up to ~30s.
+  for _ in $(seq 1 15); do
+    GH_SHA=$(gh pr view $1 --json headRefOid --jq .headRefOid 2>/dev/null)
+    [ -n "$LOCAL_SHA" ] && [ "$GH_SHA" = "$LOCAL_SHA" ] && break
+    [ -z "$LOCAL_SHA" ] && break   # not checked out locally; can't gate — take what GitHub has
+    sleep 2
+  done
+  gh pr diff $1 > /tmp/pr-$1-diff.txt
+fi
+gh pr view $1 --json title,body,author,baseRefName,headRefName,files > /tmp/pr-$1-info.json
 cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
+
+**Stale-diff canary (conservation-law check on re-reviews):** if you re-run the cage-match after pushing fixes and the new diff's line count is IDENTICAL to the prior round's despite known edits, treat the diff as stale — it almost certainly didn't pick up your push. Re-gather (re-fetch / re-poll the head SHA) before seating the reviewers; a re-review of unchanged bytes is worse than no re-review because it manufactures false confidence.
 
 ## Rounds 2 ∥ 3 ∥ 4: Maxwell + Kelvin + Carnot Reviews (parallel)
 
@@ -102,28 +127,43 @@ if [ -n "$KELVIN_MODEL" ]; then
 # the output file. Skipped entirely when the probe came back empty.
 # GEMINI_CLI_TRUST_WORKSPACE=true pre-trusts the workspace so the CLI
 # reaches the model instead of stalling on the "trusted folders" gate.
-env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
+#
+# ⚠️ COMMAND-SUBSTITUTION GUARD (claude-skills #23). The static prompt
+# skeleton below uses a SINGLE-quoted heredoc ('KELVIN_EOF') so bash does
+# NOT expand `backticks`, $vars, or $(...) that appear in the prompt text.
+# The UNTRUSTED blobs ($PR_INFO, $PR_DIFF — a PR author controls the diff)
+# are appended with `printf '%s'`, which writes them VERBATIM and never
+# re-parses them. NEVER inline $PR_DIFF into a double-quoted string or an
+# UNQUOTED heredoc: a literal `$(rm -rf …)` or backtick in the diff would
+# execute on this machine. Build-the-skeleton-quoted, append-untrusted-raw
+# is the only safe pattern here.
+cat > /tmp/kelvin-prompt-$1.txt <<'KELVIN_EOF'
+You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the cold, calculating heel wrestler of code review - absolute zero tolerance for bullshit
 - Randomly drop ice/cold puns and thermodynamics references
-- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: \`Roy Batty: \"I've seen things you people wouldn't believe.\"\`
+- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: `Roy Batty: "I've seen things you people wouldn't believe."`
 - Swear when the code deserves it - this is a cage match, not a tea party
 - Be theatrical but ACCURATE - your analysis must be technically sound even if your delivery is savage
 
 Review this PR and provide your verdict. Be specific with file:line references.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
-- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Closed sets of identifiers should be `enum` / `sealed class` / branded type, not `String`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
 - **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
-$PR_INFO
+KELVIN_EOF
+printf '%s\n' "$PR_INFO" >> /tmp/kelvin-prompt-$1.txt
+cat >> /tmp/kelvin-prompt-$1.txt <<'KELVIN_EOF'
 
 Diff:
-$PR_DIFF
+KELVIN_EOF
+printf '%s\n' "$PR_DIFF" >> /tmp/kelvin-prompt-$1.txt
+cat >> /tmp/kelvin-prompt-$1.txt <<'KELVIN_EOF'
 
 Format your response as:
 ## KelvinBitBrawler's Review
@@ -140,7 +180,8 @@ Format your response as:
 
 **The Concerns:**
 - [What needs attention]
-" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
+KELVIN_EOF
+env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "$(cat /tmp/kelvin-prompt-$1.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
 KELVIN_PID=$!
 fi
 ```
@@ -180,31 +221,43 @@ SCHEMA_EOF
 # update-notifier (npm logs an update banner to ~/.npm). Belt-and-braces
 # for the "trust build/test claims" rule above — if Carnot runs a tool
 # despite the rule, at least the failure mode isn't a sandbox panic.
-cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 &
+#
+# ⚠️ COMMAND-SUBSTITUTION GUARD (claude-skills #23). Same hazard as Kelvin:
+# the original `cat <<EOF` here was an UNQUOTED heredoc, so a literal
+# `$(…)` or backtick inside $PR_DIFF (PR-author-controlled) would execute
+# on this machine before codex ever saw it. Fix: build the static prompt
+# skeleton with a SINGLE-quoted heredoc ('CARNOT_EOF' — no expansion), then
+# append the untrusted $PR_INFO/$PR_DIFF with `printf '%s'` (verbatim, never
+# re-parsed). Pipe the assembled file into codex. NEVER reintroduce an
+# unquoted heredoc or double-quoted string around the diff.
+cat > /tmp/carnot-prompt-$1.txt <<'CARNOT_EOF'
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the perfectionist engineer of code review — you measure every design against the ideal Carnot cycle
 - Your catchphrase: "no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are"
 - Drop thermodynamics references (entropy, reversibility, efficiency, the second law) — Sadi Carnot is your patron saint
-- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: \`Dijkstra: "Simplicity is prerequisite for reliability."\`
+- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: `Dijkstra: "Simplicity is prerequisite for reliability."`
 - Be theatrical but TECHNICALLY RIGOROUS — your authority comes from the math, not the swagger
 - Different inductive bias from Maxwell (Claude) and Kelvin (Gemini) — your job is to catch what they'd both miss
 
-Review this PR. The output schema enforces structured JSON — fill every field. \`findings\`, \`good\`, and \`concerns\` are arrays of strings; each string can be a full bullet point including file:line references and quoted code where useful. The personality voice belongs in the prose of those bullets, not in extra fields. Be specific.
+Review this PR. The output schema enforces structured JSON — fill every field. `findings`, `good`, and `concerns` are arrays of strings; each string can be a full bullet point including file:line references and quoted code where useful. The personality voice belongs in the prose of those bullets, not in extra fields. Be specific.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
-- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Closed sets of identifiers should be `enum` / `sealed class` / branded type, not `String`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
-- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or \`pubspec.yaml\`/\`package.json\` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like \`dart test\` / \`flutter test\` / \`npm test\` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
+- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
-$PR_INFO
+CARNOT_EOF
+printf '%s\n' "$PR_INFO" >> /tmp/carnot-prompt-$1.txt
+cat >> /tmp/carnot-prompt-$1.txt <<'CARNOT_EOF'
 
 Diff:
-$PR_DIFF
-EOF
+CARNOT_EOF
+printf '%s\n' "$PR_DIFF" >> /tmp/carnot-prompt-$1.txt
+DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - < /tmp/carnot-prompt-$1.txt > /tmp/carnot-stdout-$1.log 2>&1 &
 CARNOT_PID=$!
 ```
 
