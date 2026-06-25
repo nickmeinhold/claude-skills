@@ -212,8 +212,10 @@ public HTTPS host, not `localhost`), `LIVE_GAME_TRUST_PROXY=1` (read the rightmo
 strong pinned `LIVE_GAME_HOST_TOKEN` (the unit is the source of truth; keep the real
 value out of git). Optional tuning knobs (unset on the box → server defaults):
 `LIVE_GAME_LEAD_MS` (the 3·2·1 countdown lead before a question goes live, ms),
-`LIVE_GAME_RATE_MAX` / `LIVE_GAME_RATE_WINDOW_MS` (per-IP audience rate limit), and
-`LIVE_GAME_MAX_SSE_BUFFER` (per-client SSE backpressure cap).
+`LIVE_GAME_RATE_MAX` / `LIVE_GAME_RATE_WINDOW_MS` (per-IP audience rate limit),
+`LIVE_GAME_MAX_SSE_BUFFER` (per-client SSE backpressure cap), and
+`LIVE_GAME_MAX_SSE_CLIENTS` (global cap on concurrent `/events` streams, default
+1000 — bounds total connections; raise it for an audience above ~1000 phones).
 
 **3. Caddy route.** Caddy on this box runs as a Docker container with the Caddyfile at
 `/home/nick/apps/caddy/Caddyfile` (version-controlled in

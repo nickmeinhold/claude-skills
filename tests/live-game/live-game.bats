@@ -237,6 +237,25 @@ wait_for_server() {
   [ "$last" = "429" ] || fail "expected 429 on the 4th join, got $last"
 }
 
+# --- global SSE connection cap (own low-cap server) ------------------------
+@test "the /events stream count is globally capped (503 over the cap)" {
+  local cp=7395 cb="http://localhost:7395"
+  LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_MAX_SSE_CLIENTS=2 \
+    node "$SERVER" --port "$cp" >/tmp/live-game-bats-cap.log 2>&1 &
+  AUX_PID=$!
+  wait_for_server "$cb" /tmp/live-game-bats-cap.log || fail "cap-test server did not boot"
+  # Hold two streams open in the background (curl -N keeps the connection alive,
+  # so each occupies a slot in sseClients).
+  curl -N -s "$cb/events" >/dev/null & local s1=$!
+  curl -N -s "$cb/events" >/dev/null & local s2=$!
+  sleep 0.5  # let both register
+  # The 3rd stream is over the cap → 503 (json end, so curl returns at once;
+  # --max-time guards against a hang if the cap ever regresses to a live stream).
+  local code; code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$cb/events")
+  kill "$s1" "$s2" 2>/dev/null || true
+  [ "$code" = "503" ] || fail "expected 503 over the SSE cap, got $code"
+}
+
 # --- engagement: 3·2·1 lead-in, streaks, podium ----------------------------
 @test "a lead-in delays the question (countdown phase) then it goes live" {
   local p=7397 cb

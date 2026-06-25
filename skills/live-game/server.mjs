@@ -59,6 +59,20 @@ const RATE_MAX = Number(env.LIVE_GAME_RATE_MAX ?? 60); // requests / window / IP
 // Drop an SSE consumer that has let this many bytes pile up unsent (a slow or
 // hostile client that never drains). Bounds per-connection server memory.
 const MAX_SSE_BUFFER = Number(env.LIVE_GAME_MAX_SSE_BUFFER ?? 1_000_000); // 1MB
+// Global cap on concurrent /events streams. MAX_SSE_BUFFER bounds each stream's
+// memory; this bounds the COUNT (and the per-broadcast fan-out work), so an
+// attacker on a public tunnel can't hold the box open with unbounded streams.
+// Generous default: a large real audience all sits behind ONE venue-NAT public
+// IP, so this is deliberately a GLOBAL cap, not per-IP — a per-IP cap would
+// reject the (N+1)th legitimate phone at the same venue. It bounds RESOURCE use;
+// it cannot stop a determined attacker from occupying slots without authing
+// /events (which would kill zero-friction joins) — a named, accepted tradeoff.
+// Fail SAFE on a bad value: a non-numeric/≤0 env would make `size >= NaN` always
+// false and silently DISABLE the cap (fail-open) — so fall back to the default.
+const MAX_SSE_CLIENTS = (() => {
+  const n = Number(env.LIVE_GAME_MAX_SSE_CLIENTS);
+  return Number.isFinite(n) && n > 0 ? n : 1000;
+})();
 // Behind a tunnel (ngrok / Tailscale Funnel) the socket peer is the tunnel
 // agent, so the real client IP arrives in X-Forwarded-For. Only trust XFF when
 // explicitly told to — otherwise a client could spoof its rate-limit bucket.
@@ -369,6 +383,11 @@ const server = http.createServer(async (req, res) => {
 
   // --- SSE stream ---
   if (req.method === 'GET' && path === '/events') {
+    // Admission cap (checked BEFORE the SSE headers go out, so a rejection is a
+    // clean 503 not a half-open stream). See MAX_SSE_CLIENTS for why global, not
+    // per-IP. EventSource will auto-retry, so a transient 503 self-heals.
+    if (sseClients.size >= MAX_SSE_CLIENTS)
+      return json(res, 503, { error: 'too many live connections, retry shortly' });
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       // no-transform stops a CDN (Cloudflare) from buffering/compressing the
