@@ -317,6 +317,8 @@ Agent({ description: "...", subagent_type: "general-purpose", model: "sonnet", m
 
 The `{{SESSION_DIR}}` placeholders in the brief specifications below are **documentation conventions**. The orchestrator's job is to produce briefs in which they no longer appear — replaced by the absolute `$SD` path at heredoc-expansion time. By the time `Agent({prompt: ...})` is called, no `{{SESSION_DIR}}` token remains in the string. Cold readers: `$SD` is the heredoc variable; `{{SESSION_DIR}}` is how the spec writes it before substitution. They refer to the same path — the difference is pre- vs post-expansion.
 
+`$PROJECT_LABEL` is the same kind of pre-substituted literal: the orchestrator computes the canonical GH-issue label once (see "Pre-compute the project label" below) and substitutes its literal value (e.g. `project:aiko_chat`) into the memory-writer brief before spawn. The agent treats it as an opaque given string — it MUST NOT re-derive it from cwd, `$CLAUDE_PROJECT_DIR`, the memory-dir path, or any `basename`/`git` call of its own. (Re-derivation is the 2026-06-22 hyphen-duplicate bug; see step 6.5a.)
+
 **File ownership is exclusive.** Each agent owns one output file in `$SD/`; no shared writes, no append races:
 - Phase 0a marker-extractor (Haiku) → `$SD/raw/marker-candidates.md` only; Maxwell validation pass produces `$SD/raw/marker-candidates-verified.md` (orchestrator-side, not a separate agent)
 - Phase 0a conversation (orchestrator-side, in-context with Nick) → `$SD/affective-highlights.md` (triage layer) + `$SD/marker-conversation.md` (capture layer). Both written by the orchestrator during Phase 0a; read by knowledge-mapper and next-session-prompter
@@ -367,7 +369,20 @@ This is *semantic* redundancy, not a *file-write* race. Don't conflate the two: 
 
 ### Orchestrator brief: gather the TaskList snapshot
 
-**Before spawning the agents**, the orchestrator (you, in Phase 0) collects the current open task list via the TaskList tool — every task with `status: pending` or `status: in_progress`. For each, capture `subject`, full `description`, and `activeForm`. Pass this snapshot to memory-writer as part of its brief (inline, not via file — the orchestrator is the only context with TaskList access). **Also pass the current working directory** (the orchestrator's cwd) — memory-writer needs it to derive the `project:<slug>` label for step 6.5's GH issue reconciliation.
+**Before spawning the agents**, the orchestrator (you, in Phase 0) collects the current open task list via the TaskList tool — every task with `status: pending` or `status: in_progress`. For each, capture `subject`, full `description`, and `activeForm`. Pass this snapshot to memory-writer as part of its brief (inline, not via file — the orchestrator is the only context with TaskList access).
+
+**Pre-compute the project label IN THE ORCHESTRATOR and pass the literal string — do NOT pass the cwd for the agent to re-derive.** This is a single-source-of-truth gate: the sub-agent does not reliably inherit the orchestrator's cwd, and `git -C "$CWD" rev-parse` can silently fail (e.g. `$CWD` resolved to the memory dir, which is not a git repo), tripping the fallback to `basename` of a path-slug like `-Users-nick-git-orgs-aiko-aiko-chat` → `aiko-chat` (HYPHEN). That is exactly the bug that minted duplicate `project:aiko-chat` issues on 2026-06-22 even though the agent brief said the right thing. The cure is to remove the agent's ability to re-derive at all. Run this NOW, in the orchestrator, and substitute the resulting literal `$PROJECT_LABEL` string into the memory-writer brief at heredoc-expansion time (the same way `$SD` is substituted):
+
+```bash
+# Orchestrator computes the canonical label ONCE. Repo-root basename — the
+# SAME derivation as ~/.claude/scripts/task-to-gh-issue.sh, so query/create
+# stay symmetric with the hook and the wake-up restore. Underscore-preserving.
+PROJECT_SLUG="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-$PWD}")")"
+PROJECT_LABEL="project:${PROJECT_SLUG}"
+echo "$PROJECT_LABEL"   # sanity-check: must be underscore form (e.g. project:aiko_chat), NOT hyphen
+```
+
+If `$PROJECT_LABEL` comes out hyphenated when you expect an underscore project name (or shows `project:memory` / `project:projects`), STOP — the orchestrator's own cwd isn't inside the git repo. Resolve it before spawning; do not let a wrong label flow into reconciliation. Pass the verified literal string (e.g. `project:aiko_chat`) into the agent brief.
 
 This matters because tasks created via `TaskCreate` live in `~/.claude/tasks/<session-uuid>/` — **session-scoped, invisible to a fresh session**. Without an explicit dump to a file the next session can read, the task list evaporates at session end. The 2026-05-01 run initially missed this; Nick caught it with "did you save the tasks?". Generalize the lesson: **persistent context lives in files the next session can independently read, not in session-scoped state.** (Same lifecycle pattern that bit `/graph` skill's `commands/` sync-volatile and the audit script's only-`←` parser.)
 
@@ -532,16 +547,28 @@ Actions:
 
 6.5. **GH issue reconciliation (catch-up sync for the PostToolUse hook).** The `task-to-gh-issue.sh` PostToolUse hook (wired in `~/.claude/settings.json`) creates an issue in `nickmeinhold/claude-tasks` live on every `TaskCreate` and closes it on `TaskUpdate→completed`. Consolidation's job is **reconciliation**, not bulk-creation — the hook may have dropped a write (network blip, `gh` rate-limit) or missed a task captured before the hook was installed.
 
-   - **6.5a. Derive the project label — MATCH THE HOOK EXACTLY.** `project_slug = basename of the GIT REPO ROOT`, i.e. `basename "$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-$CWD}")"`. The label is `project:${project_slug}`. **Do NOT use a full-path slug (`cwd_with_/_replaced_by_-`) — that was a bug** (2026-06-12): it minted duplicate issues under a dead `project:-Users-nick-git-...` label namespace because the consumer (`~/.claude/scripts/task-to-gh-issue.sh`) and the wake-up restore both use the repo-root basename. The hook's derivation is authoritative — it uses `basename "${repo_root:-${CLAUDE_PROJECT_DIR:-$cwd}}"` (repo-root basename is stable regardless of cwd within the repo and stays under GitHub's 50-char label cap; `basename "$cwd"` alone mislabels everything `project:projects` when run from `~/.claude/projects/...`). Pass the orchestrator's cwd to memory-writer so it can run the same derivation. **This `project_slug` value flows into 6.5c's id hash too — get it right here and both label and id stay in sync with the hook.**
+   - **6.5a. Use the project label the orchestrator GAVE you — do NOT re-derive it.** The orchestrator already computed the canonical label string (`$PROJECT_LABEL`, e.g. `project:aiko_chat`) and substituted it literally into this brief. Use it verbatim. The `project_slug` (the part after `project:`) is likewise given — extract it from the label by stripping the `project:` prefix; do NOT run `basename`/`git rev-parse`/path-slug derivation yourself. **Re-deriving is forbidden because it is the bug:** the sub-agent does not reliably inherit the orchestrator's cwd, so `git -C "$CWD" rev-parse` silently fails into a `basename "$CLAUDE_PROJECT_DIR"` fallback that yields the HYPHEN path-slug form (`-Users-...-aiko-aiko-chat` → `aiko-chat`) instead of the repo-root basename (`aiko_chat`). That mis-labeled duplicate-minting happened on 2026-06-22 (issues #1113-1115) AND a different way on 2026-06-12 (full-path slug). Two failure modes, one cure: the agent never derives the identifier — it receives it. The orchestrator's value is authoritative and already matches `~/.claude/scripts/task-to-gh-issue.sh` (which uses the repo-root basename) and the wake-up restore. **This same given `project_slug` flows into 6.5c's id hash — use the given value there too, so label and id stay in sync with the hook.**
 
-   - **6.5b. List existing open issues** for this project: `gh issue list -R nickmeinhold/claude-tasks --label "project:<slug>" --state open --json number,title,body --limit 200`. Extract each issue's `claude-task-id` marker from the body (line of the form `<!-- claude-task-id: <16-hex> -->`).
+   - **6.5b. List existing open issues** for this project, using the GIVEN label verbatim: `gh issue list -R nickmeinhold/claude-tasks --label "$PROJECT_LABEL" --state open --json number,title,body --limit 200` (where `$PROJECT_LABEL` is the literal string the orchestrator passed, e.g. `project:aiko_chat`). Extract each issue's `claude-task-id` marker from the body (line of the form `<!-- claude-task-id: <16-hex> -->`).
 
-   - **6.5c. Cross-reference with the TaskList snapshot.** For each task in the snapshot, compute the id with the EXACT formula the hook uses: `id="$(printf '%s::%s' "<subject>" "<project_slug>" | shasum -a 256 | cut -c1-16)"` (note the `::` separator and that `<project_slug>` is the repo-root basename from 6.5a — any divergence here re-mints duplicates). Prefer matching on an issue's existing `<!-- claude-task-id: ... -->` marker first; fall back to the computed id only when a task carries no marker. If no open issue carries that marker, the hook missed it — create the issue inline:
+   - **6.5c. Cross-reference with the TaskList snapshot.** For each task in the snapshot, compute the id with the EXACT formula the hook uses: `id="$(printf '%s::%s' "<subject>" "<project_slug>" | shasum -a 256 | cut -c1-16)"` (note the `::` separator; `<project_slug>` is the GIVEN slug — the `$PROJECT_LABEL` with the `project:` prefix stripped, NOT a value you re-derive — any divergence here re-mints duplicates). Prefer matching on an issue's existing `<!-- claude-task-id: ... -->` marker first; fall back to the computed id only when a task carries no marker. If no open issue carries that marker, the hook missed it — create the issue inline (again using the given label verbatim).
+
+     **Build the body via a file, not an inline `--body "..."` — task descriptions contain backticks.** A `--body "<description>"` double-quoted string command-substitutes any `` `code` `` / `$(...)` / `$var` in the description (task descriptions are FULL of backtick-quoted code identifiers — this very reconciliation handles tasks like `` `_readable_predicate` ``), silently corrupting or truncating the body (the 2026-06-24 `git commit -m` recurrence of this exact class). Write the body to a temp file with a SINGLE-quoted heredoc (no expansion), then `--body-file`. Same for a `<subject>` that might carry backticks: pass it through a variable, not re-typed into the string.
      ```bash
+     # SUBJECT/DESC/ID/SESSION_ID are shell variables holding the literal values.
+     # The single-quoted 'BODY_EOF' delimiter means NOTHING inside is expanded —
+     # backticks/$()/$var in the description arrive verbatim. We append the
+     # provenance trailer with printf so the variable interpolation is explicit
+     # and controlled (only OUR vars, never the untrusted description, get expanded).
+     BODY_FILE="$(mktemp)"
+     printf '%s\n' "$DESC" > "$BODY_FILE"
+     printf '\n---\nReconciled at consolidation (session %s).\n<!-- claude-task-id: %s -->\n' \
+       "$SESSION_ID" "$ID" >> "$BODY_FILE"
      gh issue create -R nickmeinhold/claude-tasks \
-       --title "<subject>" \
-       --body "<description>\n\n---\nReconciled at consolidation (session <session-id>).\n<!-- claude-task-id: <id> -->" \
-       --label "project:<slug>"
+       --title "$SUBJECT" \
+       --body-file "$BODY_FILE" \
+       --label "$PROJECT_LABEL"
+     rm -f "$BODY_FILE"
      ```
 
    - **6.5d. Do NOT close issues here.** Closing is the `TaskUpdate→completed` hook's job. Consolidation only creates missing issues — a task being absent from the current snapshot doesn't mean it was completed (could be deleted, deferred, or never captured this session). Hook owns closure; consolidation owns catch-up.
@@ -681,6 +708,17 @@ After Phase 1 completes:
   bash "$HOME/.claude/scripts/consolidate-health-check.sh" || true
   ```
   The script checks three things over state that already exists: **scorecard-health** (unresolvable% + malformed-verdict% over the last 10 readtime files), **eviction-budget** (directive-layer bytes vs the **single-source `--budget` default in `consolidate-health-check.sh`** — the SAME formula as Trigger A below, which references that default by name rather than restating the number, so the two can't drift; this is the *automatic* preview of the eviction audit Nick used to invoke by hand), and **wall-clock drift** (robust median+MAD, retry-aware — a `retried:true` run is excluded from the baseline and never breaches; active once ≥5 clean datapoints accrue). **When its output is non-empty, surface it to Nick verbatim** — each breach is Nick-gated (it reports the number; he decides whether to act). A green run prints nothing; do not announce "all healthy" unless he asks.
+- **Verify the GH-issue reconciliation used the canonical label (defense-in-depth against the 2026-06-22 hyphen-duplicate regression).** memory-writer now uses the orchestrator-given `$PROJECT_LABEL` verbatim and can't re-derive — but VERIFY the outcome anyway: confirm that any issues created this consolidation carry the underscore label, and that no duplicate slipped through under a hyphen/path-slug variant. The orchestrator still holds the canonical `$PROJECT_LABEL` it computed pre-spawn:
+  ```bash
+  # Variants the buggy derivation would have produced: hyphenated slug,
+  # and the full memory-dir path-slug. Both are WRONG; the canonical is $PROJECT_LABEL.
+  HYPHEN_VARIANT="project:$(printf '%s' "${PROJECT_LABEL#project:}" | tr '_' '-')"
+  if [ "$HYPHEN_VARIANT" != "$PROJECT_LABEL" ]; then
+    STRAY=$(gh issue list -R nickmeinhold/claude-tasks --label "$HYPHEN_VARIANT" --state open --json number --jq 'length' 2>/dev/null || echo 0)
+    [ "${STRAY:-0}" -gt 0 ] && echo "⚠️ $STRAY open issue(s) under WRONG label $HYPHEN_VARIANT — reconciliation mis-derived the slug; relabel to $PROJECT_LABEL and dedupe against $PROJECT_LABEL before trusting wake-up restore."
+  fi
+  ```
+  This is a Nick-surfaced warning, not a hard gate — a stray-label hit means the structural fix regressed and the duplicates need a manual relabel+dedupe (exactly the #1113-1115 cleanup). Silent when clean.
 - **Merge session wins to global log.** If `$SD/wins.md` exists and is non-empty, append it to `~/.claude/wins.md` under an exclusive mkdir-trap lock to prevent interleave from parallel `/consolidate` orchestrators:
   ```bash
   # Wrap-up step: append session-local wins to global wins file under exclusive lock.
