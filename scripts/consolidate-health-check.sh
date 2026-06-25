@@ -39,7 +39,7 @@
 #   --window N              HEALTH_WINDOW            (default 10)
 #   --unresolvable-pct PCT  HEALTH_UNRESOLVABLE_PCT  (default 60)
 #   --malformed-pct PCT     HEALTH_MALFORMED_PCT     (default 25)
-#   --budget BYTES          HEALTH_BUDGET            (default 28672)
+#   --budget BYTES          HEALTH_BUDGET            (default 31744)
 #   --claude-md PATH        HEALTH_CLAUDE_MD         (default ~/.claude/CLAUDE.md)
 #   --corpus-glob GLOB      HEALTH_CORPUS_GLOB       (default ~/.claude/consolidation/*/readtime-score.json)
 #   --timing PATH           HEALTH_TIMING            (default ~/.claude/consolidation/timing.jsonl)
@@ -56,14 +56,15 @@ WINDOW="${HEALTH_WINDOW:-10}"
 UNRESOLVABLE_PCT="${HEALTH_UNRESOLVABLE_PCT:-60}"
 MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
-# 28672 = 28 KiB (28*1024). This ONE number is the directive-layer budget; the
+# 31744 = 31 KiB (31*1024). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
 # than restating a number — so the two cannot drift. Tune here, nowhere else.
-# History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87) — raised when the
-# layer's growth was load-bearing non-redundant directives (compress-not-evict
-# found no fat to cut), not bloat. Cutting distinct nuance to satisfy the cap is
-# the self-harm trap the audit warns against; the cap reflects the real set.
-BUDGET="${HEALTH_BUDGET:-28672}"
+# History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87), 28→31 KiB
+# (2026-06-26) — each raised when the layer's growth was load-bearing
+# non-redundant directives (compress-not-evict found no fat to cut), not bloat.
+# Cutting distinct nuance to satisfy the cap is the self-harm trap the audit
+# warns against; the cap reflects the real set.
+BUDGET="${HEALTH_BUDGET:-31744}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
