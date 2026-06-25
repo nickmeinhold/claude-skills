@@ -90,18 +90,20 @@ dirs, but only mutates the in-scope one unless a confirmed move says otherwise.
 orphans/broken-edges but is read-only and single-graph; `heal-memory-dir.sh`
 repairs frontmatter *within* one dir and hard-refuses cross-dir paths. Neither
 *moves* a memory between project dirs — that gap is Part B's whole job. After
-any move, run `heal-memory-dir.sh <TARGET_MEM>` on the destination to certify the
-moved file's schema/provenance.
+any move, run `~/.claude/scripts/heal-memory-dir.sh <TARGET_MEM>` on the
+destination to certify the moved file's schema/provenance.
 
 ### Verdicts
 
 1. **ORPHANED** — a `memory_*.md`/`concept_*.md`/`feedback_*.md`/`reference_*.md`
    file on disk with **no pointer line in `MEMORY.md`**. Invisible at session
-   start (only `MEMORY.md` is loaded into context). Detect:
+   start (only `MEMORY.md` is loaded into context). Detect — iterate the memory
+   prefixes (not bare `*.md`, which would mis-flag a future `MEMORY-*.md`
+   sub-index), and match the pointer as a fixed string:
    ```bash
-   cd "$MEM" && for f in *.md; do
-     [ "$f" = "MEMORY.md" ] && continue
-     grep -q "($f)" MEMORY.md || echo "ORPHANED $f"
+   cd "$MEM" && for f in memory_*.md concept_*.md feedback_*.md reference_*.md; do
+     [ -e "$f" ] || continue   # no-match globs expand to the literal pattern
+     grep -qF "($f)" MEMORY.md || echo "ORPHANED $f"
    done
    ```
    **Fix (auto — same dir, reversible via git):** read the file's frontmatter
@@ -139,8 +141,8 @@ delete-first crash orphans the content). For each confirmed mis-home:
 2. `cp "$MEM/$f" "$TARGET_MEM/$f"` (copy, don't move yet).
 3. Add the pointer line to `$TARGET_MEM/MEMORY.md`.
 4. **Verify:** the file exists at target AND its pointer is in target's index.
-5. `heal-memory-dir.sh "$TARGET_MEM" --written "$f"` — certify schema at the
-   new home.
+5. `~/.claude/scripts/heal-memory-dir.sh "$TARGET_MEM" --written "$f"` — certify
+   schema at the new home.
 6. **Only now** remove `$MEM/$f` and its pointer line from `$MEM/MEMORY.md`.
 7. Note any **inbound `[[links]]`** from the source dir that now dangle — links
    resolve within a dir, so a move can strand back-references. Surface them; fix
