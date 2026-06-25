@@ -210,7 +210,10 @@ Key env knobs: `LIVE_GAME_BIND=127.0.0.1` (loopback-only — Caddy fronts it),
 public HTTPS host, not `localhost`), `LIVE_GAME_TRUST_PROXY=1` (read the rightmost
 `X-Forwarded-For` from Caddy for rate-limit attribution — see caveats above), and a
 strong pinned `LIVE_GAME_HOST_TOKEN` (the unit is the source of truth; keep the real
-value out of git).
+value out of git). Optional tuning knobs (unset on the box → server defaults):
+`LIVE_GAME_LEAD_MS` (the 3·2·1 countdown lead before a question goes live, ms),
+`LIVE_GAME_RATE_MAX` / `LIVE_GAME_RATE_WINDOW_MS` (per-IP audience rate limit), and
+`LIVE_GAME_MAX_SSE_BUFFER` (per-client SSE backpressure cap).
 
 **3. Caddy route.** Caddy on this box runs as a Docker container with the Caddyfile at
 `/home/nick/apps/caddy/Caddyfile` (version-controlled in
@@ -228,7 +231,29 @@ Edit the Caddyfile in the repo, deploy it to the box, and `docker exec caddy cad
 reload --config /etc/caddy/Caddyfile --adapter caddyfile` (graceful, no downtime).
 ⚠️ That box's Caddyfile has no automatic repo→box CD yet — see the imagineering-infra
 backlog (the box once drifted from the repo). Verify a route change actually landed with
-`curl -sI https://quiz-game.imagineering.cc/`.
+`curl -s https://quiz-game.imagineering.cc/state` (a **GET** — see the redeploy note below).
+
+**4. Redeploying an update.** There's no auto-CD for the Node app either: the box runs
+whatever `server.mjs` was last copied, so it can lag `main`. The systemd env (token,
+join host, bind) is unit-pinned, so a restart preserves it — only the code files change:
+
+```bash
+# from the repo root (assumes an `imagineering` ssh host → user nick)
+scp skills/live-game/server.mjs skills/live-game/qr.mjs imagineering:apps/live-game/
+ssh imagineering 'sudo systemctl restart live-game'
+```
+
+Verify the new build is actually live — and **GET, never HEAD**: every route handler is
+gated on `req.method === 'GET'`, so a `curl -I` (HEAD) returns 404 on `/` and `/play`
+even when the server is healthy (it's a lying gauge — only `/state` happens to be the
+one you'd reach for with `-s`). Confirm with a GET plus a content check that proves the
+*new* code is running, not just that *a* server answers:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://quiz-game.imagineering.cc/   # expect 200 (GET)
+ssh imagineering 'grep -c host/advance apps/live-game/server.mjs'             # >0 = staging-slot build is live
+shasum -a256 skills/live-game/server.mjs                                       # compare against the box to confirm parity
+```
 
 ## Pairing with a Google Slide (optional)
 
