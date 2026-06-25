@@ -29,7 +29,7 @@
 #   2. eviction-budget — directive-layer bytes vs --budget, using the SAME
 #      formula the eviction audit uses (grep feedback_*/concept_* pointer lines
 #      in CLAUDE.md, wc -c). Breach: layer bytes > budget. The --budget default
-#      (24576) is the SINGLE SOURCE for the cap; SKILL Trigger A references it.
+#      (28672) is the SINGLE SOURCE for the cap; SKILL Trigger A references it.
 #   3. wall-clock drift — robust + retry-aware. Baseline = prior NON-retried runs;
 #      fence = median + K·MAD (immune to outliers). A retried LATEST run is annotated
 #      (INFO), never a breach. Activates once >=5 clean datapoints exist; until then
@@ -58,7 +58,11 @@ MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
 # 28672 = 28 KiB (28*1024). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
-# than restating "~24KB" — so the two cannot drift. Tune here, nowhere else.
+# than restating a number — so the two cannot drift. Tune here, nowhere else.
+# History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87) — raised when the
+# layer's growth was load-bearing non-redundant directives (compress-not-evict
+# found no fat to cut), not bloat. Cutting distinct nuance to satisfy the cap is
+# the self-harm trap the audit warns against; the cap reflects the real set.
 BUDGET="${HEALTH_BUDGET:-28672}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
