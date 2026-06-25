@@ -17,7 +17,10 @@ setup() {
   PORT=7399
   B="http://localhost:${PORT}"
   TOKEN="bats-token"
-  LIVE_GAME_HOST_TOKEN="$TOKEN" node "$SERVER" --port "$PORT" >/tmp/live-game-bats.log 2>&1 &
+  # LEAD_MS=0 so a question goes live immediately on /host/ask — these contract
+  # tests vote right after asking. The 3·2·1 lead-in is covered by its own test
+  # (which boots a second server with a lead).
+  LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=0 node "$SERVER" --port "$PORT" >/tmp/live-game-bats.log 2>&1 &
   SERVER_PID=$!
   # wait for the port to accept connections (max ~3s)
   for _ in $(seq 1 30); do
@@ -217,4 +220,157 @@ join() {
       -H 'content-type: application/json' -d "{\"name\":\"p$i\"}")
   done
   [ "$last" = "429" ] || fail "expected 429 on the 4th join, got $last"
+}
+
+# --- engagement: 3·2·1 lead-in, streaks, podium ----------------------------
+@test "a lead-in delays the question (countdown phase) then it goes live" {
+  local p=7397 cb
+  LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=600 node "$SERVER" --port "$p" >/tmp/live-game-bats-cd.log 2>&1 &
+  AUX_PID=$!
+  for _ in $(seq 1 30); do curl -s "http://localhost:$p/state" >/dev/null 2>&1 && break; sleep 0.1; done
+  cb="http://localhost:$p"
+  curl -s -X POST "$cb/host/ask?token=$TOKEN" -H 'content-type: application/json' \
+    -d '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
+  run curl -s "$cb/state"
+  [ "$(field "$output" 's.phase')" = "countdown" ] || fail "not counting down: $output"
+  [ "$(field "$output" 's.countdownTo')" -gt 0 ] || fail "no countdownTo: $output"
+  sleep 0.9
+  run curl -s "$cb/state"
+  [ "$(field "$output" 's.phase')" = "question" ] || fail "did not go live: $output"
+}
+
+@test "host/next during the lead-in cancels the pending question start" {
+  local p=7396 cb
+  LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=600 node "$SERVER" --port "$p" >/tmp/live-game-bats-cancel.log 2>&1 &
+  AUX_PID=$!
+  for _ in $(seq 1 30); do curl -s "http://localhost:$p/state" >/dev/null 2>&1 && break; sleep 0.1; done
+  cb="http://localhost:$p"
+  curl -s -X POST "$cb/host/ask?token=$TOKEN" -H 'content-type: application/json' \
+    -d '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
+  curl -s -X POST "$cb/host/next?token=$TOKEN" -d '{}' >/dev/null   # pre-empt mid-countdown
+  sleep 0.9   # past the original lead window
+  run curl -s "$cb/state"
+  [ "$(field "$output" 's.phase')" = "lobby" ] || fail "stale timer flipped a reset game live: $output"
+}
+
+@test "streak bonus rewards consecutive correct answers" {
+  read AID ASEC < <(join Ada)
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["x","y"],"correct":0,"timeLimit":20}' >/dev/null
+  post /vote "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\",\"option\":0}" >/dev/null
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  post "/host/next?token=$TOKEN" '{}' >/dev/null
+  post "/host/ask?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":0,"timeLimit":20}' >/dev/null
+  post /vote "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\",\"option\":0}" >/dev/null
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post /me "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\"}"
+  [ "$(field "$output" 's.streak')" = "2" ] || fail "streak: $output"
+  [ "$(field "$output" 's.streakBonus')" = "100" ] || fail "bonus: $output"
+}
+
+@test "a wrong answer resets the streak to zero" {
+  read AID ASEC < <(join Ada)
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["x","y"],"correct":0,"timeLimit":20}' >/dev/null
+  post /vote "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\",\"option\":0}" >/dev/null   # correct
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  post "/host/next?token=$TOKEN" '{}' >/dev/null
+  post "/host/ask?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":0,"timeLimit":20}' >/dev/null
+  post /vote "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\",\"option\":1}" >/dev/null   # wrong
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post /me "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\"}"
+  [ "$(field "$output" 's.streak')" = "0" ] || fail "streak not reset: $output"
+}
+
+@test "host/end shows a podium and keeps scores" {
+  read AID ASEC < <(join Ada)
+  post "/host/ask?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":0,"timeLimit":20}' >/dev/null
+  post /vote "{\"playerId\":\"$AID\",\"secret\":\"$ASEC\",\"option\":0}" >/dev/null
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post "/host/end?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.ok')" = "true" ] || fail "end: $output"
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.phase')" = "podium" ] || fail "phase: $output"
+  [ "$(field "$output" 's.leaderboard.find(p=>p.name==="Ada").score')" -gt 0 ] || fail "score lost: $output"
+}
+
+@test "host/end requires the token" {
+  run post "/host/end?token=WRONG" '{}'
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "output=$output"
+}
+
+# --- staging slot (lookahead-1 prefetch): /host/stage + /host/advance ---------
+
+@test "stage parks the next question without leaking it into public state (anti-peek)" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  run post "/host/stage?token=$TOKEN" '{"question":"Q2SECRET","options":["x","y"],"correct":1}'
+  [ "$(field "$output" 's.staged')" = "true" ] || fail "stage not acknowledged: $output"
+  # the live question is unchanged and the staged one must be invisible in /state
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q1" ] || fail "live question changed by stage: $output"
+  [ "$(field "$output" 's.phase')" = "question" ] || fail "phase changed by stage: $output"
+  [ "$(field "$output" 's.correct')" = "null" ] || fail "correct leaked during live question: $output"
+  if curl -s "$B/state" | grep -q "Q2SECRET"; then fail "staged question leaked into /state"; fi
+}
+
+@test "advance promotes the staged question live and consumes the slot" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  # Reveal the live question first — advance is a between-questions beat, not a
+  # mid-question one (see the phase-guard test below).
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.advanced')" = "true" ] || fail "advance failed: $output"
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q2" ] || fail "advance did not promote Q2: $output"
+  # slot is single-use: a second advance with nothing staged is a 409
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "slot not consumed: $output"
+}
+
+@test "advance during a live question is rejected (must reveal first)" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  # Q1 is LIVE. Advancing now would wipe players' in-flight answers and desync a
+  # subsequent /host/reveal onto Q2 (the advance/reveal race Carnot caught).
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "reveal the live question before advancing" ] \
+    || fail "advance not phase-guarded during a live question: $output"
+  # the rejected advance left the live question untouched AND preserved the slot
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q1" ] || fail "rejected advance mutated the live question: $output"
+  # once revealed, the still-staged Q2 promotes normally
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.advanced')" = "true" ] || fail "advance after reveal failed (slot lost?): $output"
+}
+
+@test "advance with nothing staged returns an error" {
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "expected 'nothing staged': $output"
+}
+
+@test "stage and advance require the host token" {
+  run post "/host/stage?token=WRONG" '{"question":"Q","options":["x","y"],"correct":0}'
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "stage not token-gated: $output"
+  run post "/host/advance?token=WRONG" '{}'
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "advance not token-gated: $output"
+}
+
+@test "stage rejects an out-of-range correct index (validated like ask)" {
+  run post "/host/stage?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":5}'
+  [ "$(field "$output" 's.error')" = "correct must be 0..1" ] || fail "stage did not range-check: $output"
+}
+
+@test "reset clears the staged slot" {
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  post "/host/reset?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "reset did not clear staged slot: $output"
+}
+
+@test "asking a question directly clears any staged question" {
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "ask did not clear staged slot: $output"
 }
