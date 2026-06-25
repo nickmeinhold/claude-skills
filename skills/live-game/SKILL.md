@@ -57,6 +57,20 @@ The argument in `$ARGUMENTS` selects the move:
 
 - **`next`** — return to the lobby (scores kept), ready for the next `ask`.
 - **`reset`** — wipe all players and scores, start a fresh game.
+
+**Pacing — prefetch the next question (lookahead-1).** The ~20 s answer window is
+dead time for the Game Master: players are tapping phones, the server is just
+tallying, and you are idle. *Use it.* The moment you open voting on question *n*,
+compose question *n+1* in the same turn and hold it ready. Then `reveal` → `next` →
+`ask` fires the already-composed question with no "thinking" gap — the room never
+sits staring at a stale leaderboard while you write.
+
+Generate exactly **one** question ahead, not the whole batch. Lookahead-1 hides the
+generation latency (the expensive part — composing the question) off the critical
+path *without* surrendering human pacing: you still decide *when* to advance by
+reading the room. Full pre-batching removes that judgement and lets an eager loop
+outrun a casually-engaged audience (an observed failure mode — 4 rounds of zero
+answers). You are the metronome; prefetch the notes, but keep your hand on the beat.
 - **`scores` / `start`** — read the snapshot and narrate it:
   ```bash
   curl -s http://localhost:7373/state   # JSON: phase, counts, correct, leaderboard
@@ -137,6 +151,72 @@ doctrine in `~/.claude/CLAUDE.md`):
   starts a fresh identity (score not transferred). Acceptable for a session-scoped game.
 - **The host token is a single shared secret** — fine for one operator; there is no
   multi-host/role model.
+
+### Permanent hosting (the imagineering OCI box)
+
+The tunnel above is for an ad-hoc room. The durable home is the imagineering OCI box,
+where it serves at **https://quiz-game.imagineering.cc**. Two pieces: a systemd unit
+for the Node server, and a Caddy route (Caddy is the box's shared reverse proxy).
+
+**1. Ship the app.** `scp server.mjs qr.mjs` to `~/apps/live-game/` on the box (the
+server is self-contained — no `node_modules`, `qr.mjs` is the only sibling it loads).
+
+**2. systemd unit** at `/etc/systemd/system/live-game.service` (`systemctl enable --now
+live-game`). The server binds **localhost only** — Caddy terminates TLS and proxies in,
+so the Node process is never directly exposed:
+
+```ini
+[Unit]
+Description=Live Game (Kahoot-style audience quiz) — skills/live-game
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nick
+WorkingDirectory=/home/nick/apps/live-game
+ExecStart=/usr/bin/node /home/nick/apps/live-game/server.mjs --port 7373
+Environment=LIVE_GAME_HOST_TOKEN=<generate: openssl rand -hex 16 — do NOT commit the real value>
+Environment=LIVE_GAME_JOIN_HOST=quiz-game.imagineering.cc
+Environment=LIVE_GAME_JOIN_SCHEME=https
+Environment=LIVE_GAME_TRUST_PROXY=1
+Environment=LIVE_GAME_BIND=127.0.0.1
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/nick/apps/live-game
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Key env knobs: `LIVE_GAME_BIND=127.0.0.1` (loopback-only — Caddy fronts it),
+`LIVE_GAME_JOIN_HOST` + `LIVE_GAME_JOIN_SCHEME=https` (so the join URL/QR point at the
+public HTTPS host, not `localhost`), `LIVE_GAME_TRUST_PROXY=1` (read the rightmost
+`X-Forwarded-For` from Caddy for rate-limit attribution — see caveats above), and a
+strong pinned `LIVE_GAME_HOST_TOKEN` (the unit is the source of truth; keep the real
+value out of git).
+
+**3. Caddy route.** Caddy on this box runs as a Docker container with the Caddyfile at
+`/home/nick/apps/caddy/Caddyfile` (version-controlled in
+[`imagineering-cc/imagineering-infra`](https://github.com/imagineering-cc/imagineering-infra) under `caddy/`). The route is a normal block — **not** an admin-API
+injection (an earlier ad-hoc `localhost:2019` injection was lost on the next container
+restart; it's now durable in the Caddyfile, added in imagineering-infra PR #115):
+
+```
+quiz-game.imagineering.cc {
+    reverse_proxy localhost:7373
+}
+```
+
+Edit the Caddyfile in the repo, deploy it to the box, and `docker exec caddy caddy
+reload --config /etc/caddy/Caddyfile --adapter caddyfile` (graceful, no downtime).
+⚠️ That box's Caddyfile has no automatic repo→box CD yet — see the imagineering-infra
+backlog (the box once drifted from the repo). Verify a route change actually landed with
+`curl -sI https://quiz-game.imagineering.cc/`.
 
 ## Pairing with a Google Slide (optional)
 
