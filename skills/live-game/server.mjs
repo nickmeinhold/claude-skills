@@ -18,7 +18,9 @@
 //   POST /join        {name, playerId?, secret?}  -> {playerId, secret, name}
 //   POST /vote        {playerId, secret, option}
 //   POST /me          {playerId, secret}  -> own score/gain/verdict
-//   POST /host/ask    {question, options[], correct, timeLimit?}   (needs host token)
+//   POST /host/ask     {question, options[], correct, timeLimit?}  (needs host token)
+//   POST /host/stage   {question, options[], correct, timeLimit?}  (needs host token) — park next Q
+//   POST /host/advance                                             (needs host token) — promote staged Q live
 //   POST /host/reveal                                              (needs host token)
 //   POST /host/next                                                (needs host token)
 //   POST /host/reset                                               (needs host token)
@@ -102,6 +104,12 @@ const game = {
 // reset game back into a live question (lifecycle invariant: one pending start).
 let pendingStart = null;
 function cancelPendingStart() { if (pendingStart) { clearTimeout(pendingStart); pendingStart = null; } }
+// Single-buffer staging slot (lookahead-1): a validated next question parked by
+// POST /host/stage and promoted live by POST /host/advance. Held SEPARATELY from
+// `game` so it can never enter publicState() — a staged question's `correct` index
+// is unobservable until it's promoted. A second stage overwrites; cleared on reset
+// and consumed (set back to null) on advance.
+let staged = null;
 /** playerId (server-issued, opaque) -> {secret, name, score, answer, answeredAt,
  *  lastGain, streak, lastStreakBonus, rank, prevRank}
  *  `secret` is a server-minted bearer credential: it is required to vote or read
@@ -250,6 +258,58 @@ function scoreFor(answeredAt) {
   const elapsed = Math.max(0, (answeredAt - game.startedAt) / 1000);
   const frac = Math.min(elapsed / game.timeLimit, 1);
   return Math.round(500 + 500 * (1 - frac));
+}
+
+// Validate + normalize a question payload. Shared by /host/ask and /host/stage so
+// a staged question is range-checked and clamped IDENTICALLY to a directly-asked one
+// (an out-of-range `correct` would be unwinnable; an extreme timeLimit distorts
+// scoring). Returns {error} on bad input, else {question, options, correct, timeLimit}.
+function parseQuestion(body) {
+  const options = Array.isArray(body.options) ? body.options.map(String).slice(0, 6) : [];
+  if (!body.question || options.length < 2) return { error: 'need question + >=2 options' };
+  const correct = Number.isInteger(body.correct) ? body.correct : -1;
+  if (correct < 0 || correct >= options.length) return { error: `correct must be 0..${options.length - 1}` };
+  const t = Number(body.timeLimit);
+  const timeLimit = Number.isFinite(t) && t > 0
+    ? Math.min(Math.max(t, MIN_TIME_LIMIT), MAX_TIME_LIMIT)
+    : DEFAULT_TIME_LIMIT;
+  return { question: String(body.question), options, correct, timeLimit };
+}
+
+// Take a validated question (from parseQuestion) live. Shared by /host/ask and
+// /host/advance: increments the round, resets per-player answer state, and either
+// goes live immediately or runs the 3·2·1 countdown lead-in (leadMs clamped 0..10s).
+function goLive(q, leadMs) {
+  cancelPendingStart();
+  game.question = q.question;
+  game.options = q.options;
+  game.correct = q.correct;
+  game.timeLimit = q.timeLimit;
+  game.round++;
+  for (const p of players.values()) { p.answer = null; p.answeredAt = 0; p.lastGain = 0; p.lastStreakBonus = 0; }
+  const lead = Math.min(Math.max(Number(leadMs ?? DEFAULT_LEAD_MS) || 0, 0), 10_000);
+  if (lead > 0) {
+    game.phase = 'countdown';
+    game.countdownTo = Date.now() + lead;
+    game.startedAt = 0;
+    broadcast();
+    const r = game.round;
+    pendingStart = setTimeout(() => {
+      pendingStart = null;
+      // Only flip if THIS round's countdown is still the live one.
+      if (game.phase === 'countdown' && game.round === r) {
+        game.phase = 'question';
+        game.startedAt = Date.now();
+        game.countdownTo = 0;
+        broadcast();
+      }
+    }, lead);
+  } else {
+    game.phase = 'question';
+    game.startedAt = Date.now();
+    game.countdownTo = 0;
+    broadcast();
+  }
 }
 
 function readBody(req) {
@@ -421,53 +481,42 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/host/ask') {
     const body = await readBody(req);
     if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
-    const options = Array.isArray(body.options) ? body.options.map(String).slice(0, 6) : [];
-    if (!body.question || options.length < 2)
-      return json(res, 400, { error: 'need question + >=2 options' });
-    // Range-check correct against the options actually given — an out-of-range
-    // index would make the question unwinnable (no one can match it at reveal).
-    const correct = Number.isInteger(body.correct) ? body.correct : -1;
-    if (correct < 0 || correct >= options.length)
-      return json(res, 400, { error: `correct must be 0..${options.length - 1}` });
-    // Cancel any in-flight countdown so two rapid asks can't both flip later.
-    cancelPendingStart();
-    game.question = String(body.question);
-    game.options = options;
-    game.correct = correct;
-    // Clamp timeLimit to a sane window so an extreme value can't distort scoring.
-    const t = Number(body.timeLimit);
-    game.timeLimit = Number.isFinite(t) && t > 0
-      ? Math.min(Math.max(t, MIN_TIME_LIMIT), MAX_TIME_LIMIT)
-      : DEFAULT_TIME_LIMIT;
-    game.round++;
-    for (const p of players.values()) { p.answer = null; p.answeredAt = 0; p.lastGain = 0; p.lastStreakBonus = 0; }
-    // Optional 3·2·1 lead-in: a 'countdown' phase that auto-flips to 'question'
-    // after leadMs (clamped 0..10s). leadMs<=0 goes live immediately — preserves
-    // the original behaviour for the bats suite + a runner that wants no lead-in.
-    const leadMs = Math.min(Math.max(Number(body.leadMs ?? DEFAULT_LEAD_MS) || 0, 0), 10_000);
-    if (leadMs > 0) {
-      game.phase = 'countdown';
-      game.countdownTo = Date.now() + leadMs;
-      game.startedAt = 0;
-      broadcast();
-      const r = game.round;
-      pendingStart = setTimeout(() => {
-        pendingStart = null;
-        // Only flip if THIS round's countdown is still the live one.
-        if (game.phase === 'countdown' && game.round === r) {
-          game.phase = 'question';
-          game.startedAt = Date.now();
-          game.countdownTo = 0;
-          broadcast();
-        }
-      }, leadMs);
-    } else {
-      game.phase = 'question';
-      game.startedAt = Date.now();
-      game.countdownTo = 0;
-      broadcast();
-    }
+    const q = parseQuestion(body);
+    if (q.error) return json(res, 400, { error: q.error });
+    // Asking directly clears any staged question — the host chose this one instead,
+    // so a stale parked question must not linger and surprise the next advance.
+    staged = null;
+    goLive(q, body.leadMs);
     return json(res, 200, { ok: true, round: game.round });
+  }
+
+  // --- host: stage the NEXT question (lookahead-1 prefetch, parked server-side) ---
+  // Decouples question GENERATION from advancing: the Game Master composes Q(n+1)
+  // during Q(n)'s answer window and parks it here, so /host/advance later promotes
+  // it live in one cheap call with zero compose latency. Validated/clamped exactly
+  // like /host/ask. Single-buffer — a second stage overwrites. Held off publicState
+  // (anti-peek): the parked `correct` is unobservable until advanced.
+  if (req.method === 'POST' && path === '/host/stage') {
+    const body = await readBody(req);
+    if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
+    const q = parseQuestion(body);
+    if (q.error) return json(res, 400, { error: q.error });
+    staged = q;
+    return json(res, 200, { ok: true, staged: true });
+  }
+
+  // --- host: advance (promote the staged question live) ---
+  // Host-triggered (token-gated), NOT auto-fired on reveal: advancing stays a
+  // deliberate beat the operator controls (full autonomy once collapsed a room by
+  // outrunning a casually-engaged audience). Consumes the slot.
+  if (req.method === 'POST' && path === '/host/advance') {
+    const body = await readBody(req);
+    if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
+    if (!staged) return json(res, 409, { error: 'nothing staged' });
+    const q = staged;
+    staged = null;
+    goLive(q, body.leadMs);
+    return json(res, 200, { ok: true, round: game.round, advanced: true });
   }
 
   // --- host: reveal answer + award points ---
@@ -539,6 +588,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
     cancelPendingStart();
+    staged = null;
     players.clear();
     game.phase = 'lobby';
     game.question = '';

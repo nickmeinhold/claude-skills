@@ -296,3 +296,60 @@ join() {
   run post "/host/end?token=WRONG" '{}'
   [ "$(field "$output" 's.error')" = "bad host token" ] || fail "output=$output"
 }
+
+# --- staging slot (lookahead-1 prefetch): /host/stage + /host/advance ---------
+
+@test "stage parks the next question without leaking it into public state (anti-peek)" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  run post "/host/stage?token=$TOKEN" '{"question":"Q2SECRET","options":["x","y"],"correct":1}'
+  [ "$(field "$output" 's.staged')" = "true" ] || fail "stage not acknowledged: $output"
+  # the live question is unchanged and the staged one must be invisible in /state
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q1" ] || fail "live question changed by stage: $output"
+  [ "$(field "$output" 's.phase')" = "question" ] || fail "phase changed by stage: $output"
+  [ "$(field "$output" 's.correct')" = "null" ] || fail "correct leaked during live question: $output"
+  if curl -s "$B/state" | grep -q "Q2SECRET"; then fail "staged question leaked into /state"; fi
+}
+
+@test "advance promotes the staged question live and consumes the slot" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.advanced')" = "true" ] || fail "advance failed: $output"
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q2" ] || fail "advance did not promote Q2: $output"
+  # slot is single-use: a second advance with nothing staged is a 409
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "slot not consumed: $output"
+}
+
+@test "advance with nothing staged returns an error" {
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "expected 'nothing staged': $output"
+}
+
+@test "stage and advance require the host token" {
+  run post "/host/stage?token=WRONG" '{"question":"Q","options":["x","y"],"correct":0}'
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "stage not token-gated: $output"
+  run post "/host/advance?token=WRONG" '{}'
+  [ "$(field "$output" 's.error')" = "bad host token" ] || fail "advance not token-gated: $output"
+}
+
+@test "stage rejects an out-of-range correct index (validated like ask)" {
+  run post "/host/stage?token=$TOKEN" '{"question":"Q","options":["x","y"],"correct":5}'
+  [ "$(field "$output" 's.error')" = "correct must be 0..1" ] || fail "stage did not range-check: $output"
+}
+
+@test "reset clears the staged slot" {
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  post "/host/reset?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "reset did not clear staged slot: $output"
+}
+
+@test "asking a question directly clears any staged question" {
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "ask did not clear staged slot: $output"
+}

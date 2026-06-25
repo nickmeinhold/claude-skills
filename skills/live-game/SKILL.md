@@ -93,10 +93,22 @@ and to read the final leaderboard aloud after a reveal.
 | POST | `/join` | audience | `{name, playerId?, secret?}` → server issues `{playerId, secret}` |
 | POST | `/vote` | audience | `{playerId, secret, option}` — first answer locks |
 | POST | `/me` | audience | `{playerId, secret}` → caller's own score/gain/verdict |
-| POST | `/host/ask` | host | `{question, options[], correct, timeLimit?}` |
+| POST | `/host/ask` | host | `{question, options[], correct, timeLimit?}` — go live now |
+| POST | `/host/stage` | host | `{question, options[], correct, timeLimit?}` — park the NEXT question (lookahead-1) |
+| POST | `/host/advance` | host | promote the staged question live (no compose latency) |
 | POST | `/host/reveal` | host | award points, reveal |
 | POST | `/host/next` | host | back to lobby (keep scores) |
-| POST | `/host/reset` | host | wipe players + scores |
+| POST | `/host/reset` | host | wipe players + scores (clears the staged slot) |
+
+**Staging (decoupled prefetch).** `/host/stage` parks a validated next question
+server-side (single-buffer — a second stage overwrites); `/host/advance` promotes it
+live in one cheap call with zero compose latency. It's the fully-decoupled form of the
+lookahead-1 pacing above: compose Q(n+1) during Q(n)'s answer window and `stage` it,
+then `advance` instead of `ask` when you read the room as ready. Two invariants hold by
+construction: the staged question is **never observable** (`correct` index included)
+until advanced — it lives off `publicState()` entirely; and advancing stays
+**host-triggered** (token-gated), never auto-fired on reveal, so you keep your hand on
+the beat. `ask` and `reset` both clear the slot.
 
 ## Going live to a real room (blast radius — read before exposing publicly)
 
