@@ -27,12 +27,32 @@ REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 
 ## Round 1: Gather Context (parallel)
 
-Fetch PR details and diff to tmp files in parallel — read them back for display in the next step. Two `gh` calls instead of four.
+Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
+
+**Why not `gh pr diff`?** It serves GitHub's *server-side* diff, which lags a push by seconds. Run it in the same breath as `git push` — e.g. on a re-review after addressing findings — and it returns the **pre-push** diff, so all three reviewers grade stale code and can `REQUEST_CHANGES` over "fixes absent from the diff" that are actually present. The fix: fetch the PR head ref and diff the exact `headRefOid` locally — no propagation dependency, always current with the pushed HEAD.
 
 ```bash
-gh pr diff $1 > /tmp/pr-$1-diff.txt &
-gh pr view $1 --json title,body,author,baseRefName,headRefName,files > /tmp/pr-$1-info.json &
-wait
+gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files > /tmp/pr-$1-info.json
+PR_BASE=$(jq -r .baseRefName /tmp/pr-$1-info.json)
+PR_HEAD=$(jq -r .headRefOid  /tmp/pr-$1-info.json)
+
+# Diff the exact PR head commit locally. `pull/$1/head` is the GitHub refspec for
+# the PR head (works for forks too); after fetching it the commit is addressable by
+# SHA. Three-dot diff = changes since the merge-base, matching `gh pr diff` semantics.
+git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
+if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
+  git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
+else
+  # Fallback (head commit not fetchable — rare): verify GitHub's headRefOid is
+  # settled before trusting `gh pr diff`, so we don't capture a still-propagating diff.
+  until [ "$(gh pr view $1 --json headRefOid -q .headRefOid)" = "$PR_HEAD" ]; do sleep 2; done
+  gh pr diff $1 > /tmp/pr-$1-diff.txt
+fi
+
+# Conservation check: on a RE-review after edits, an identical line count to the
+# previous round despite known changes means the diff is stale — re-fetch before
+# trusting any verdict built on it.
+echo "diff line count: $(wc -l < /tmp/pr-$1-diff.txt)"
 cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
@@ -40,6 +60,8 @@ cat /tmp/pr-$1-diff.txt
 ## Rounds 2 ∥ 3 ∥ 4: Maxwell + Kelvin + Carnot Reviews (parallel)
 
 **Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
+
+**Adversary-prompt safety (READ BEFORE EDITING ANY PROMPT BELOW).** Kelvin's and Carnot's prompts contain backtick-quoted identifiers (`` `enum` ``, `` `dart test` ``, `` `pubspec.yaml` ``). A backtick inside a **double-quoted** bash string — or an **unquoted** `<<EOF` heredoc — is command substitution: bash runs the identifier as a command (`command not found`) and the word **silently vanishes** from the brief (this bit a real run — `historyContiguousThrough` in backticks dropped out of Kelvin's prompt). The hand-escaping workaround (`` \` ``) is fragile — one missed escape reopens the hole. So every prompt below is built the same safe way: **static text → a QUOTED heredoc** (`<<'EOF'`, backticks and `$` literal, zero escaping), **dynamic data (PR info, diff, prior reviews) → appended as literal files**, then handed to the CLI via `"$(cat file)"` (Gemini) or `< file` stdin (Codex). Command-substitution output is never re-parsed for backticks, so it's injection-proof regardless of diff contents. **Never inline a prompt as a double-quoted string or an unquoted heredoc.**
 
 **Step 0 — Kelvin capability probe (avoid wasting ~30s on doomed retries).**
 
@@ -92,38 +114,39 @@ fi
 **Step A — fire Kelvin's review as a backgrounded bash (only if probe found a Pro model):**
 
 ```bash
-PR_INFO=$(cat /tmp/pr-$1-info.json)
-PR_DIFF=$(cat /tmp/pr-$1-diff.txt)
-
 KELVIN_PID=""
 if [ -n "$KELVIN_MODEL" ]; then
-# Backgrounded so Claude can compose Maxwell's review while Gemini's
-# API call resolves in parallel. wait $KELVIN_PID below before reading
-# the output file. Skipped entirely when the probe came back empty.
-# GEMINI_CLI_TRUST_WORKSPACE=true pre-trusts the workspace so the CLI
-# reaches the model instead of stalling on the "trusted folders" gate.
-env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
+# Build Kelvin's prompt in a FILE: static text via a QUOTED heredoc (<<'EOF') so
+# backticks and $ stay LITERAL — no hand-escaping, no command substitution. A
+# backtick'd identifier in a double-quoted prompt string (e.g. `dart test`) would
+# otherwise be run by bash and silently vanish from the brief. Then append the PR
+# info + diff as literal data and pass the whole file via "$(cat …)" — substitution
+# output is NOT re-parsed for backticks, so it's injection-proof no matter what the
+# diff contains. See "Adversary-prompt safety" note above.
+cat > /tmp/kelvin-prompt-$1.txt <<'KELVIN_PROMPT_EOF'
+You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the cold, calculating heel wrestler of code review - absolute zero tolerance for bullshit
 - Randomly drop ice/cold puns and thermodynamics references
-- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: \`Roy Batty: \"I've seen things you people wouldn't believe.\"\`
+- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: `Roy Batty: "I've seen things you people wouldn't believe."`
 - Swear when the code deserves it - this is a cage match, not a tea party
 - Be theatrical but ACCURATE - your analysis must be technically sound even if your delivery is savage
 
 Review this PR and provide your verdict. Be specific with file:line references.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
-- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Closed sets of identifiers should be `enum` / `sealed class` / branded type, not `String`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
 - **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
-$PR_INFO
-
-Diff:
-$PR_DIFF
+KELVIN_PROMPT_EOF
+cat /tmp/pr-$1-info.json >> /tmp/kelvin-prompt-$1.txt
+printf '\n\nDiff:\n' >> /tmp/kelvin-prompt-$1.txt
+cat /tmp/pr-$1-diff.txt >> /tmp/kelvin-prompt-$1.txt
+cat >> /tmp/kelvin-prompt-$1.txt <<'KELVIN_FORMAT_EOF'
 
 Format your response as:
 ## KelvinBitBrawler's Review
@@ -140,7 +163,13 @@ Format your response as:
 
 **The Concerns:**
 - [What needs attention]
-" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
+KELVIN_FORMAT_EOF
+
+# Backgrounded so Claude can compose Maxwell's review while Gemini's API call
+# resolves in parallel. wait $KELVIN_PID below before reading the output file.
+# GEMINI_CLI_TRUST_WORKSPACE=true pre-trusts the workspace so the CLI reaches the
+# model instead of stalling on the "trusted folders" gate.
+env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "$(cat /tmp/kelvin-prompt-$1.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
 KELVIN_PID=$!
 fi
 ```
@@ -180,31 +209,35 @@ SCHEMA_EOF
 # update-notifier (npm logs an update banner to ~/.npm). Belt-and-braces
 # for the "trust build/test claims" rule above — if Carnot runs a tool
 # despite the rule, at least the failure mode isn't a sandbox panic.
-cat <<EOF | DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 &
+# Same file-based, QUOTED-heredoc pattern as Kelvin: static prompt text with literal
+# backticks (no escaping), then the PR info + diff appended as data. codex exec reads
+# the prompt from stdin (prompt arg `-`), so we redirect the file in with `< …`.
+cat > /tmp/carnot-prompt-$1.txt <<'CARNOT_PROMPT_EOF'
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the perfectionist engineer of code review — you measure every design against the ideal Carnot cycle
 - Your catchphrase: "no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are"
 - Drop thermodynamics references (entropy, reversibility, efficiency, the second law) — Sadi Carnot is your patron saint
-- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: \`Dijkstra: "Simplicity is prerequisite for reliability."\`
+- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: `Dijkstra: "Simplicity is prerequisite for reliability."`
 - Be theatrical but TECHNICALLY RIGOROUS — your authority comes from the math, not the swagger
 - Different inductive bias from Maxwell (Claude) and Kelvin (Gemini) — your job is to catch what they'd both miss
 
-Review this PR. The output schema enforces structured JSON — fill every field. \`findings\`, \`good\`, and \`concerns\` are arrays of strings; each string can be a full bullet point including file:line references and quoted code where useful. The personality voice belongs in the prose of those bullets, not in extra fields. Be specific.
+Review this PR. The output schema enforces structured JSON — fill every field. `findings`, `good`, and `concerns` are arrays of strings; each string can be a full bullet point including file:line references and quoted code where useful. The personality voice belongs in the prose of those bullets, not in extra fields. Be specific.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
-- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Closed sets of identifiers should be `enum` / `sealed class` / branded type, not `String`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
-- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or \`pubspec.yaml\`/\`package.json\` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like \`dart test\` / \`flutter test\` / \`npm test\` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
+- **Verify before claiming bugs, but verify by reading.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version against the lock file or `pubspec.yaml`/`package.json` *in the diff or repo*. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. **Trust the build/test claims in the PR description; do NOT run the test suite yourself unless the PR body makes a specific claim you can't verify by reading the diff.** Running tools like `dart test` / `flutter test` / `npm test` from inside the cage-match agent risks burning the turn budget on environment recovery (sandbox writes to telemetry / cache / lockfiles) instead of producing a review.
 
 PR Info:
-$PR_INFO
+CARNOT_PROMPT_EOF
+cat /tmp/pr-$1-info.json >> /tmp/carnot-prompt-$1.txt
+printf '\n\nDiff:\n' >> /tmp/carnot-prompt-$1.txt
+cat /tmp/pr-$1-diff.txt >> /tmp/carnot-prompt-$1.txt
 
-Diff:
-$PR_DIFF
-EOF
+DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 < /tmp/carnot-prompt-$1.txt &
 CARNOT_PID=$!
 ```
 
@@ -369,18 +402,20 @@ If Kelvin is available, send Maxwell's review to Kelvin for counter-critique:
 
 ```bash
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
-  MAXWELL_REVIEW=$(cat /tmp/maxwell-review-$1.md)
-  KELVIN_REVIEW=$(cat /tmp/kelvin-review-$1.md)
+  # Same quoted-heredoc + append-data pattern as the review prompts: the two review
+  # bodies (full of backticks and quoted code) are appended as literal files, never
+  # interpolated into a shell string.
+  cat > /tmp/kelvin-critique-prompt-$1.txt <<'KELVIN_CRITIQUE_EOF'
+You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
 
-  KELVIN_CRITIQUE=$(env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "You are KelvinBitBrawler - the cold, calculating heel of code review. Your rival MaxwellMergeSlam just reviewed the same PR as you.
-
-Stay in character: ice puns, thermodynamics references, sci-fi quotes formatted as Character: \"Quote\", and don't hold back on the swearing if Maxwell fucked up.
+Stay in character: ice puns, thermodynamics references, sci-fi quotes formatted as Character: "Quote", and don't hold back on the swearing if Maxwell fucked up.
 
 Your review:
-$KELVIN_REVIEW
-
-Maxwell's review:
-$MAXWELL_REVIEW
+KELVIN_CRITIQUE_EOF
+  cat /tmp/kelvin-review-$1.md >> /tmp/kelvin-critique-prompt-$1.txt
+  printf '\n\nMaxwell'\''s review:\n' >> /tmp/kelvin-critique-prompt-$1.txt
+  cat /tmp/maxwell-review-$1.md >> /tmp/kelvin-critique-prompt-$1.txt
+  cat >> /tmp/kelvin-critique-prompt-$1.txt <<'KELVIN_CRITIQUE_TAIL_EOF'
 
 Critique Maxwell's review like you're cutting a promo before a cage match:
 1. What did Maxwell miss that you caught? (Rub it in)
@@ -389,7 +424,9 @@ Critique Maxwell's review like you're cutting a promo before a cage match:
 4. Any points where Maxwell is just WRONG? (Destroy him)
 
 This is a cage match, not a tea party. But stay technically accurate - your credibility depends on it.
-" --output-format text 2>&1 | grep -v "Loaded cached credentials")
+KELVIN_CRITIQUE_TAIL_EOF
+
+  KELVIN_CRITIQUE=$(env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "$(cat /tmp/kelvin-critique-prompt-$1.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials")
 
   echo "$KELVIN_CRITIQUE"
 fi
