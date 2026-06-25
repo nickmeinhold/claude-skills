@@ -22,11 +22,9 @@ setup() {
   # (which boots a second server with a lead).
   LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=0 node "$SERVER" --port "$PORT" >/tmp/live-game-bats.log 2>&1 &
   SERVER_PID=$!
-  # wait for the port to accept connections (max ~3s)
-  for _ in $(seq 1 30); do
-    curl -s "$B/state" >/dev/null 2>&1 && break
-    sleep 0.1
-  done
+  # block until ready; fail-loud on timeout so a slow boot can't masquerade as a
+  # status=7 assertion failure downstream (the PR #92 CI flake).
+  wait_for_server "$B" /tmp/live-game-bats.log
 }
 
 teardown() {
@@ -44,6 +42,23 @@ field() { node -e 'const s=JSON.parse(process.argv[1]);console.log(eval(process.
 join() {
   local resp; resp=$(post /join "{\"name\":\"$1\"}")
   node -e 'const d=JSON.parse(process.argv[1]);console.log((d.playerId||"")+" "+(d.secret||""))' "$resp"
+}
+
+# wait_for_server <base-url> [<logfile>] — block until /state answers, with a
+# generous budget for a cold/loaded CI runner, then FAIL LOUDLY (dump the log)
+# if it never comes up. A silent 3s fall-through is what let a slow boot surface
+# as an opaque `status=7` (connection refused) three lines into a test — the CI
+# flake on the PR #92 merge commit. 100×0.1s ≈ 10s headroom; a real boot failure
+# now prints the server log instead of masquerading as a flaky assertion.
+wait_for_server() {
+  local base="$1" logf="${2:-}"
+  for _ in $(seq 1 100); do
+    curl -s "$base/state" >/dev/null 2>&1 && return 0
+    sleep 0.1
+  done
+  echo "live-game server did not become ready on $base within ~10s" >&2
+  [ -n "$logf" ] && [ -f "$logf" ] && { echo "--- $logf ---" >&2; cat "$logf" >&2; }
+  return 1
 }
 
 @test "server boots and serves a lobby snapshot" {
@@ -212,7 +227,7 @@ join() {
   LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_RATE_MAX=3 LIVE_GAME_RATE_WINDOW_MS=60000 \
     node "$SERVER" --port "$aux_port" >/tmp/live-game-bats-aux.log 2>&1 &
   AUX_PID=$!
-  for _ in $(seq 1 30); do curl -s "http://localhost:$aux_port/state" >/dev/null 2>&1 && break; sleep 0.1; done
+  wait_for_server "http://localhost:$aux_port" /tmp/live-game-bats-aux.log || fail "aux server did not boot"
   # 3 joins allowed, the 4th in the same window is throttled.
   local last
   for i in $(seq 1 4); do
@@ -227,7 +242,7 @@ join() {
   local p=7397 cb
   LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=600 node "$SERVER" --port "$p" >/tmp/live-game-bats-cd.log 2>&1 &
   AUX_PID=$!
-  for _ in $(seq 1 30); do curl -s "http://localhost:$p/state" >/dev/null 2>&1 && break; sleep 0.1; done
+  wait_for_server "http://localhost:$p" /tmp/live-game-bats-cd.log || fail "lead-in server did not boot"
   cb="http://localhost:$p"
   curl -s -X POST "$cb/host/ask?token=$TOKEN" -H 'content-type: application/json' \
     -d '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
@@ -243,7 +258,7 @@ join() {
   local p=7396 cb
   LIVE_GAME_HOST_TOKEN="$TOKEN" LIVE_GAME_LEAD_MS=600 node "$SERVER" --port "$p" >/tmp/live-game-bats-cancel.log 2>&1 &
   AUX_PID=$!
-  for _ in $(seq 1 30); do curl -s "http://localhost:$p/state" >/dev/null 2>&1 && break; sleep 0.1; done
+  wait_for_server "http://localhost:$p" /tmp/live-game-bats-cancel.log || fail "cancel-test server did not boot"
   cb="http://localhost:$p"
   curl -s -X POST "$cb/host/ask?token=$TOKEN" -H 'content-type: application/json' \
     -d '{"question":"Q","options":["x","y"],"correct":0}' >/dev/null
