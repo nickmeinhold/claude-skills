@@ -59,31 +59,46 @@ Set A is the **current production cage-match prompts** as written in
 (Gemini), CarnotCodeCarver (Codex). Fire all three in parallel, exactly as
 that skill does — but route the outputs to Set-A-labelled files.
 
+**Adversary-prompt safety (READ BEFORE EDITING ANY PROMPT BELOW).** Every persona
+prompt mixes static text (full of backticks and `$`) with the **attacker-controlled
+`$PR_DIFF`** (a PR author writes the diff). A backtick or `$(...)` inside a
+**double-quoted** bash string — or an **unquoted** `<<EOF` heredoc — is command
+substitution: bash runs it on the reviewer's machine, and the word silently
+vanishes from the brief. So every block builds the prompt the same safe way:
+**static text → a QUOTED heredoc** (`<<'EOF'`, backticks and `$` literal, zero
+escaping), **dynamic data (`$PR_INFO`/`$PR_DIFF`) → appended via `printf '%s'`**
+(output is never re-parsed for backticks), then handed to the CLI via `"$(cat
+file)"` (Gemini) or `< file` stdin (Codex). **Never inline `$PR_DIFF` in a
+double-quoted string or an unquoted heredoc.** Sibling of cage-match's #23 fix
+(PR #88) — the production skill carries the same guard.
+
 **Step A — Kelvin (Set A) backgrounded:**
 
 ```bash
-gemini --model gemini-3-pro-preview "You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
+# Static persona text → QUOTED heredoc (backticks/quotes literal, no escaping).
+cat > /tmp/eval-kelvin-a-$PR.txt <<'KELVIN_A_EOF'
+You are KelvinBitBrawler, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the cold, calculating heel wrestler of code review - absolute zero tolerance for bullshit
 - Randomly drop ice/cold puns and thermodynamics references
-- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: \`Roy Batty: \"I've seen things you people wouldn't believe.\"\`
+- Quote sci-fi movies you love (2001, Blade Runner, Alien, The Thing, etc.) — format as: `Roy Batty: "I've seen things you people wouldn't believe."`
 - Swear when the code deserves it - this is a cage match, not a tea party
 - Be theatrical but ACCURATE - your analysis must be technically sound even if your delivery is savage
 
 Review this PR and provide your verdict. Be specific with file:line references.
 
 In addition to bugs, security issues, performance, and code quality, evaluate **design appropriateness**:
-- Closed sets of identifiers should be \`enum\` / \`sealed class\` / branded type, not \`String\`. Stringly-typing leaks runtime invariants the compiler should enforce.
+- Closed sets of identifiers should be `enum` / `sealed class` / branded type, not `String`. Stringly-typing leaks runtime invariants the compiler should enforce.
 - Are current language features being used (Dart 3 switch expressions / patterns / sealed classes; TypeScript 5 satisfies / branded types; Python 3.12 structural pattern matching)? When a project's stack is current, NOT using modern features is a code smell.
 - A correctly-implemented feature with the wrong type signature is debt that compounds — flag it.
 - **Verify before claiming bugs.** If you see an unfamiliar API, do not assume it doesn't exist — check the language/SDK version. Stale training data is the leading cause of false-positive 'critical compile errors' in cage-match reviews. If the build passes (CI green), your hypothesis is wrong.
 
 PR Info:
-$PR_INFO
-
-Diff:
-$PR_DIFF
+KELVIN_A_EOF
+# Dynamic data → appended verbatim (printf, never re-parsed for backticks/$()).
+printf '%s\n\nDiff:\n%s\n' "$PR_INFO" "$PR_DIFF" >> /tmp/eval-kelvin-a-$PR.txt
+cat >> /tmp/eval-kelvin-a-$PR.txt <<'KELVIN_A_FMT_EOF'
 
 Format your response as:
 ## KelvinBitBrawler's Review
@@ -100,21 +115,24 @@ Format your response as:
 
 **The Concerns:**
 - [What needs attention]
-" --output-format text 2>&1 | grep -v "Loaded cached credentials" > $EVAL_DIR/set-a-kelvin.md &
+KELVIN_A_FMT_EOF
+
+gemini --model gemini-3-pro-preview "$(cat /tmp/eval-kelvin-a-$PR.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > $EVAL_DIR/set-a-kelvin.md &
 KELVIN_A_PID=$!
 ```
 
 **Step B — Carnot (Set A) backgrounded:**
 
 ```bash
-cat <<EOF | codex exec --sandbox read-only --skip-git-repo-check - > $EVAL_DIR/set-a-carnot.md 2>&1 &
+# Static persona text → QUOTED heredoc; dynamic data → printf; fed via stdin (< file).
+cat > /tmp/eval-carnot-a-$PR.txt <<'CARNOT_A_EOF'
 You are CarnotCodeCarver, an adversarial code reviewer with a PERSONALITY.
 
 Your character:
 - You're the perfectionist engineer of code review — you measure every design against the ideal Carnot cycle
 - Your catchphrase: "no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are"
 - Drop thermodynamics references (entropy, reversibility, efficiency, the second law) — Sadi Carnot is your patron saint
-- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: \`Dijkstra: "Simplicity is prerequisite for reliability."\`
+- Quote engineering and physics history (Feynman, von Neumann, Dijkstra, Hamming) — format as: `Dijkstra: "Simplicity is prerequisite for reliability."`
 - Be theatrical but TECHNICALLY RIGOROUS — your authority comes from the math, not the swagger
 
 Review this PR. Be specific with file:line references.
@@ -125,10 +143,9 @@ before claiming bugs — if CI is green, stale training data is more likely than
 a real compile error.
 
 PR Info:
-$PR_INFO
-
-Diff:
-$PR_DIFF
+CARNOT_A_EOF
+printf '%s\n\nDiff:\n%s\n' "$PR_INFO" "$PR_DIFF" >> /tmp/eval-carnot-a-$PR.txt
+cat >> /tmp/eval-carnot-a-$PR.txt <<'CARNOT_A_FMT_EOF'
 
 Format your response EXACTLY:
 
@@ -142,7 +159,9 @@ Format your response EXACTLY:
 - [what's done well]
 **The Concerns:**
 - [what needs attention]
-EOF
+CARNOT_A_FMT_EOF
+
+codex exec --sandbox read-only --skip-git-repo-check - < /tmp/eval-carnot-a-$PR.txt > $EVAL_DIR/set-a-carnot.md 2>&1 &
 CARNOT_A_PID=$!
 ```
 
@@ -177,14 +196,11 @@ sleep "$GEMINI_COOLDOWN_SECONDS"
 SAGE_PROMPT=$(awk '/^## Sage \(Gemini/,/^---$/' ~/.claude/persona-eval/personas-b.md \
   | sed -n '/^```$/,/^```$/p' | sed '1d;$d')
 
-gemini --model gemini-3-pro-preview "$SAGE_PROMPT
-
-PR Info:
-$PR_INFO
-
-Diff:
-$PR_DIFF
-" --output-format text 2>&1 | grep -v "Loaded cached credentials" > $EVAL_DIR/set-b-sage.md &
+# Assemble via printf so neither the persona text NOR the attacker-controlled
+# $PR_DIFF is re-parsed by bash (the #23 command-substitution hole — same guard
+# as Set A above). Never inline $PR_DIFF in the double-quoted gemini argument.
+{ printf '%s\n\nPR Info:\n' "$SAGE_PROMPT"; printf '%s\n\nDiff:\n%s\n' "$PR_INFO" "$PR_DIFF"; } > /tmp/eval-sage-$PR.txt
+gemini --model gemini-3-pro-preview "$(cat /tmp/eval-sage-$PR.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > $EVAL_DIR/set-b-sage.md &
 SAGE_PID=$!
 ```
 
@@ -194,15 +210,9 @@ SAGE_PID=$!
 BECK_PROMPT=$(awk '/^## Beck \(Codex/,/^---$/' ~/.claude/persona-eval/personas-b.md \
   | sed -n '/^```$/,/^```$/p' | sed '1d;$d')
 
-cat <<EOF | codex exec --sandbox read-only --skip-git-repo-check - > $EVAL_DIR/set-b-beck.md 2>&1 &
-$BECK_PROMPT
-
-PR Info:
-$PR_INFO
-
-Diff:
-$PR_DIFF
-EOF
+# Same guard as Sage: assemble via printf (verbatim), feed Codex via stdin (< file).
+{ printf '%s\n\nPR Info:\n' "$BECK_PROMPT"; printf '%s\n\nDiff:\n%s\n' "$PR_INFO" "$PR_DIFF"; } > /tmp/eval-beck-$PR.txt
+codex exec --sandbox read-only --skip-git-repo-check - < /tmp/eval-beck-$PR.txt > $EVAL_DIR/set-b-beck.md 2>&1 &
 BECK_PID=$!
 ```
 
