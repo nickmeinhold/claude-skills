@@ -314,13 +314,34 @@ join() {
 @test "advance promotes the staged question live and consumes the slot" {
   post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
   post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  # Reveal the live question first — advance is a between-questions beat, not a
+  # mid-question one (see the phase-guard test below).
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
   run post "/host/advance?token=$TOKEN" '{}'
   [ "$(field "$output" 's.advanced')" = "true" ] || fail "advance failed: $output"
   run curl -s "$B/state"
   [ "$(field "$output" 's.question')" = "Q2" ] || fail "advance did not promote Q2: $output"
   # slot is single-use: a second advance with nothing staged is a 409
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
   run post "/host/advance?token=$TOKEN" '{}'
   [ "$(field "$output" 's.error')" = "nothing staged" ] || fail "slot not consumed: $output"
+}
+
+@test "advance during a live question is rejected (must reveal first)" {
+  post "/host/ask?token=$TOKEN" '{"question":"Q1","options":["a","b"],"correct":0}' >/dev/null
+  post "/host/stage?token=$TOKEN" '{"question":"Q2","options":["x","y"],"correct":1}' >/dev/null
+  # Q1 is LIVE. Advancing now would wipe players' in-flight answers and desync a
+  # subsequent /host/reveal onto Q2 (the advance/reveal race Carnot caught).
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.error')" = "reveal the live question before advancing" ] \
+    || fail "advance not phase-guarded during a live question: $output"
+  # the rejected advance left the live question untouched AND preserved the slot
+  run curl -s "$B/state"
+  [ "$(field "$output" 's.question')" = "Q1" ] || fail "rejected advance mutated the live question: $output"
+  # once revealed, the still-staged Q2 promotes normally
+  post "/host/reveal?token=$TOKEN" '{}' >/dev/null
+  run post "/host/advance?token=$TOKEN" '{}'
+  [ "$(field "$output" 's.advanced')" = "true" ] || fail "advance after reveal failed (slot lost?): $output"
 }
 
 @test "advance with nothing staged returns an error" {

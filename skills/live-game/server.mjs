@@ -513,6 +513,15 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
     if (!staged) return json(res, 409, { error: 'nothing staged' });
+    // Phase guard: refuse to advance over a LIVE or counting-down question.
+    // goLive() wipes every player's in-flight answer (and bumps the round), so a
+    // /host/reveal meant for the current question would then score the promoted
+    // one instead — the players' answers silently lost. Advancing is a
+    // between-questions beat (from reveal/lobby/podium), never mid-question; the
+    // host must reveal (or /next) first. (Anti-peek stays intact regardless — a
+    // staged question is unobservable until this promotion either way.)
+    if (game.phase === 'question' || game.phase === 'countdown')
+      return json(res, 409, { error: 'reveal the live question before advancing' });
     const q = staged;
     staged = null;
     goLive(q, body.leadMs);
@@ -571,6 +580,9 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (!hostOk(req, body)) return json(res, 403, { error: 'bad host token' });
     cancelPendingStart();
+    // End is a terminal state — drop any parked question so a stray /host/advance
+    // can't silently restart the game from the podium.
+    staged = null;
     // Make sure ranks reflect final scores even if /end follows a non-reveal.
     for (const { p, rank } of standings()) { p.prevRank = p.rank || rank; p.rank = rank; }
     game.phase = 'podium';
