@@ -1,17 +1,38 @@
 #!/usr/bin/env bash
 # transcribe — orchestrate local speaker-attributed transcription.
 # Usage: run.sh <audio-or-video-file> [speakers.json]
+#        run.sh --reattribute <workdir> <speakers.json>   # re-run name attribution only
 set -euo pipefail
-
-AUDIO="${1:?usage: run.sh <audio-or-video-file> [speakers.json]}"
-CONFIG="${2:-}"
-[ -f "$AUDIO" ] || { echo "no such file: $AUDIO" >&2; exit 1; }
-[ -n "$CONFIG" ] && [ ! -f "$CONFIG" ] && { echo "no such config: $CONFIG" >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARAKEET_PY="$HOME/.local/share/uv/tools/parakeet-mlx/bin/python"   # stdlib + json
 PYANNOTE_PY="$HOME/.local/share/uv/tools/pyannote-audio/bin/python" # torch + pyannote
 PARAKEET="$HOME/.local/bin/parakeet-mlx"
+
+# --reattribute: redo identity attribution + outputs against an EXISTING work dir
+# (reuses turns.json — skips the slow diarize/transcribe steps). Use after editing
+# speakers.json to add ground-truth `anchor` lines drawn from a first-pass transcript.
+if [ "${1:-}" = "--reattribute" ]; then
+  WORK="${2:?usage: run.sh --reattribute <workdir> <speakers.json>}"
+  CONFIG="${3:?usage: run.sh --reattribute <workdir> <speakers.json>}"
+  [ -f "$WORK/turns.json" ] || { echo "no turns.json in $WORK (run a full pass first)" >&2; exit 1; }
+  [ -f "$CONFIG" ] || { echo "no such config: $CONFIG" >&2; exit 1; }
+  export TRANSCRIBE_WORK="$WORK"
+  export TRANSCRIBE_CONFIG="$CONFIG"
+  export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$("$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG")}"
+  echo "[re-attribute] LLM identity attribution on $WORK"
+  "$PARAKEET_PY" "$DIR/attribute.py"
+  echo "[re-attribute] building outputs"
+  "$PARAKEET_PY" "$DIR/build_outputs.py"
+  echo "Done -> $WORK/transcript.html"
+  command -v open >/dev/null && open "$WORK/transcript.html" || true
+  exit 0
+fi
+
+AUDIO="${1:?usage: run.sh <audio-or-video-file> [speakers.json]}"
+CONFIG="${2:-}"
+[ -f "$AUDIO" ] || { echo "no such file: $AUDIO" >&2; exit 1; }
+[ -n "$CONFIG" ] && [ ! -f "$CONFIG" ] && { echo "no such config: $CONFIG" >&2; exit 1; }
 
 base="$(basename "${AUDIO%.*}")"
 # Default work dir under ~/git (NOT ~/Downloads — macOS TCC). Override via env.
