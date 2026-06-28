@@ -24,6 +24,24 @@ Outputs land in `~/git/transcribe-<basename>/`: `transcript.html` (open this),
 `transcript_speakers.txt`, `transcript_speakers.srt`, plus the intermediates
 (`audio.json`, `diarization.rttm`, `turns.json`, `turns_named.json`).
 
+### Re-attribute (fix names without re-transcribing)
+
+After a first pass you've READ the transcript — so you can add **ground-truth
+`anchor` lines** (one verbatim-ish line you KNOW each speaker said: a
+self-introduction, a host's opener, the expert's distinctive technical line) and
+re-run JUST the attribution + build steps against the existing `turns.json`:
+
+```bash
+bash ~/.claude/skills/transcribe/scripts/run.sh --reattribute <workdir> <speakers.json>
+```
+
+This skips the slow diarize/transcribe steps (~60–90s, not the full pipeline).
+Anchors are the single biggest accuracy lever — strictly better than the first
+pass, which had none to seed from. Use this when a misattribution slips through,
+or to upgrade a profile-only first pass. (Attribution self-heals failed chunks by
+recursive split, so wholesale anonymous blocks are now rare — but anchors still
+beat profiles for same-gender / low-dialogue speakers.)
+
 > Work dir defaults to `~/git/...`, NOT `~/Downloads` — the latter is macOS
 > TCC-protected and the auto-updating `claude` binary loses access to it (see
 > memory `reference-downloads-tcc-treadmill`). Override with `TRANSCRIBE_WORK=...`.

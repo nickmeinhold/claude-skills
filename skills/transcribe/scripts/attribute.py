@@ -89,8 +89,8 @@ def parse_json_array(s):
     return json.loads(s[a:b + 1])
 
 
-def label_chunk(args):
-    start, chunk, turns = args
+def try_chunk(start, chunk, turns):
+    """One attribution attempt for a span. Returns {i: [obj,...]} or None on failure."""
     ctx_turns = turns[max(0, start - CONTEXT):start]
     ctx = ""
     if ctx_turns:
@@ -108,10 +108,26 @@ def label_chunk(args):
                 if "i" in o:
                     by_i.setdefault(o["i"], []).append(o)
             if len(by_i) >= len(chunk) * 0.8:
-                return start, by_i
+                return by_i
         except Exception as e:
-            print(f"  chunk@{start} attempt {attempt+1}: {e}", flush=True)
-    return start, {}
+            print(f"  chunk@{start} (n={len(chunk)}) attempt {attempt+1}: {e}", flush=True)
+    return None
+
+
+def label_chunk(args):
+    """Attribute a span; on hard failure, split in half and recurse so one bad
+    turn costs <=5 turns instead of sinking the whole 100-turn chunk to anonymous."""
+    start, chunk, turns = args
+    by_i = try_chunk(start, chunk, turns)
+    if by_i is not None:
+        return start, by_i
+    if len(chunk) <= 5:
+        return start, {}  # give up on this small span -> cluster-id fallback
+    mid = len(chunk) // 2
+    print(f"  chunk@{start} failed -> splitting ({len(chunk)} -> {mid}+{len(chunk)-mid})", flush=True)
+    _, left = label_chunk((start, chunk[:mid], turns))
+    _, right = label_chunk((start + mid, chunk[mid:], turns))
+    return start, {**left, **right}
 
 
 def main():
@@ -140,6 +156,10 @@ def main():
     unl = sum(1 for t in assigned if t["speaker"] not in NAMES)
     print(f"  {len(assigned)} turns labelled "
           f"({dict(Counter(t['speaker'] for t in assigned))}); {unl} unresolved", flush=True)
+    if unl:
+        print("  NOTE: some turns stayed anonymous. Add ground-truth `anchor` lines to "
+              "speakers.json (one verbatim line each speaker said) and re-run with:\n"
+              "    run.sh --reattribute <workdir> <speakers.json>", flush=True)
 
 
 if __name__ == "__main__":
