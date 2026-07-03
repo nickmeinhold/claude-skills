@@ -137,9 +137,15 @@ destination to certify the moved file's schema/provenance.
    prefixes (not bare `*.md`, which would mis-flag a future `MEMORY-*.md`
    sub-index), and match the pointer as a fixed string:
    ```bash
-   cd "$MEM" && for f in memory_*.md concept_*.md feedback_*.md reference_*.md; do
-     [ -e "$f" ] || continue   # no-match globs expand to the literal pattern
-     grep -qF "($f)" MEMORY.md || echo "ORPHANED $f"
+   # The Bash tool runs zsh, where an unmatched glob ERRORS (bash expands to the
+   # literal); enable null_glob so no-match just yields an empty loop, either shell.
+   cd "$MEM"; setopt null_glob 2>/dev/null || shopt -s nullglob 2>/dev/null
+   # Check ALL index files, not just MEMORY.md — some dirs shard the index
+   # (this community graph splits into MEMORY.community.md + MEMORY.roster.md);
+   # grepping only MEMORY.md false-flags every person_*.md as orphaned.
+   INDEXES=$(ls MEMORY*.md 2>/dev/null)
+   for f in memory_*.md concept_*.md feedback_*.md reference_*.md person_*.md bridge_*.md; do
+     grep -qF "$f" $INDEXES || echo "ORPHANED $f"
    done
    ```
    **Fix (auto — same dir, reversible via git):** read the file's frontmatter
@@ -247,8 +253,11 @@ and usually Nick's hand.
 1. **ORPHANED (coverage gap)** — a real subproject/dir exists but no parent
    index mentions it. Detect: list the child dirs that look like projects (have
    their own `.git`, `package.json`, `pubspec.yaml`, or `CLAUDE.md`) and grep the
-   parent `CLAUDE.md`'s subprojects table for each. A dir present on disk but
-   absent from the table is invisible to a session that reads only the parent.
+   parent `CLAUDE.md`'s subprojects table for each. **Match the exact backticked
+   `` `dir/` `` token, not a bare substring** — `community` substring-matches the
+   `community-grants/` row and yields a false in-table (caught 2026-07-03). A dir
+   present on disk but absent from the table is invisible to a session that reads
+   only the parent.
    **Fix (auto — reversible via git):** add the table row / index line.
    (Caught 2026-07-03: `community/` — its own repo — was missing from the
    imagineering monorepo's subprojects table.)
