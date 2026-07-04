@@ -2,16 +2,17 @@
 description: Reconcile every substrate where an artifact drifts from the home it'll be looked for in — open task issues, the memory graph, CLAUDE.md + READMEs, and un-backed work — against reality. Close already-done work with evidence, fix stale descriptions, dedupe, relabel strays, re-home lost memories, patch stale/orphaned docs, and flag important artifacts with no git home. Use when Nick says "audit tasks", "reconcile tasks", "clean up the backlog", "re-home memories", "does anything need rehoming", or when restored tasks/memories/docs smell stale.
 ---
 
-# Task Audit
+# Reconcile
 
-Reality-check the task backlog in `nickmeinhold/claude-tasks`. Tasks routinely
-outlive their own completion: work finishes in one session and the issue never
-gets closed (2026-06-11 audit: 4 finished-but-open tasks, 19 migration
-duplicates, 8 mislabels across 300 open issues). This skill is the deliberate
-version of that accidental audit.
+Reconcile artifacts against reality — starting with the task backlog in
+`nickmeinhold/claude-tasks`. Tasks routinely outlive their own completion: work
+finishes in one session and the issue never gets closed (2026-06-11 audit: 4
+finished-but-open tasks, 19 migration duplicates, 8 mislabels across 300 open
+issues). This skill is the deliberate version of that accidental audit.
 
-**The name lies — this is an *artifact-reconciliation* audit, and "task" is just
-substrate #1.** A mislabeled task, a mis-homed memory, a CLAUDE.md that points at
+**Reconciliation spans substrates — "task" was just substrate #1** (this skill was
+born as `task-audit`, renamed once its scope outgrew the name). A mislabeled task,
+a mis-homed memory, a CLAUDE.md that points at
 a moved file, and a design doc that lives only on local disk are the **same move
 on different substrates**: a thing physically filed where it won't be found (or
 survive) when it's needed. The verdict vocabulary transfers — ORPHANED (real
