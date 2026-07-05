@@ -4,14 +4,18 @@
 # WHY THIS EXISTS (2026-06-18 retro crux, Nick-gated "true"): the whole
 # /consolidate maintenance system was REACTIVE. Every audit — the scorecard
 # noise review, the permission-mode diagnosis, the eviction pass — was triggered
-# by Nick *noticing* a problem and asking. The prediction scorecard ran ~68%
-# unresolvable for 132 cycles before anyone looked; the directive layer sat over
-# budget for an unknown number of sessions with no flag. The detectors existed
-# (scorecard, reinforcement sidecar, eviction audit) but they were JANITORS —
-# they only ran when invoked. An immune system instead responds to a threshold
-# breach WITHOUT waiting for the organism to notice. This script is that immune
-# response: a cheap, synchronous snapshot of system health that /consolidate runs
-# in Phase 0 and that self-reports ONLY on a real breach.
+# by Nick *noticing* a problem and asking. The directive layer sat over budget
+# for an unknown number of sessions with no flag. The detectors existed
+# (reinforcement sidecar, eviction audit) but they were JANITORS — they only ran
+# when invoked. An immune system instead responds to a threshold breach WITHOUT
+# waiting for the organism to notice. This script is that immune response: a
+# cheap, synchronous snapshot of system health that /consolidate runs in Phase 0
+# and that self-reports ONLY on a real breach.
+#
+# 2026-07-05: the scorecard-health check (prediction unresolvable%) was removed
+# when the `predictions` sub-experiment was retired, and REPLACED by a
+# memory-health check (phantom-write rate) that draws a real defect signal from
+# the same readtime files instead of grading a proxy.
 #
 # DESIGN (concept_system_reactive_no_immune_response.md):
 #   1. Silent unless a real breach — the graduation/eviction model, never nagging.
@@ -23,26 +27,25 @@
 #      Phase-0 check naturally runs when Nick (and the mac) are present.
 #
 # CHECKS:
-#   1. scorecard-health — UNRESOLVABLE% (+ malformed-verdict%) over the last
-#      --window readtime-score.json files. This is the exact signal that ran
-#      invisible for 132 cycles. Breach: unresolvable% > --unresolvable-pct.
-#   2. eviction-budget — directive-layer bytes vs --budget, using the SAME
+#   1. eviction-budget — directive-layer bytes vs --budget, using the SAME
 #      formula the eviction audit uses (grep feedback_*/concept_* pointer lines
 #      in CLAUDE.md, wc -c). Breach: layer bytes > budget. The --budget default
-#      (28672) is the SINGLE SOURCE for the cap; SKILL Trigger A references it.
-#   3. wall-clock drift — robust + retry-aware. Baseline = prior NON-retried runs;
+#      is the SINGLE SOURCE for the cap; SKILL Trigger A references it.
+#   2. wall-clock drift — robust + retry-aware. Baseline = prior NON-retried runs;
 #      fence = median + K·MAD (immune to outliers). A retried LATEST run is annotated
 #      (INFO), never a breach. Activates once >=5 clean datapoints exist; until then
 #      informational. Breach: a retry-free run beyond the robust fence.
+#   3. memory-health — phantom-write rate (memory files the scorecard claimed but
+#      that graded null = "missing on disk") over the last --window readtime
+#      files. A real defect signal, not a proxy. Breach: phantom% > --phantom-pct.
 #
 # CONFIG (flag overrides env overrides default):
-#   --window N              HEALTH_WINDOW            (default 10)
-#   --unresolvable-pct PCT  HEALTH_UNRESOLVABLE_PCT  (default 60)
-#   --malformed-pct PCT     HEALTH_MALFORMED_PCT     (default 25)
 #   --budget BYTES          HEALTH_BUDGET            (default 31744)
 #   --claude-md PATH        HEALTH_CLAUDE_MD         (default ~/.claude/CLAUDE.md)
-#   --corpus-glob GLOB      HEALTH_CORPUS_GLOB       (default ~/.claude/consolidation/*/readtime-score.json)
 #   --timing PATH           HEALTH_TIMING            (default ~/.claude/consolidation/timing.jsonl)
+#   --window N              HEALTH_WINDOW            (default 10)
+#   --phantom-pct PCT       HEALTH_PHANTOM_PCT       (default 5)
+#   --corpus-glob GLOB      HEALTH_CORPUS_GLOB       (default ~/.claude/consolidation/*/readtime-score.json)
 #   --verbose               also print GREEN statuses (default: breach-only)
 #   --json                  emit a machine-readable JSON object instead of markdown
 #
@@ -52,9 +55,6 @@
 #   2  usage error
 set -euo pipefail
 
-WINDOW="${HEALTH_WINDOW:-10}"
-UNRESOLVABLE_PCT="${HEALTH_UNRESOLVABLE_PCT:-60}"
-MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
 # 31744 = 31 KiB (31*1024). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
@@ -66,39 +66,39 @@ MALFORMED_PCT="${HEALTH_MALFORMED_PCT:-25}"
 # warns against; the cap reflects the real set.
 BUDGET="${HEALTH_BUDGET:-31744}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
-CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
+WINDOW="${HEALTH_WINDOW:-10}"
+PHANTOM_PCT="${HEALTH_PHANTOM_PCT:-5}"
+CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
 VERBOSE=0
 JSON=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --window)            WINDOW="$2"; shift 2 ;;
-    --unresolvable-pct)  UNRESOLVABLE_PCT="$2"; shift 2 ;;
-    --malformed-pct)     MALFORMED_PCT="$2"; shift 2 ;;
     --budget)            BUDGET="$2"; shift 2 ;;
     --claude-md)         CLAUDE_MD="$2"; shift 2 ;;
-    --corpus-glob)       CORPUS_GLOB="$2"; shift 2 ;;
     --timing)            TIMING="$2"; shift 2 ;;
+    --window)            WINDOW="$2"; shift 2 ;;
+    --phantom-pct)       PHANTOM_PCT="$2"; shift 2 ;;
+    --corpus-glob)       CORPUS_GLOB="$2"; shift 2 ;;
     --verbose)           VERBOSE=1; shift ;;
     --json)              JSON=1; shift ;;
-    -h|--help)           sed -n '2,60p' "$0"; exit 0 ;;
-    *) echo "usage: consolidate-health-check.sh [--window N] [--unresolvable-pct P] [--malformed-pct P] [--budget B] [--claude-md PATH] [--corpus-glob G] [--timing PATH] [--verbose] [--json]" >&2; exit 2 ;;
+    -h|--help)           sed -n '2,55p' "$0"; exit 0 ;;
+    *) echo "usage: consolidate-health-check.sh [--budget B] [--claude-md PATH] [--timing PATH] [--window N] [--phantom-pct P] [--corpus-glob G] [--verbose] [--json]" >&2; exit 2 ;;
   esac
 done
 
-WINDOW="$WINDOW" UNRESOLVABLE_PCT="$UNRESOLVABLE_PCT" MALFORMED_PCT="$MALFORMED_PCT" \
-BUDGET="$BUDGET" CLAUDE_MD="$CLAUDE_MD" CORPUS_GLOB="$CORPUS_GLOB" TIMING="$TIMING" \
+BUDGET="$BUDGET" CLAUDE_MD="$CLAUDE_MD" TIMING="$TIMING" \
+WINDOW="$WINDOW" PHANTOM_PCT="$PHANTOM_PCT" CORPUS_GLOB="$CORPUS_GLOB" \
 VERBOSE="$VERBOSE" JSON="$JSON" python3 <<'PY'
 import os, re, glob, json, statistics
 
-window          = int(os.environ["WINDOW"])
-unresolvable_max= float(os.environ["UNRESOLVABLE_PCT"])
-malformed_max   = float(os.environ["MALFORMED_PCT"])
 budget          = int(os.environ["BUDGET"])
 claude_md       = os.environ["CLAUDE_MD"]
-corpus_glob     = os.environ["CORPUS_GLOB"]
 timing_path     = os.environ["TIMING"]
+window          = int(os.environ["WINDOW"])
+phantom_max     = float(os.environ["PHANTOM_PCT"])
+corpus_glob     = os.environ["CORPUS_GLOB"]
 verbose         = os.environ["VERBOSE"] == "1"
 as_json         = os.environ["JSON"] == "1"
 
@@ -107,42 +107,7 @@ checks = []  # each: {name, status: GREEN|BREACH|SKIP|INFO, headline, detail}
 def add(name, status, headline, detail=""):
     checks.append({"name": name, "status": status, "headline": headline, "detail": detail})
 
-# --- Check 1: scorecard health -------------------------------------------------
-files = sorted(glob.glob(os.path.expanduser(corpus_glob)))
-recent = files[-window:] if window > 0 else files
-t = f = u = malformed = 0
-for p in recent:
-    try:
-        d = json.load(open(p, encoding="utf-8"))
-    except Exception:
-        continue
-    prs = d.get("prediction_results") or d.get("predictions") or []
-    for r in prs:
-        if not isinstance(r, dict):
-            malformed += 1; continue
-        v = r.get("actually_true")
-        if v is True:           t += 1
-        elif v is False:        f += 1
-        elif v == "unresolved": u += 1
-        else:                   malformed += 1  # free-text verdicts rotted this once
-total = t + f + u + malformed
-if total == 0:
-    add("scorecard-health", "SKIP",
-        f"no graded predictions in the last {len(recent)} readtime files")
-else:
-    upct = 100.0 * u / total
-    mpct = 100.0 * malformed / total
-    breach = upct > unresolvable_max or mpct > malformed_max
-    head = (f"{upct:.0f}% unresolvable, {mpct:.0f}% malformed "
-            f"over last {len(recent)} consolidations ({total} predictions)")
-    detail = (f"true={t} false={f} unresolved={u} malformed={malformed}. "
-              f"Thresholds: unresolvable>{unresolvable_max:.0f}% or malformed>{malformed_max:.0f}%. "
-              f"A high unresolvable% means predictions can't be graded at readtime — "
-              f"the instrument is measuring the future instead of the session. "
-              f"Action: audit scorecard prediction shape (narrow to same-session-verifiable).")
-    add("scorecard-health", "BREACH" if breach else "GREEN", head, detail if breach else "")
-
-# --- Check 2: eviction budget --------------------------------------------------
+# --- Check 1: eviction budget --------------------------------------------------
 ptr = re.compile(r"feedback_[a-z_]+\.md|concept_[a-z_]+\.md")
 if not os.path.isfile(claude_md):
     add("eviction-budget", "SKIP", f"CLAUDE.md not found at {claude_md}")
@@ -158,7 +123,7 @@ else:
               f"trigger+pointer before evicting cold ones. Run the Wrap-up eviction audit.")
     add("eviction-budget", "BREACH" if breach else "GREEN", head, detail if breach else "")
 
-# --- Check 3: wall-clock drift (robust + retry-aware) --------------------------
+# --- Check 2: wall-clock drift (robust + retry-aware) --------------------------
 # The naive mean+2σ had two failure modes (task #6, the detector flagged its OWN
 # run): (a) a retry-inflated run — an agent socket-death + full re-run balloons
 # wall_s — false-positives as a "DAG perf regression" when the cause is a benign
@@ -219,6 +184,43 @@ else:
                   f"cause (mark such runs retried:true in timing.jsonl so they self-exclude). A real regression "
                   f"shows elevated wall-clock on a retry-free run; then compare DAG concurrency / model tiers.")
         add("wall-clock-drift", "BREACH" if breach else "GREEN", head, detail if breach else "")
+
+# --- Check 3: memory-health (phantom writes) -----------------------------------
+# Replaces the retired prediction "scorecard-health" check (2026-07-05) with a
+# real DEFECT signal drawn from the same readtime files. The readtime grader
+# scores each memory file the scorecard claimed at 1-5, or null when the file
+# is "missing on disk — phantom write" (the scorecard is a receipt, not a
+# self-report; the 2026-04-29 bug wrote memories it never actually saved). A
+# phantom write means the consolidation LOST a memory silently. Breach: the
+# null-score rate over the last --window readtime files exceeds --phantom-pct.
+rt_files = sorted(glob.glob(os.path.expanduser(corpus_glob)))
+recent = rt_files[-window:] if window > 0 else rt_files
+scored = phantom = 0
+for p in recent:
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+    except Exception:
+        continue
+    for m in d.get("memory_usefulness") or []:
+        if not isinstance(m, dict):
+            continue
+        scored += 1
+        if m.get("score") is None:  # null = "missing on disk — phantom write"
+            phantom += 1
+if scored == 0:
+    add("memory-health", "SKIP",
+        f"no graded memory files in the last {len(recent)} readtime files")
+else:
+    ppct = 100.0 * phantom / scored
+    breach = ppct > phantom_max
+    head = (f"{phantom}/{scored} phantom writes ({ppct:.0f}%) "
+            f"over last {len(recent)} readtime files")
+    detail = (f"A phantom write is a memory the scorecard CLAIMED but that was "
+              f"missing on disk at grading time — a silently lost consolidation "
+              f"output (the 2026-04-29 bug class). Threshold: phantom% > {phantom_max:.0f}%. "
+              f"Action: check memory-writer's on-disk verify step (step 4 `ls` gate) "
+              f"and the scorecard's memories_written list against the memory dir.")
+    add("memory-health", "BREACH" if breach else "GREEN", head, detail if breach else "")
 
 # --- emit ----------------------------------------------------------------------
 breaches = [c for c in checks if c["status"] == "BREACH"]

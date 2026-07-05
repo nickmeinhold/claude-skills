@@ -8,12 +8,20 @@
 # prose — and on the 2026-06-17 run it DRIFTED (wrote predictions[] = {id, claim,
 # verifiable_by} and top-level {project, session_label, scores, ...}), the exact
 # instrument-rotting failure the skill warns about. The next-session readtime
-# grader reads predictions[].text + memories_written/memories_updated; with the
-# drift those are absent/null and the grader silently fails to grade — the rot
-# the loop exists to prevent. This script is the gate that catches it.
+# grader reads memories_written/memories_updated; drift there makes the grader
+# silently fail — the rot the loop exists to prevent. This script is the gate
+# that catches it.
+#
+# 2026-07-05: the `predictions` sub-experiment was REMOVED entirely. It was
+# narrowed to ≤2 same-session bets on 2026-06-18, then retired — post-narrowing
+# it was still ~30-40% unresolvable and mostly restated session-known facts, for
+# a load-bearing value of ~zero. The receipt (memories_written/_updated) +
+# memory_usefulness + cold_start scores carry the whole feedback loop; predictions
+# added only maintenance surface (this instrument rotted twice). `predictions` is
+# now a FORBIDDEN top-level key, so any writer that reintroduces it fails loudly.
 #
 # THE SCHEMA (the CODE below is authoritative; this comment only describes it):
-#   A scorecard is a JSON object with EXACTLY these 10 top-level keys — no more,
+#   A scorecard is a JSON object with EXACTLY these 9 top-level keys — no more,
 #   no aliases, no extras (overflow goes in `notes`, never a new key):
 #     schema_version          int
 #     session_date            string
@@ -23,14 +31,6 @@
 #     index_edits             int
 #     errors_triaged          int
 #     memory_index_over_budget bool
-#     predictions             array of AT MOST 2 objects, each EXACTLY {text, basis}
-#                               text   = non-empty string (the grader reads this)
-#                               basis  = string
-#                             (Narrowed 2026-06-18: a results audit found 68% of
-#                              historical predictions were unresolvable at grading
-#                              time. The array is now capped at 2 same-session-
-#                              verifiable bets, and the old `confidence` field is
-#                              REMOVED — a `confidence` key is now a forbidden extra.)
 #     notes                   string (may be empty) — OPTIONAL (step 4 calls it
 #                               "optional free text"; absent is fine, present must be a string)
 #
@@ -48,16 +48,16 @@ fi
 python3 - "$@" <<'PY'
 import sys, os, json
 
-# `notes` is OPTIONAL (step 4 documents it as "optional free text"); the other 9
+# `notes` is OPTIONAL (step 4 documents it as "optional free text"); the other 8
 # are required. ALLOWED = the full set; REQUIRED = the set that must be present.
+# `predictions` was removed 2026-07-05 and is intentionally absent from both sets,
+# so it now trips the "forbidden top-level keys" check like any other extra.
 TOP_REQUIRED = {
     "schema_version", "session_date", "memory_dir",
     "memories_written", "memories_updated", "index_edits",
-    "errors_triaged", "memory_index_over_budget", "predictions",
+    "errors_triaged", "memory_index_over_budget",
 }
 TOP_ALLOWED  = TOP_REQUIRED | {"notes"}
-PRED_REQUIRED = {"text", "basis"}
-PRED_MAX = 2  # narrowed 2026-06-18: at most 2 same-session-verifiable bets
 
 def is_str(x):  return isinstance(x, str)
 def is_int(x):  return isinstance(x, int) and not isinstance(x, bool)
@@ -84,8 +84,9 @@ for f in sys.argv[1:]:
 
     reasons = []
 
-    # top-level key set — the 9 required must be present; only `notes` may also
-    # appear; anything else is a forbidden alias/extra.
+    # top-level key set — the 8 required must be present; only `notes` may also
+    # appear; anything else (including a resurrected `predictions`) is a forbidden
+    # alias/extra.
     keys = set(data)
     missing = TOP_REQUIRED - keys
     extra   = keys - TOP_ALLOWED
@@ -109,30 +110,6 @@ for f in sys.argv[1:]:
     for key, pred, want in checks:
         if key in data and not pred(data[key]):
             reasons.append(f"{key} must be {want}")
-
-    # predictions: array of AT MOST 2 objects {text, basis} — text non-empty.
-    # `confidence` was removed 2026-06-18 (now a forbidden extra via pextra).
-    preds = data.get("predictions")
-    if "predictions" in data:
-        if not isinstance(preds, list):
-            reasons.append("predictions must be an array")
-        else:
-            if len(preds) > PRED_MAX:
-                reasons.append(f"predictions has {len(preds)} entries; at most {PRED_MAX} allowed (narrowed 2026-06-18 to same-session-verifiable bets)")
-            for i, p in enumerate(preds):
-                if not isinstance(p, dict):
-                    reasons.append(f"predictions[{i}] is not an object"); continue
-                pk = set(p)
-                pmiss = PRED_REQUIRED - pk
-                pextra = pk - PRED_REQUIRED
-                if pmiss:
-                    reasons.append(f"predictions[{i}] missing {sorted(pmiss)}")
-                if pextra:
-                    reasons.append(f"predictions[{i}] forbidden keys {sorted(pextra)} (note: `confidence` was removed 2026-06-18)")
-                if "text" in p and not (is_str(p["text"]) and p["text"].strip()):
-                    reasons.append(f"predictions[{i}].text must be a non-empty string")
-                if "basis" in p and not is_str(p["basis"]):
-                    reasons.append(f"predictions[{i}].basis must be a string")
 
     if reasons:
         bad.append((f, "; ".join(reasons)))
