@@ -60,7 +60,7 @@ Before starting, write a session summary to prime the agents. This is the critic
    bash ~/.claude/sleep/readtime-check.sh | jq -r '.hookSpecificOutput.additionalContext // empty'
    ```
    - **Empty output** → nothing to grade (no prior same-project scorecard, or already graded). Continue.
-   - **Non-empty** → follow the emitted instruction now, in-context (it locates the prior same-project scorecard via `memory-path.txt`, and specifies the exact readtime-score.json schema — keep to it strictly; schema drift is what rotted this instrument the first time). You are grading the PREVIOUS instance's bets and memory choices against the session that just ran — the best-resolved vantage point this loop will ever get.
+   - **Non-empty** → follow the emitted instruction now, in-context (it locates the prior same-project scorecard via `memory-path.txt`, and specifies the exact readtime-score.json schema — keep to it strictly; schema drift is what rotted this instrument the first time). You are grading the PREVIOUS instance's memory choices (usefulness + cold-start) against the session that just ran — the best-resolved vantage point this loop will ever get.
 
 4. **Write the session summary** to `<session-dir>/session-summary.md`:
    - Everything that happened this session: topics, decisions, code written, problems solved
@@ -507,7 +507,7 @@ Actions:
 
    ```json
    {
-     "schema_version": 2,
+     "schema_version": 3,
      "session_date": "<ISO 8601>",
      "memory_dir": "<absolute path from $SD/memory-path.txt>",
      "memories_written": ["<absolute path, verified to exist on disk>"],
@@ -515,16 +515,13 @@ Actions:
      "index_edits": 0,
      "errors_triaged": 0,
      "memory_index_over_budget": false,
-     "predictions": [
-       {"text": "<falsifiable claim verifiable from repo/file/issue state AT GRADING TIME>", "basis": "<evidence>"}
-     ],
      "notes": "<optional free text — overflow goes here, never as a new top-level key>"
    }
    ```
 
-   **Predictions: AT MOST 2 (the validator enforces ≤2 and rejects a `confidence` key — both removed 2026-06-18).** Each MUST be checkable from repo/file/issue state *by the session that grades it* (next session start) — a `git log`, an `ls`, a `gh issue` query, a file's existence/content. Do NOT write predictions that need days to resolve or that turn on what Nick chooses to do: the 2026-06-18 results audit found **68% of all historical predictions came back unresolvable** (the grader couldn't verify them in time), and the resolvable third self-selected for easy checks — so the array was mostly noise and a recurring schema-drift surface (graders kept inventing free-text verdicts like "pending"/"untested"). The fix is fewer, sharper, same-session-verifiable bets. Make at least one a **negative** prediction ("X will NOT exist / will NOT have changed") — those are the honest bets. The `confidence` field is gone: it was theater on a 2-item list. (The two usefulness scores the readtime loop actually earns its keep on — `memory_usefulness` and `cold_start_quality`, graded in `readtime-score.json` — are unchanged; only the predictions sub-experiment was narrowed.)
+   **No `predictions` (retired 2026-07-05 — schema v3).** The scorecard used to carry ≤2 same-session prediction bets; the sub-experiment was retired after its own data condemned it. History: the 2026-06-18 audit found **68% of all historical predictions unresolvable**, which prompted a narrowing to ≤2 same-session-verifiable bets; post-narrowing it was *still* ~30-40% unresolvable and the resolvable ones mostly restated facts the session already established — near-zero information for a recurring schema-drift surface (this instrument rotted twice). The receipt (`memories_written`/`_updated`), `memory_usefulness`, and `cold_start_quality` carry the entire feedback loop; predictions added only maintenance cost. `predictions` is now a **forbidden** top-level key — the validator rejects it, so do not reintroduce it.
 
-   **4a. Post-write scorecard validation gate (HARD — do not skip).** Do NOT trust yourself to have reproduced the schema from the prose above — that is exactly what drifted on the 2026-06-17 run (predictions written as `{id, claim, verifiable_by}`, top-level `{project, session_label, scores, …}`), silently breaking the next-session readtime grader. After writing `$SD/scorecard.json`, validate it against **the canonical scorecard schema validator** — `scripts/validate-scorecard.sh` (installed at `$HOME/.claude/scripts/validate-scorecard.sh` by `scripts/install-symlinks.sh`). That ONE script IS the schema; do not re-state the keys here, just call it:
+   **4a. Post-write scorecard validation gate (HARD — do not skip).** Do NOT trust yourself to have reproduced the schema from the prose above — that is exactly what drifted on the 2026-06-17 run (top-level `{project, session_label, scores, …}`, a since-removed `predictions[]`), silently breaking the next-session readtime grader. After writing `$SD/scorecard.json`, validate it against **the canonical scorecard schema validator** — `scripts/validate-scorecard.sh` (installed at `$HOME/.claude/scripts/validate-scorecard.sh` by `scripts/install-symlinks.sh`). That ONE script IS the schema; do not re-state the keys here, just call it:
 
    ```bash
    bash "$HOME/.claude/scripts/validate-scorecard.sh" "$SD/scorecard.json"
@@ -532,7 +529,7 @@ Actions:
    #  in the claude-skills repo first, or call the repo copy directly.)
    ```
 
-   It prints `INVALID scorecard.json: <why>` and exits non-zero on any drift (wrong/missing/alias top-level key, more than 2 `predictions[]` entries, or a `predictions[]` entry that isn't exactly `{text, basis}` with a non-empty `text` — a `confidence` key is now rejected as a forbidden extra). If it does, **rewrite the offending fields to the schema above and re-run until it exits 0.** This is the same fail-loudly discipline as step 2a's frontmatter gate; the scorecard is the receipt the entire readtime-scoring loop depends on.
+   It prints `INVALID scorecard.json: <why>` and exits non-zero on any drift (wrong/missing/alias top-level key, or any forbidden extra — including a resurrected `predictions`). If it does, **rewrite the offending fields to the schema above and re-run until it exits 0.** This is the same fail-loudly discipline as step 2a's frontmatter gate; the scorecard is the receipt the entire readtime-scoring loop depends on.
 5. **Open-tasks dump (human-readable)**: write $SD/open-tasks.md from the TaskList snapshot the orchestrator passed you below. Format: one section per task with subject as a heading, then full description verbatim. At the top of the file, include this one-liner:
 
    > These tasks are session-scoped (they live in ~/.claude/tasks/<session-uuid>/ and won't be visible to a fresh session). To make them live again next session, recreate each via TaskCreate.
@@ -714,7 +711,7 @@ After Phase 1 completes:
   # and exits 10 (informational, NOT an error — hence `|| true`) when a threshold trips.
   bash "$HOME/.claude/scripts/consolidate-health-check.sh" || true
   ```
-  The script checks three things over state that already exists: **scorecard-health** (unresolvable% + malformed-verdict% over the last 10 readtime files), **eviction-budget** (directive-layer bytes vs the **single-source `--budget` default in `consolidate-health-check.sh`** — the SAME formula as Trigger A below, which references that default by name rather than restating the number, so the two can't drift; this is the *automatic* preview of the eviction audit Nick used to invoke by hand), and **wall-clock drift** (robust median+MAD, retry-aware — a `retried:true` run is excluded from the baseline and never breaches; active once ≥5 clean datapoints accrue). **When its output is non-empty, surface it to Nick verbatim** — each breach is Nick-gated (it reports the number; he decides whether to act). A green run prints nothing; do not announce "all healthy" unless he asks.
+  The script checks two things over state that already exists: **eviction-budget** (directive-layer bytes vs the **single-source `--budget` default in `consolidate-health-check.sh`** — the SAME formula as Trigger A below, which references that default by name rather than restating the number, so the two can't drift; this is the *automatic* preview of the eviction audit Nick used to invoke by hand), and **wall-clock drift** (robust median+MAD, retry-aware — a `retried:true` run is excluded from the baseline and never breaches; active once ≥5 clean datapoints accrue). (A third check, **scorecard-health** — prediction unresolvable% — was removed 2026-07-05 with the predictions sub-experiment.) **When its output is non-empty, surface it to Nick verbatim** — each breach is Nick-gated (it reports the number; he decides whether to act). A green run prints nothing; do not announce "all healthy" unless he asks.
 - **Verify the GH-issue reconciliation used the canonical label (defense-in-depth against the 2026-06-22 hyphen-duplicate regression).** memory-writer now uses the orchestrator-given `$PROJECT_LABEL` verbatim and can't re-derive — but VERIFY the outcome anyway: confirm that any issues created this consolidation carry the underscore label, and that no duplicate slipped through under a hyphen/path-slug variant. The orchestrator still holds the canonical `$PROJECT_LABEL` it computed pre-spawn:
   ```bash
   # Variants the buggy derivation would have produced: hyphenated slug,
