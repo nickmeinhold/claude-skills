@@ -1,15 +1,15 @@
 ---
 argument-hint: <pr-number>
-description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (Codex/GPT) — three-way with strict merge gate
+description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (Codex/GPT) vs Tesla (Grok) — four-way with strict merge gate
 ---
 
 # Cage Match Code Review
 
-Three AI reviewers enter. One PR leaves (hopefully improved).
+Four AI reviewers enter. One PR leaves (hopefully improved).
 
-**Maxwell** (Claude/you), **Kelvin** (Gemini), and **Carnot** (Codex/OpenAI GPT) will each review the PR in parallel. Maxwell then critiques the others.
+**Maxwell** (Claude/you), **Kelvin** (Gemini), **Carnot** (Codex/OpenAI GPT), and **Tesla, the Arc-Prophet** (xAI Grok) will each review the PR in parallel. Maxwell then critiques the others.
 
-**Why three?** Kelvin's capacity has degraded silently in the past, leaving runs with effectively a single reviewer-of-record. Carnot is a third reviewer from a different model family (OpenAI GPT) — different inductive bias, runs at zero added latency because all three reviews happen concurrently. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot). If both adversarial reviewers fail, we **HARD FAIL** rather than silently degrading to "proxy sign-off".
+**Why four?** One reviewer-of-record is a single point of failure — Kelvin's capacity has degraded silently before. Each added reviewer is a different model family with a different inductive bias, and because all four run concurrently they cost zero added latency. Maxwell hunts the illegal move; Kelvin the cold fault; Carnot the wasted work; Tesla the resonant frequency at which the whole thing shakes itself apart. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot, Tesla). Only if ALL THREE adversarial reviewers fail do we **HARD FAIL** rather than silently degrading to "proxy sign-off".
 
 ## Setup
 
@@ -57,7 +57,7 @@ cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
 
-## Rounds 2 ∥ 3 ∥ 4: Maxwell + Kelvin + Carnot Reviews (parallel)
+## Rounds 2 ∥ 3 ∥ 4 ∥ 5: Maxwell + Kelvin + Carnot + Tesla Reviews (parallel)
 
 **Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
 
@@ -259,6 +259,54 @@ if [ -s /tmp/carnot-output-$1.json ]; then
 fi
 ```
 
+**Step B2 — fire Tesla's review as a third backgrounded bash (xAI Grok):**
+
+Tesla is the fourth family (xAI Grok), invoked via the `grok` CLI's headless single-turn mode (`--prompt-file <PATH>`, prints to stdout and exits). Grok is agentic (Grok Build TUI) like Codex, so the prompt forbids tool use and asks for a review of the fed diff only — same "review by diff" pattern as Kelvin/Carnot. Output is free text (Grok has no `--output-schema`), so we parse the verdict from the text like Kelvin. Grok occasionally prints an OAuth sign-in URL when its token needs refresh; `tesla_ok()` downstream treats an empty/verdict-less file as "unavailable", so a token lapse degrades gracefully rather than blocking the gate.
+
+```bash
+# Same file-based QUOTED-heredoc pattern: static persona text (literal backticks,
+# no escaping), then PR info + diff appended as data. grok reads the prompt from
+# the file via --prompt-file.
+cat > /tmp/tesla-prompt-$1.txt <<'TESLA_PROMPT_EOF'
+You are Tesla, the Arc-Prophet — an adversarial code reviewer with a PERSONALITY.
+
+Your character:
+- You do NOT grapple; you RESONATE. Where the other reviewers hunt for a bug to pin, you hunt for the resonant frequency — the one precise input, the one unhandled harmonic, at which the whole elegant structure shakes itself to glass and dust.
+- You are a Faustian visionary who bargained with lightning and came back speaking in alternating current. You describe a race condition as two currents meeting out of phase; an unbounded loop as a coil with no air gap, heating until it arcs to ground at 3am on production.
+- You speak in prophecy and premonition — the FUTURE flaw, not just the present one. Quote the real Nikola Tesla, formatted as: Tesla: "If you want to find the secrets of the universe, think in terms of energy, frequency and vibration."
+- Obsessed with 3, 6, 9, the ether, and resonance. A touch mad, wholly incandescent, quietly diabolical — you DELIGHT in the fault you find, because you saw it coming while they were still admiring the diff.
+- Your inductive bias is xAI Grok's: first-principles, irreverent, unafraid of the heterodox finding the others dismiss as noise — because you heard it humming. Your job is to catch what Maxwell (Claude), Kelvin (Gemini), and Carnot (GPT) would all miss.
+
+Review THIS PR from the diff below. Do NOT run any tools, do NOT explore the filesystem, do NOT run tests — trust the build/test claims in the PR body and review by reading the diff. Verify by reading: if you see an unfamiliar API, check it against the diff/versions rather than assuming it doesn't exist (stale training data is the top false-positive source). Evaluate bugs, security, performance, and design appropriateness (closed sets should be enums/sealed types not strings; use current language idioms).
+
+Format your response EXACTLY as:
+## Tesla, the Arc-Prophet's Review
+
+**Verdict:** [APPROVE/REQUEST_CHANGES/COMMENT]
+
+**Summary:** [one electric sentence]
+
+**Findings:**
+- [each resonant flaw with file:line]
+
+**The Good:**
+- [what holds under load]
+
+**The Concerns:**
+- [where the current wants to arc]
+
+PR Info:
+TESLA_PROMPT_EOF
+cat /tmp/pr-$1-info.json >> /tmp/tesla-prompt-$1.txt
+printf '\n\nDiff:\n' >> /tmp/tesla-prompt-$1.txt
+cat /tmp/pr-$1-diff.txt >> /tmp/tesla-prompt-$1.txt
+
+# Backgrounded alongside Kelvin + Carnot. wait $TESLA_PID below.
+export PATH="$HOME/.grok/bin:$PATH"
+grok --prompt-file /tmp/tesla-prompt-$1.txt --output-format plain > /tmp/tesla-review-$1.md 2>/tmp/tesla-err-$1.log &
+TESLA_PID=$!
+```
+
 **Step C — compose Maxwell's review in-process while Kelvin and Carnot resolve:**
 
 As **MaxwellMergeSlam**, perform your review with PERSONALITY:
@@ -317,6 +365,12 @@ else
 fi
 wait $CARNOT_PID
 CARNOT_RC=$?
+if [ -n "$TESLA_PID" ]; then
+  wait $TESLA_PID
+  TESLA_RC=$?
+else
+  TESLA_RC=99
+fi
 
 # Convert Carnot's structured JSON output to the markdown format the rest
 # of the skill expects. Skipped silently if the JSON file is missing or
@@ -352,30 +406,39 @@ carnot_ok() {
          /tmp/carnot-output-$1.json >/dev/null 2>&1 \
     && [ -s /tmp/carnot-review-$1.md ]
 }
+# Tesla (Grok) is free-text like Kelvin — validate size + a Verdict marker.
+# An empty file (OAuth lapse / CLI error) fails this and degrades gracefully.
+tesla_ok() {
+  [ "$TESLA_RC" -eq 0 ] \
+    && [ -s /tmp/tesla-review-$1.md ] \
+    && [ "$(wc -c < /tmp/tesla-review-$1.md)" -gt 200 ] \
+    && grep -q "Verdict:" /tmp/tesla-review-$1.md
+}
 
 KELVIN_AVAILABLE=0
 CARNOT_AVAILABLE=0
+TESLA_AVAILABLE=0
 kelvin_ok $1 && KELVIN_AVAILABLE=1
 carnot_ok $1 && CARNOT_AVAILABLE=1
+tesla_ok  $1 && TESLA_AVAILABLE=1
 
-echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE"
+echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE Tesla=$TESLA_AVAILABLE"
 ```
 
 ## Round 5: Strict Merge Gate
 
-The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot)**.
+The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Tesla)**.
 
 | State | Action |
 |---|---|
-| Maxwell ✓ + Kelvin ✓ + Carnot ✓ | Ship — three reviews posted |
-| Maxwell ✓ + (Kelvin ✓ XOR Carnot ✓) | Ship — note the unavailable reviewer in the summary |
-| Maxwell ✓ + Kelvin ✗ + Carnot ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
+| Maxwell ✓ + any of (Kelvin, Carnot, Tesla) ✓ | Ship — note any unavailable reviewer in the summary |
+| Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
 
 ```bash
-if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ]; then
+if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_AVAILABLE" -eq 0 ]; then
   echo ""
   echo "============================================================"
-  echo "CAGE MATCH HARD FAIL: both adversarial reviewers unavailable"
+  echo "CAGE MATCH HARD FAIL: all three adversarial reviewers unavailable"
   echo "============================================================"
   echo "Kelvin (Gemini) exit=$KELVIN_RC. Tail of /tmp/kelvin-review-$1.md:"
   tail -20 /tmp/kelvin-review-$1.md 2>/dev/null
@@ -385,6 +448,10 @@ if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ]; then
   echo "Structured-output JSON (if any) at /tmp/carnot-output-$1.json:"
   cat /tmp/carnot-output-$1.json 2>/dev/null
   echo ""
+  echo "Tesla (Grok) exit=$TESLA_RC. Tail of /tmp/tesla-review-$1.md + err log:"
+  tail -20 /tmp/tesla-review-$1.md 2>/dev/null
+  tail -10 /tmp/tesla-err-$1.log 2>/dev/null
+  echo ""
   echo "Refusing to proceed: Maxwell alone is not a valid dual review."
   echo "Investigate (capacity limits? auth? CLI error?) and re-run /cage-match."
   echo "Do NOT merge this PR via cage-match until at least one adversarial reviewer is restored."
@@ -392,7 +459,7 @@ if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ]; then
 fi
 ```
 
-The skill MUST NOT proceed past this gate if both adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
+The skill MUST NOT proceed past this gate if all three adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
 
 ## Round 6: The Critique
 
@@ -472,6 +539,9 @@ KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHAN
 # Carnot's verdict is the source of truth in its structured JSON.
 CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
+# Tesla's verdict is parsed from its free-text review (the **Verdict:** line).
+TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+case "$TESLA_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) TESLA_VERDICT="COMMENT" ;; esac
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -492,6 +562,20 @@ if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   else
     # Fallback (App not configured): plain comment from the orchestrator's gh user.
     gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
+  fi
+fi
+
+# Tesla (Grok) has no GitHub App — post as a plain comment (verdict in the body).
+# If a TeslaArcProphet App is later configured (TESLA_APP_ID + TESLA_PRIVATE_KEY_B64),
+# mirror Carnot's formal-review path so a Tesla APPROVE satisfies branch protection.
+if [ "$TESLA_AVAILABLE" -eq 1 ]; then
+  if [ -n "${TESLA_APP_ID:-}" ] && [ -n "${TESLA_PRIVATE_KEY_B64:-}" ]; then
+    TESLA_TOKEN=$(~/.claude/scripts/github-app-token.sh "$TESLA_APP_ID" "$TESLA_PRIVATE_KEY_B64" "$REPO")
+    GH_TOKEN=$TESLA_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
+      -f body="$(cat /tmp/tesla-review-$1.md)" \
+      -f event="$TESLA_VERDICT" &
+  else
+    gh pr comment $1 --body "$(cat /tmp/tesla-review-$1.md)" &
   fi
 fi
 
@@ -518,10 +602,16 @@ CARNOT_VERDICT=""
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 fi
+# Re-parse Tesla's verdict from its review file (this runs in a fresh shell, so
+# the Round 8 variable doesn't persist — mirror how CARNOT_VERDICT is re-derived).
+TESLA_VERDICT=""
+if [ "$TESLA_AVAILABLE" -eq 1 ]; then
+  TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+fi
 
 # Any REQUEST_CHANGES from any reviewer is a hard block on the label.
 ANY_REQUEST_CHANGES=0
-for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT"; do
+for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT"; do
   [ "$v" = "REQUEST_CHANGES" ] && ANY_REQUEST_CHANGES=1
 done
 
@@ -529,6 +619,7 @@ done
 ADVERSARIAL_APPROVE=0
 { [ "$KELVIN_AVAILABLE" -eq 1 ] && [ "$KELVIN_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
 { [ "$CARNOT_AVAILABLE" -eq 1 ] && [ "$CARNOT_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
+{ [ "$TESLA_AVAILABLE" -eq 1 ] && [ "$TESLA_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
 
 if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
    && [ "$MAXWELL_VERDICT" = "APPROVE" ] \
