@@ -33,8 +33,25 @@ Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
 
 ```bash
 gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files > /tmp/pr-$1-info.json
-PR_BASE=$(jq -r .baseRefName /tmp/pr-$1-info.json)
-PR_HEAD=$(jq -r .headRefOid  /tmp/pr-$1-info.json)
+PR_BASE=$(jq -r .baseRefName   /tmp/pr-$1-info.json)
+PR_HEAD_BRANCH=$(jq -r .headRefName /tmp/pr-$1-info.json)
+
+# Head-settle guard — anchor on LOCAL HEAD, never server-vs-server.
+# On a RE-review you almost always have the PR's head branch checked out locally:
+# you just pushed the fix, so the local branch tip IS the intended head. GitHub's
+# headRefOid can lag that push by seconds, and every server-side read (gh pr view,
+# the pull/$1/head refspec) lags *together* — so a naive `until [server == server]`
+# poll is a no-op that instantly "confirms" a stale head and grades one-commit-old
+# code (this is exactly how a Gate-1 re-review slipped). Anchor on the local SHA:
+# poll until GitHub's headRefOid converges to what we pushed, THEN snapshot PR_HEAD.
+LOCAL_HEAD=$(git rev-parse --verify -q "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null || true)
+if [ -n "$LOCAL_HEAD" ]; then
+  for _ in $(seq 1 30); do   # bounded ~60s; if it never converges we proceed with the server head
+    [ "$(gh pr view $1 --json headRefOid -q .headRefOid)" = "$LOCAL_HEAD" ] && break
+    sleep 2
+  done
+fi
+PR_HEAD=$(gh pr view $1 --json headRefOid -q .headRefOid)   # read AFTER settling
 
 # Diff the exact PR head commit locally. `pull/$1/head` is the GitHub refspec for
 # the PR head (works for forks too); after fetching it the commit is addressable by
@@ -43,9 +60,8 @@ git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
 if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
   git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
 else
-  # Fallback (head commit not fetchable — rare): verify GitHub's headRefOid is
-  # settled before trusting `gh pr diff`, so we don't capture a still-propagating diff.
-  until [ "$(gh pr view $1 --json headRefOid -q .headRefOid)" = "$PR_HEAD" ]; do sleep 2; done
+  # Fallback (head commit still not fetchable — rare): the head was already settled
+  # above whenever a local branch existed, so PR_HEAD is current; best-effort diff.
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
