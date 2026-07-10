@@ -40,7 +40,7 @@
 #      files. A real defect signal, not a proxy. Breach: phantom% > --phantom-pct.
 #
 # CONFIG (flag overrides env overrides default):
-#   --budget BYTES          HEALTH_BUDGET            (default 31744)
+#   --budget BYTES          HEALTH_BUDGET            (default 36864)
 #   --claude-md PATH        HEALTH_CLAUDE_MD         (default ~/.claude/CLAUDE.md)
 #   --timing PATH           HEALTH_TIMING            (default ~/.claude/consolidation/timing.jsonl)
 #   --window N              HEALTH_WINDOW            (default 10)
@@ -56,15 +56,18 @@
 set -euo pipefail
 
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
-# 31744 = 31 KiB (31*1024). This ONE number is the directive-layer budget; the
+# 36864 = 36 KiB (36*1024). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
 # than restating a number — so the two cannot drift. Tune here, nowhere else.
 # History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87), 28→31 KiB
-# (2026-06-26) — each raised when the layer's growth was load-bearing
-# non-redundant directives (compress-not-evict found no fat to cut), not bloat.
-# Cutting distinct nuance to satisfy the cap is the self-harm trap the audit
-# warns against; the cap reflects the real set.
-BUDGET="${HEALTH_BUDGET:-31744}"
+# (2026-06-26), 31→36 KiB (2026-07-10) — each raised when the layer's growth was
+# load-bearing non-redundant directives (compress-not-evict found no fat to cut),
+# not bloat. The 2026-07-10 raise followed a cross-family semantic audit
+# (Gemini+Codex+Maxwell) that flagged only ONE confident merge across 73
+# directives — strong evidence the corpus is rich, not fat. Cutting distinct
+# nuance to satisfy the cap is the self-harm trap the audit warns against; the
+# cap reflects the real set.
+BUDGET="${HEALTH_BUDGET:-36864}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
 WINDOW="${HEALTH_WINDOW:-10}"
