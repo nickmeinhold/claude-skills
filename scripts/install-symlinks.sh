@@ -3,10 +3,8 @@
 #
 # Some files in ~/.claude/ are intentionally symlinks back into this repo so
 # that edits flow through git review rather than silently drifting on a single
-# machine. After PR #24 (eval-tally consolidation), the symlink at
-# ~/.claude/persona-eval/eval-tally.sh was created manually — fine on the
-# machine where the merge happened, but on a fresh clone the local file would
-# silently go stale, exactly the failure mode PR #24 exists to prevent.
+# machine. On a fresh clone a hand-created local copy would silently go stale,
+# exactly the failure mode this script exists to prevent.
 #
 # This script makes that setup reproducible. It's safe to re-run: existing
 # correct symlinks are left alone, and regular files won't be clobbered
@@ -99,7 +97,6 @@ link() {
 
 # --- symlinks to install ----------------------------------------------------
 # Add new entries here; one `link` call per symlink.
-link "$HOME/.claude/persona-eval/eval-tally.sh" "$REPO_ROOT/scripts/eval-tally.sh"
 # The canonical memory-frontmatter schema. /consolidate's memory-writer runs in
 # arbitrary repos and reaches it by this stable path (the repo path is unknown
 # from another project's session); SKILL.md step 2a calls it as the post-write gate.

@@ -12,13 +12,13 @@ load ../helpers
 setup() {
   REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   SCRIPT="${REPO_ROOT}/scripts/install-symlinks.sh"
-  EVAL_TALLY_SRC="${REPO_ROOT}/scripts/eval-tally.sh"
+  LINK_SRC="${REPO_ROOT}/scripts/validate-memory-frontmatter.sh"
 
   # Per-test sandbox $HOME so tests stay isolated and the real ~/.claude/
   # is never touched.
   TEST_HOME="$(mktemp -d)"
   export HOME="$TEST_HOME"
-  TARGET="$TEST_HOME/.claude/persona-eval/eval-tally.sh"
+  TARGET="$TEST_HOME/.claude/scripts/validate-memory-frontmatter.sh"
 }
 
 teardown() {
@@ -31,8 +31,8 @@ teardown() {
   run bash "$SCRIPT"
   [ "$status" -eq 0 ] || fail "status=$status"
   [ -L "$TARGET" ] || fail
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
-  [[ "$output" == *"$TARGET -> $EVAL_TALLY_SRC"* ]] || fail "output=$output"
+  [ "$(readlink "$TARGET")" = "$LINK_SRC" ] || fail
+  [[ "$output" == *"$TARGET -> $LINK_SRC"* ]] || fail "output=$output"
 }
 
 @test "second invocation is idempotent and reports already linked" {
@@ -43,7 +43,7 @@ teardown() {
   [ "$status" -eq 0 ] || fail "status=$status"
   [[ "$output" == *"already linked"* ]] || fail "output=$output"
   [ -L "$TARGET" ] || fail
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
+  [ "$(readlink "$TARGET")" = "$LINK_SRC" ] || fail
 }
 
 @test "regular file at target without --force refuses and exits non-zero" {
@@ -66,7 +66,7 @@ teardown() {
   run bash "$SCRIPT" --force
   [ "$status" -eq 0 ] || fail "status=$status"
   [ -L "$TARGET" ] || fail
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
+  [ "$(readlink "$TARGET")" = "$LINK_SRC" ] || fail
   [ -f "$TARGET.bak" ] || fail
   [ "$(cat "$TARGET.bak")" = "stale local copy" ] || fail
 }
@@ -89,7 +89,7 @@ teardown() {
   run bash "$SCRIPT" --force
   [ "$status" -eq 0 ] || fail "status=$status"
   [ -L "$TARGET" ] || fail
-  [ "$(readlink "$TARGET")" = "$EVAL_TALLY_SRC" ] || fail
+  [ "$(readlink "$TARGET")" = "$LINK_SRC" ] || fail
   # Old symlink moved to .bak
   [ -L "$TARGET.bak" ] || fail
   [ "$(readlink "$TARGET.bak")" = "/nonexistent/elsewhere.sh" ] || fail
@@ -99,7 +99,7 @@ teardown() {
   # Stage a fake repo whose scripts/install-symlinks.sh points to a
   # nonexistent source. Easiest way to exercise the guard without mutating
   # the real repo: copy the real script into a tempdir and let it resolve
-  # REPO_ROOT relative to that copy (so $REPO_ROOT/scripts/eval-tally.sh
+  # REPO_ROOT relative to that copy (so $REPO_ROOT/scripts/validate-memory-frontmatter.sh
   # genuinely doesn't exist).
   #
   # Rooted under $TEST_HOME so teardown's `rm -rf "$TEST_HOME"` always
@@ -108,7 +108,7 @@ teardown() {
   FAKE_REPO="$(mktemp -d "$TEST_HOME/fakerepo.XXXXXX")"
   mkdir -p "$FAKE_REPO/scripts"
   cp "$SCRIPT" "$FAKE_REPO/scripts/install-symlinks.sh"
-  # Deliberately do NOT create $FAKE_REPO/scripts/eval-tally.sh.
+  # Deliberately do NOT create $FAKE_REPO/scripts/validate-memory-frontmatter.sh.
 
   run bash "$FAKE_REPO/scripts/install-symlinks.sh"
   [ "$status" -ne 0 ] || fail "status=$status"

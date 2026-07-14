@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/install-symlinks/run.sh — convenience wrapper for invoking the bats
-# suite locally and in CI. Mirrors tests/eval-tally/run.sh in shape.
+# suite locally and in CI.
 #
 # Requires bats-core. On macOS: `brew install bats-core`.
 # In CI we install via apt (`bats`) — see .github/workflows/ci.yml.
