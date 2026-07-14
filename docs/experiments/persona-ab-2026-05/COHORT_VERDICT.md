@@ -7,7 +7,10 @@
 > significance at N≈70 (both Fisher p≈0.11–0.12; 95% CIs cross zero). The honest
 > result is an **underpowered null on personas** with a directional (unproven)
 > lean toward model family. See [README.md](README.md) for the corrected reading.
-> Kept verbatim below as the original artifact.
+> **Also obsolete: the "Recommendations" section's operational advice** (fix
+> `eval-tally.sh` `COHORT_PREFIX`, leave `/ship` Step 5.6 gate code in place) — that
+> tooling was all **deleted 2026-07-10**; do not act on those recs. Kept verbatim
+> below as the original artifact.
 
 _Tally finalised 2026-05-04. All 10 cohort PRs blind-triaged; 139 findings tagged across `inline` / `deferred` / `rejected`._
 

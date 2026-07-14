@@ -1,5 +1,19 @@
 # Next experiment — model-family triangulation
 
+> **ARCHIVAL — NOT EXECUTED, references retired tooling (2026-07-15).** This design
+> was never run. It was written when `/cage-match-eval`, `scripts/eval-tally.sh`, and
+> `/ship` Step 5.6 still existed — **all three were deleted 2026-07-10** (this
+> retirement PR). Treat every "infrastructure is in place", "rearm Step 5.6", "extend
+> `eval-tally.sh`", and "update `cage-match-eval`" line below as *historical design
+> intent*, NOT a live checklist — do **not** rearm or recreate that apparatus from
+> this doc. Its premise is superseded too: the "Set B edges Set A" / "persona axis
+> narrower than model-family axis" framing is an **underpowered null**, not a finding
+> (see [README.md](README.md) for the significance reanalysis). If the model-family or
+> lens-diversity question is revived, do it via a NEW design that re-creates producer +
+> tests together — not by resurrecting deleted scripts.
+>
+> _Original 2026-05-04 preamble, kept verbatim:_
+
 _Designed 2026-05-04, immediately following the cohort verdict (`COHORT_VERDICT.md`). The 10-PR Set-A-vs-Set-B cohort answered the question it was set to answer (Set B edges Set A on signal, marginally on accept) and surfaced a more interesting question it wasn't designed for: **the persona-prompt axis is narrower than the model-family axis**. This document is the design for the experiment that tests that claim directly._
 
 ---

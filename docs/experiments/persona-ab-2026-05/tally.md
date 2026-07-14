@@ -1,5 +1,11 @@
 # Cage-match persona A/B tally
 
+> **Superseded verdict (2026-07-15).** The raw counts below are correct, but the
+> "**Set B leads**" verdict line at the bottom is an **overclaim** — at N≈70 no
+> effect is statistically significant (Fisher p≈0.12; 95% CIs cross zero). The
+> honest result is an underpowered null. See [README.md](README.md) for the
+> significance reanalysis. Kept verbatim as the machine-generated artifact.
+
 _Generated 2026-05-04 14:00:10_
 
 ## PRs evaluated
