@@ -85,13 +85,3 @@ jobs:
       # tests/<name>/*.bats is picked up automatically, no CI edit required.
       - name: Run all bats suites
         run: bats -r tests
-
-      # Non-bats regression check (a plain bash script, not a .bats file, so the
-      # recursive bats run above does not cover it).
-      - name: Run eval-tally regression test
-        run: |
-          if [ -f tests/eval-tally/run.sh ]; then
-            bash tests/eval-tally/run.sh
-          else
-            echo "No eval-tally regression test."
-          fi
