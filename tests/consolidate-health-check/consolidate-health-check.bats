@@ -5,7 +5,7 @@
 # silently break the self-reporting discipline:
 #   - SILENT unless a real breach (the graduation/eviction model — no nagging)
 #   - exit 10 on breach (informational, not an error), exit 0 healthy, 2 usage
-#   - the two snapshot checks (scorecard-health, eviction-budget) fire on the
+#   - the two snapshot checks (memory-health, eviction-budget) fire on the
 #     thresholds they claim to, over caller-controlled fixtures
 #   - wall-clock baseline stays INFO until >=3 datapoints, then drift-flags a spike
 #
@@ -31,20 +31,21 @@ teardown() {
 }
 
 # Write a readtime-score.json fixture into the corpus under a timestamp-shaped
-# dir. $1=dirname, remaining args are verdict tokens (true|false|unresolved|<other>).
-score() {
+# dir. $1=dirname, remaining args are memory_usefulness scores: an int 1-5 for a
+# graded memory, or `null` for a PHANTOM write (a memory the scorecard claimed but
+# that was missing on disk at grading time — the signal memory-health counts).
+mem() {
   local name="$1"; shift
   mkdir -p "$CORPUS/$name"
   {
-    printf '{ "prediction_results": ['
+    printf '{ "memory_usefulness": ['
     local first=1
-    for v in "$@"; do
+    for s in "$@"; do
       [ "$first" -eq 1 ] || printf ', '
       first=0
-      case "$v" in
-        true|false)  printf '{"actually_true": %s}' "$v" ;;
-        unresolved)  printf '{"actually_true": "unresolved"}' ;;
-        *)           printf '{"actually_true": "%s"}' "$v" ;;  # malformed/free-text
+      case "$s" in
+        null) printf '{"score": null}' ;;
+        *)    printf '{"score": %s}' "$s" ;;
       esac
     done
     printf '] }'
@@ -58,7 +59,7 @@ run_hc() {
 
 # --- silent-unless-breach (the core discipline) -------------------------------
 @test "healthy state is SILENT and exits 0" {
-  score s1 true true false
+  mem s1 5 4 3
   run_hc
   [ "$status" -eq 0 ] || fail "status=$status"
   [ -z "$output" ] || fail "output=$output"
@@ -70,44 +71,35 @@ run_hc() {
   [ -z "$output" ] || fail "output=$output"
 }
 
-# --- scorecard-health ---------------------------------------------------------
-@test "scorecard breach: mostly-unresolved fires (exit 10, names the check)" {
-  score s1 unresolved unresolved unresolved unresolved true
+# --- memory-health (phantom writes; replaced retired scorecard-health 2026-07-05) --
+@test "memory-health breach: phantom writes fire (exit 10, names the check)" {
+  mem s1 null null null 4 5     # 3/5 = 60% phantom > default 5%
   run_hc
   [ "$status" -eq 10 ] || fail "status=$status"
   [[ "$output" == *"Immune Response"* ]] || fail "output=$output"
-  [[ "$output" == *"scorecard-health"* ]] || fail "output=$output"
-  [[ "$output" == *"unresolvable"* ]] || fail "output=$output"
+  [[ "$output" == *"memory-health"* ]] || fail "output=$output"
+  [[ "$output" == *"phantom"* ]] || fail "output=$output"
 }
 
-@test "scorecard GREEN: mostly-resolved stays silent" {
-  score s1 true true true false unresolved
+@test "memory-health GREEN: all real scores stays silent" {
+  mem s1 5 4 3 2 1              # 0 phantom writes
   run_hc
   [ "$status" -eq 0 ] || fail "status=$status"
   [ -z "$output" ] || fail "output=$output"
 }
 
-@test "malformed verdicts breach on their own threshold" {
-  # 3 free-text (malformed) of 5 = 60% > default 25% malformed-pct
-  score s1 garbage maybe probably true false
-  run_hc
+@test "memory-health threshold is tunable via --phantom-pct" {
+  mem s1 null null 4 5          # 2/4 = 50% phantom
+  run_hc --phantom-pct 40       # lower bar => breach
   [ "$status" -eq 10 ] || fail "status=$status"
-  [[ "$output" == *"scorecard-health"* ]] || fail "output=$output"
-  [[ "$output" == *"malformed"* ]] || fail "output=$output"
-}
-
-@test "scorecard threshold is tunable via --unresolvable-pct" {
-  score s1 unresolved unresolved true true   # 50% unresolvable
-  run_hc --unresolvable-pct 40               # lower bar => breach
-  [ "$status" -eq 10 ] || fail "status=$status"
-  run_hc --unresolvable-pct 60               # higher bar => green
+  run_hc --phantom-pct 60       # higher bar => green
   [ "$status" -eq 0 ] || fail "status=$status"
 }
 
 @test "--window limits which consolidations are counted" {
-  score a-old unresolved unresolved unresolved   # old, all unresolved
-  score b-new true true true                      # newest, all resolved
-  run_hc --window 1     # only the newest (resolved) counts => green
+  mem a-old null null null       # oldest, all phantom
+  mem b-new 5 4 3                # newest, all real
+  run_hc --window 1     # only the newest (clean) counts => green
   [ "$status" -eq 0 ] || fail "status=$status"
 }
 
@@ -186,17 +178,17 @@ run_hc() {
 
 # --- output modes -------------------------------------------------------------
 @test "--json emits a parseable object with a breach flag" {
-  score s1 unresolved unresolved unresolved unresolved true
+  mem s1 null null null 4 5
   run_hc --json
-  echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["breach"] is True; assert any(c["name"]=="scorecard-health" for c in d["checks"])'
+  echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["breach"] is True; assert any(c["name"]=="memory-health" for c in d["checks"])'
 }
 
 @test "--verbose shows GREEN lines even when healthy" {
-  score s1 true true false
+  mem s1 5 4 3
   run_hc --verbose
   [ "$status" -eq 0 ] || fail "status=$status"
   [[ "$output" == *"all checks green"* ]] || fail "output=$output"
-  [[ "$output" == *"scorecard-health"* ]] || fail "output=$output"
+  [[ "$output" == *"memory-health"* ]] || fail "output=$output"
 }
 
 # --- usage --------------------------------------------------------------------

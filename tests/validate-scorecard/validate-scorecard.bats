@@ -30,9 +30,6 @@ canonical() {
   "index_edits": 1,
   "errors_triaged": 0,
   "memory_index_over_budget": false,
-  "predictions": [
-    {"text": "X will happen", "basis": "evidence"}
-  ],
   "notes": ""
 }
 EOF
@@ -47,7 +44,7 @@ EOF
 }
 
 # --- the real 2026-06-17 drift ---------------------------------------------
-@test "the real 2026-06-17 drift is caught (wrong top-level + wrong prediction keys)" {
+@test "the real 2026-06-17 drift is caught (wrong top-level keys, incl. retired predictions)" {
   cat > "$SANDBOX/scorecard.json" <<'EOF'
 {
   "project": "claude-skills",
@@ -62,8 +59,8 @@ EOF
   [ "$status" -eq 1 ] || fail "status=$status"
   [[ "$output" == *"forbidden top-level keys"* ]] || fail "output=$output"
   [[ "$output" == *"project"* ]] || fail "output=$output"
-  [[ "$output" == *"predictions[0] forbidden keys"* ]] || fail "output=$output"
-  [[ "$output" == *"claim"* ]] || fail "output=$output"
+  # `predictions` was retired 2026-07-05 and is now itself a forbidden top-level key
+  [[ "$output" == *"predictions"* ]] || fail "output=$output"
 }
 
 # --- (top-level) exact key set ---------------------------------------------
@@ -86,47 +83,17 @@ EOF
   [[ "$output" == *"memories_written"* ]] || fail "output=$output"
 }
 
-# --- predictions[] shape ---------------------------------------------------
-@test "a prediction missing text is caught (the grader reads text)" {
+# --- predictions retired (2026-07-05) --------------------------------------
+# The `predictions` sub-experiment was removed entirely (#107). It is no longer a
+# recognised key with its own shape rules — it is now just another forbidden
+# top-level extra, so any writer that reintroduces it fails loudly.
+@test "predictions is now a forbidden top-level key (retired 2026-07-05)" {
   canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"basis":"b"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
   run bash "$SCRIPT" "$SANDBOX/s.json"
   [ "$status" -eq 1 ] || fail "status=$status"
-  [[ "$output" == *"predictions[0] missing"* ]] || fail "output=$output"
-  [[ "$output" == *"text"* ]] || fail "output=$output"
-}
-
-@test "an empty-string prediction text is caught" {
-  canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"  ","basis":"b"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
-  run bash "$SCRIPT" "$SANDBOX/s.json"
-  [ "$status" -eq 1 ] || fail "status=$status"
-  [[ "$output" == *"text must be a non-empty string"* ]] || fail "output=$output"
-}
-
-# --- predictions[] narrowing (2026-06-18): confidence removed, capped at 2 ---
-@test "a confidence key is now a forbidden extra (removed 2026-06-18)" {
-  canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"x","basis":"b","confidence":0.5}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
-  run bash "$SCRIPT" "$SANDBOX/s.json"
-  [ "$status" -eq 1 ] || fail "status=$status"
-  [[ "$output" == *"predictions[0] forbidden keys"* ]] || fail "output=$output"
-  [[ "$output" == *"confidence"* ]] || fail "output=$output"
-}
-
-@test "more than 2 predictions is caught (narrowed to same-session-verifiable bets)" {
-  canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"a","basis":"b"},{"text":"c","basis":"d"},{"text":"e","basis":"f"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
-  run bash "$SCRIPT" "$SANDBOX/s.json"
-  [ "$status" -eq 1 ] || fail "status=$status"
-  [[ "$output" == *"at most 2 allowed"* ]] || fail "output=$output"
-}
-
-@test "exactly 2 predictions passes (the cap boundary)" {
-  canonical "$SANDBOX/s.json"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["predictions"]=[{"text":"a","basis":"b"},{"text":"c","basis":"d"}]; json.dump(d,open(sys.argv[1],"w"))' "$SANDBOX/s.json"
-  run bash "$SCRIPT" "$SANDBOX/s.json"
-  [ "$status" -eq 0 ] || fail "status=$status"
+  [[ "$output" == *"forbidden top-level keys"* ]] || fail "output=$output"
+  [[ "$output" == *"predictions"* ]] || fail "output=$output"
 }
 
 @test "notes is OPTIONAL — a scorecard without notes still passes" {
