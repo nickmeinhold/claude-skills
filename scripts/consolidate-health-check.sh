@@ -56,18 +56,18 @@
 set -euo pipefail
 
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
-# 36864 = 36 KiB (36*1024). This ONE number is the directive-layer budget; the
+# 40960 = 40 KiB (40*1024); raised from 38912 on 2026-07-11 after a cross-family semantic-dedup audit found the directive layer load-bearing to ~1% (only 656B genuine redundancy across 71 directives). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
 # than restating a number — so the two cannot drift. Tune here, nowhere else.
 # History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87), 28→31 KiB
-# (2026-06-26), 31→36 KiB (2026-07-10) — each raised when the layer's growth was
+# (2026-06-26), 31→36 KiB (2026-07-10), 36→38 KiB (2026-07-11, after a real cross-family dedup pass merged 4 confirmed-duplicate pairs + compressed obsolete tooling; residual 931B was distinct content) — each raised when the layer's growth was
 # load-bearing non-redundant directives (compress-not-evict found no fat to cut),
 # not bloat. The 2026-07-10 raise followed a cross-family semantic audit
 # (Gemini+Codex+Maxwell) that flagged only ONE confident merge across 73
 # directives — strong evidence the corpus is rich, not fat. Cutting distinct
 # nuance to satisfy the cap is the self-harm trap the audit warns against; the
 # cap reflects the real set.
-BUDGET="${HEALTH_BUDGET:-36864}"
+BUDGET="${HEALTH_BUDGET:-40960}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
 WINDOW="${HEALTH_WINDOW:-10}"
