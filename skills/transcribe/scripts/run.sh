@@ -9,6 +9,12 @@ PARAKEET_PY="$HOME/.local/share/uv/tools/parakeet-mlx/bin/python"   # stdlib + j
 PYANNOTE_PY="$HOME/.local/share/uv/tools/pyannote-audio/bin/python" # torch + pyannote
 PARAKEET="$HOME/.local/bin/parakeet-mlx"
 
+# --check-updates: just report tool/model freshness and exit
+if [ "${1:-}" = "--check-updates" ]; then
+  bash "$DIR/check_updates.sh"
+  exit 0
+fi
+
 # --reattribute: redo identity attribution + outputs against an EXISTING work dir
 # (reuses turns.json — skips the slow diarize/transcribe steps). Use after editing
 # speakers.json to add ground-truth `anchor` lines drawn from a first-pass transcript.
@@ -53,6 +59,9 @@ if [ -n "$CONFIG" ]; then
   NUM="$("$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("num_speakers") or "")' "$CONFIG")"
 fi
 export TRANSCRIBE_NUM_SPEAKERS="$NUM"
+
+# Advisory freshness check (never blocks; skip with TRANSCRIBE_SKIP_UPDATE_CHECK=1)
+[ "${TRANSCRIBE_SKIP_UPDATE_CHECK:-}" = "1" ] || bash "$DIR/check_updates.sh" || true
 
 echo "[1/6] conditioning audio -> $WORK/audio.wav"
 ffmpeg -y -loglevel error -i "$AUDIO" \

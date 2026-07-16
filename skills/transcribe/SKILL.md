@@ -77,6 +77,18 @@ person said, verbatim-ish) dramatically improve attribution accuracy.
 5. **Attribute** *(only if speakers.json)* — headless Claude labels each turn by speech pattern + flow, anchored on the ground-truth lines, split-aware, with light ASR fixups (`attribute.py`). Tools/MCP disabled so calls don't hang.
 6. **Build** — `build_outputs.py` → html/txt/srt; auto-discovers however many speakers, stable colour per name.
 
+## Keeping it fresh
+
+Every full run starts with an advisory update check (`check_updates.sh`): installed
+`uv` tool versions vs PyPI (parakeet-mlx, pyannote-audio), cached HF model revisions
+vs the hub (parakeet-tdt-1.1b, speaker-diarization-community-1), and ffmpeg vs brew.
+It prints upgrade commands but never blocks or fails the run (offline → skipped).
+
+- Standalone: `bash ~/.claude/skills/transcribe/scripts/run.sh --check-updates`
+- Skip it: `TRANSCRIBE_SKIP_UPDATE_CHECK=1`
+- Don't upgrade the uv tools while a transcription is mid-run — the pipeline is
+  executing out of those tool venvs.
+
 ## Notes / failure modes
 
 - First run downloads the models (~2 GB) into the HF cache; subsequent runs are offline.
