@@ -52,7 +52,20 @@ TITLE="${TRANSCRIBE_TITLE:-}"
 if [ -z "$TITLE" ] && [ -n "$CONFIG" ]; then
   TITLE="$("$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG")"
 fi
-export TRANSCRIBE_TITLE="${TITLE:-$base}"
+TITLE="${TITLE:-$base}"
+
+# Stamp the recording date into the title: embedded creation_time tag (UTC ->
+# local) if present, else the file's mtime. Skip if the title already has a year.
+if ! printf '%s' "$TITLE" | grep -qE '(19|20)[0-9]{2}'; then
+  ctime="$(ffprobe -v quiet -show_entries format_tags=creation_time -of default=nw=1:nk=1 "$AUDIO" 2>/dev/null | head -1)"
+  if [ -n "$ctime" ]; then
+    REC_DATE="$(python3 -c 'import sys,datetime as dt; print(dt.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")).astimezone().strftime("%-d %B %Y"))' "$ctime" 2>/dev/null || true)"
+  else
+    REC_DATE="$(stat -f '%Sm' -t '%-d %B %Y' "$AUDIO" 2>/dev/null || true)"
+  fi
+  [ -n "${REC_DATE:-}" ] && TITLE="$TITLE — $REC_DATE"
+fi
+export TRANSCRIBE_TITLE="$TITLE"
 
 NUM=""
 if [ -n "$CONFIG" ]; then

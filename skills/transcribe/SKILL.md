@@ -96,3 +96,5 @@ It prints upgrade commands but never blocks or fails the run (offline → skippe
 - Attribution is probabilistic — speakers with the least dialogue and no `anchor`
   are the likeliest misattributions; add an anchor for anyone who matters.
 - Video files work (ffmpeg pulls the audio track).
+- The recording date is stamped into the title automatically (embedded
+  `creation_time` metadata, else file mtime) unless the title already contains a year.
