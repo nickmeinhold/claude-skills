@@ -15,6 +15,34 @@ from html import escape
 WORK = Path(os.environ["TRANSCRIBE_WORK"])
 TITLE = os.environ.get("TRANSCRIBE_TITLE", "Transcript")
 
+# glossary links: {"term": ..., "url": ...} entries in the config's
+# vocabulary/glossary become hyperlinks in the HTML (first occurrence per term)
+LINKS = {}
+_cfg_path = os.environ.get("TRANSCRIBE_CONFIG")
+if _cfg_path and Path(_cfg_path).exists():
+    _cfg = json.loads(Path(_cfg_path).read_text())
+    for _t in (_cfg.get("vocabulary") or _cfg.get("glossary") or []):
+        if isinstance(_t, dict) and _t.get("url"):
+            LINKS[_t["term"]] = _t["url"]
+
+_linked = set()
+_patterns = sorted(LINKS, key=len, reverse=True)  # longest first: "aiko chat" before "aiko"
+
+
+def linkify(escaped_text):
+    """Wrap the FIRST occurrence (per document) of each linked term in <a>."""
+    for term in _patterns:
+        if term in _linked:
+            continue
+        m = re.search(rf"\b{re.escape(escape(term))}\b", escaped_text, re.I)
+        if m:
+            url = escape(LINKS[term], quote=True)
+            escaped_text = (escaped_text[:m.start()]
+                            + f'<a href="{url}">{m.group(0)}</a>'
+                            + escaped_text[m.end():])
+            _linked.add(term)
+    return escaped_text
+
 named = WORK / "turns_named.json"
 src = named if named.exists() else WORK / "turns.json"
 turns = json.loads(src.read_text())
@@ -67,8 +95,13 @@ color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
 rows = "\n".join(
     f'<div class="turn"><div class="meta"><span class="spk" style="color:{color[b["spk"]]}">'
     f'{escape(b["spk"])}</span><span class="ts">{fmt_ts(b["start"])[:8]}</span></div>'
-    f'<div class="text" style="border-left:3px solid {color[b["spk"]]}">{escape(b["text"])}</div></div>'
+    f'<div class="text" style="border-left:3px solid {color[b["spk"]]}">{linkify(escape(b["text"]))}</div></div>'
     for b in blocks)
+refs = ""
+if _linked:
+    items = "".join(f'<li><a href="{escape(LINKS[t], quote=True)}">{escape(t)}</a></li>'
+                    for t in sorted(_linked, key=str.lower))
+    refs = f'<div class="refs"><h2>References</h2><ul>{items}</ul></div>'
 legend = " &nbsp;&nbsp; ".join(
     f'<span><span class="dot" style="background:{color[s]}"></span>{escape(s)}</span>' for s in seen)
 last = fmt_ts(blocks[-1]["end"])[:8] if blocks else "00:00:00"
@@ -83,11 +116,15 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  .spk{{font-weight:700}} .ts{{color:#999;font-variant-numeric:tabular-nums}} .text{{padding-left:.75rem}}
  .legend{{font-size:.85rem;color:#555;margin-bottom:1.5rem}}
  .dot{{display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin-right:.3rem;vertical-align:middle}}
+ .text a{{color:inherit;text-decoration:underline dotted #888;text-underline-offset:2px}}
+ .refs{{margin-top:2rem;border-top:1px solid #ddd;padding-top:1rem;font-size:.9rem}}
+ .refs h2{{font-size:1rem;margin-bottom:.4rem}} .refs ul{{columns:2;list-style:none;padding:0}} .refs li{{margin-bottom:.2rem}}
 </style></head><body>
 <h1>{escape(TITLE)}</h1>
 <div class="sub">Parakeet-1.1b + pyannote (local, Apple Silicon) · {mode} · ends {last} · {len(seen)} speakers · {len(blocks)} turns</div>
 <div class="legend">{legend}</div>
 {rows}
+{refs}
 </body></html>'''
 (WORK / "transcript.html").write_text(html)
 print(f"  transcript.html / .txt / .srt -> {len(blocks)} turns, {len(seen)} speakers: {seen}", flush=True)

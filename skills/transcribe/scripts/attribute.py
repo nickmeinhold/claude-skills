@@ -61,7 +61,10 @@ def build_cast():
 
 
 CAST = build_cast()
-VOCAB = CONFIG.get("vocabulary") or CONFIG.get("glossary") or []
+# entries may be plain strings or {"term": ..., "url": ...} objects (urls are
+# used by build_outputs.py to linkify the HTML; only the term matters here)
+VOCAB = [t["term"] if isinstance(t, dict) else t
+         for t in (CONFIG.get("vocabulary") or CONFIG.get("glossary") or [])]
 VOCAB_BLOCK = ""
 if VOCAB:
     VOCAB_BLOCK = (

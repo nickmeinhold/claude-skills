@@ -94,7 +94,17 @@ person said, verbatim-ish) dramatically improve attribution accuracy.
    will recur). Each mishearing should ever be caught only once.
 
 `vocabulary` (per-recording speakers.json) and `glossary` (standing roster) are
-the same thing to the pipeline — either key works.
+the same thing to the pipeline — either key works. Entries are plain strings, or
+`{"term": "OpenSpec", "url": "https://github.com/Fission-AI/OpenSpec"}` objects:
+url-bearing terms become hyperlinks in transcript.html (first occurrence per term,
+plus a References section at the bottom).
+
+**Unknown terms → focused web search.** When a garble can't be resolved from
+memory/context (you can hear the shape but don't know the thing — "open spec?",
+"gips tech?"), run ONE focused web search to pin the canonical spelling AND grab
+its canonical URL while you're there; store both in the glossary as a url-bearing
+entry. Never guess a spelling into a roster — a wrong "correction" propagates to
+every future transcript.
 
 ## Pipeline (what run.sh does)
 

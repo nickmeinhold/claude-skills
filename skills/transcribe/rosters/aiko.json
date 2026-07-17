@@ -4,8 +4,14 @@
   "context": "A technical working conversation in the aiko / aiko_services world: building aiko_chat on Andy Gelme's aiko_services framework — the aiko CLI, REPL, hyperspace, the actor model, storage/process-manager bootstrap, ChatServer, federation. Andy is the framework author and dominant teaching voice; Nick drives integration questions.",
   "glossary": [
     "aiko",
-    "aiko_services",
-    "aiko_chat",
+    {
+      "term": "aiko_services",
+      "url": "https://github.com/geekscape/aiko_services"
+    },
+    {
+      "term": "aiko_chat",
+      "url": "https://github.com/geekscape/aiko_chat"
+    },
     "aiko_core",
     "Aiko Chat",
     "hyperspace",
@@ -23,19 +29,52 @@
     "OKF",
     "federation",
     "Claude",
-    "S-expressions",
-    "Dart",
-    "OpenSpec",
-    "AGPL",
-    "GPL",
-    "LGPL",
-    "Apache-2",
-    "wasm",
-    "LLVM",
+    {
+      "term": "S-expressions",
+      "url": "https://en.wikipedia.org/wiki/S-expression"
+    },
+    {
+      "term": "Dart",
+      "url": "https://dart.dev"
+    },
+    {
+      "term": "OpenSpec",
+      "url": "https://github.com/Fission-AI/OpenSpec"
+    },
+    {
+      "term": "AGPL",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    },
+    {
+      "term": "GPL",
+      "url": "https://www.gnu.org/licenses/gpl-3.0.html"
+    },
+    {
+      "term": "LGPL",
+      "url": "https://www.gnu.org/licenses/lgpl-3.0.html"
+    },
+    {
+      "term": "Apache-2",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    {
+      "term": "wasm",
+      "url": "https://webassembly.org"
+    },
+    {
+      "term": "LLVM",
+      "url": "https://llvm.org"
+    },
     "DreamFinder",
     "HubSpace",
-    "MQTT",
-    "WebRTC",
+    {
+      "term": "MQTT",
+      "url": "https://mqtt.org"
+    },
+    {
+      "term": "WebRTC",
+      "url": "https://webrtc.org"
+    },
     "WebSockets",
     "Bendigo MakeLab",
     "Hackers on the Train",
@@ -43,13 +82,25 @@
     "Robin",
     "Deanna",
     "Frank",
-    "micropython",
-    "pyannote",
-    "Parakeet",
+    {
+      "term": "micropython",
+      "url": "https://micropython.org"
+    },
+    {
+      "term": "pyannote",
+      "url": "https://github.com/pyannote/pyannote-audio"
+    },
+    {
+      "term": "Parakeet",
+      "url": "https://huggingface.co/mlx-community/parakeet-tdt-1.1b"
+    },
     "meta harness",
     "inversion of control",
     "certificate authority",
-    "Let's Encrypt",
+    {
+      "term": "Let's Encrypt",
+      "url": "https://letsencrypt.org"
+    },
     "sovereign identity",
     "aiko engine"
   ],
