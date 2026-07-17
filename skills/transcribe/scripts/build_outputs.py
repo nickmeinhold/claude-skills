@@ -93,8 +93,8 @@ color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
 
 # html
 rows = "\n".join(
-    f'<div class="turn"><div class="meta"><span class="spk" style="color:{color[b["spk"]]}">'
-    f'{escape(b["spk"])}</span><span class="ts">{fmt_ts(b["start"])[:8]}</span></div>'
+    f'<div class="turn" id="t{int(b["start"])}"><div class="meta"><span class="spk" style="color:{color[b["spk"]]}">'
+    f'{escape(b["spk"])}</span><a class="ts" href="#t{int(b["start"])}">{fmt_ts(b["start"])[:8]}</a></div>'
     f'<div class="text" style="border-left:3px solid {color[b["spk"]]}">{linkify(escape(b["text"]))}</div></div>'
     for b in blocks)
 refs = ""
@@ -113,7 +113,8 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  body{{font-family:-apple-system,system-ui,sans-serif;max-width:760px;margin:0 auto;padding:2rem 1.25rem;line-height:1.55;color:#1a1a1a}}
  h1{{font-size:1.5rem;margin-bottom:.25rem}} .sub{{color:#666;font-size:.9rem;margin-bottom:1rem}}
  .turn{{margin-bottom:1.1rem}} .meta{{display:flex;gap:.6rem;align-items:baseline;font-size:.8rem;margin-bottom:.2rem}}
- .spk{{font-weight:700}} .ts{{color:#999;font-variant-numeric:tabular-nums}} .text{{padding-left:.75rem}}
+ .spk{{font-weight:700}} .ts{{color:#999;font-variant-numeric:tabular-nums;text-decoration:none}} .ts:hover{{color:#555}} .text{{padding-left:.75rem}}
+ .turn:target .text{{background:#fffbe6;border-radius:4px}}
  .legend{{font-size:.85rem;color:#555;margin-bottom:1.5rem}}
  .dot{{display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin-right:.3rem;vertical-align:middle}}
  .text a{{color:inherit;text-decoration:underline dotted #888;text-underline-offset:2px}}
