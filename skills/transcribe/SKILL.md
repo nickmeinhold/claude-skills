@@ -73,16 +73,28 @@ person said, verbatim-ish) dramatically improve attribution accuracy.
   inconsistently (a real call rendered "aiko" as archo/archa/icoservices). The
   attribution pass corrects garbled words to these exact spellings.
 
-### Mine the vocabulary before running (instruction to the invoking agent)
+### Rosters + vocabulary mining (instruction to the invoking agent — DO THIS EVERY RUN)
 
-Before a run, spend 60 seconds assembling `vocabulary` from what you already know:
-the project's `MEMORY.md`/memory dir, repo and package names in the working
-directory, the names of people in the session context, and any topic the user
-mentioned when asking for the transcription. If you know ANY of this, write a
-speakers.json even when speaker names are unknown — profiles/anchors can be added
-later via `--reattribute`, but a first pass with vocabulary avoids systematic
-name-garbling throughout. (Without a speakers.json there is no LLM pass, so no
-vocabulary correction happens.)
+1. **Check `rosters/` FIRST.** `~/.claude/skills/transcribe/rosters/*.json` holds
+   standing cast configs for recurring calls (e.g. `aiko.json` for Nick+Andy aiko
+   calls, `makelabs.json`). If one matches the recording's likely context, use it
+   as the speakers.json (copy it into the work dir; tweak title/num_speakers
+   per-recording). Rosters carry a `glossary` — the accumulated correct spellings
+   of every term the ASR has ever garbled for that crew.
+2. **No matching roster?** Spend 60 seconds assembling `vocabulary` from what you
+   already know: the project's `MEMORY.md`/memory dir, repo and package names in
+   the working directory, people in the session context, the user's own words when
+   asking. Write a speakers.json even when speaker names are unknown — the LLM
+   pass then runs with anonymous cluster labels but still corrects vocabulary.
+   (No speakers.json → no LLM pass → no correction.)
+3. **Close the growth loop AFTER the run.** Skim the output for garbled proper
+   nouns (the tell: one unknown word rendered as several different
+   plausible-English spellings). Fix the transcript, then append the CORRECT
+   spellings to the matching roster's `glossary` (or create a roster if this crew
+   will recur). Each mishearing should ever be caught only once.
+
+`vocabulary` (per-recording speakers.json) and `glossary` (standing roster) are
+the same thing to the pipeline — either key works.
 
 ## Pipeline (what run.sh does)
 

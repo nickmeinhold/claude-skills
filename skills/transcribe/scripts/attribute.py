@@ -61,7 +61,7 @@ def build_cast():
 
 
 CAST = build_cast()
-VOCAB = CONFIG.get("vocabulary") or []
+VOCAB = CONFIG.get("vocabulary") or CONFIG.get("glossary") or []
 VOCAB_BLOCK = ""
 if VOCAB:
     VOCAB_BLOCK = (
