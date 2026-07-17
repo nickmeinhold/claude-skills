@@ -28,13 +28,25 @@ WORKERS = 6
 FAST = ["--disallowedTools", "*", "--mcp-config", '{"mcpServers":{}}',
         "--strict-mcp-config"]
 
-SPEAKERS = CONFIG["speakers"]
+SPEAKERS = CONFIG.get("speakers") or []
+NAMED = bool(SPEAKERS)
+if not NAMED:
+    # vocabulary-only config: keep anonymous diarization clusters as the "cast"
+    _clusters = sorted({t["cluster"]
+                        for t in json.loads((WORK / "turns.json").read_text())})
+    SPEAKERS = [{"name": c} for c in _clusters]
 NAMES = [s["name"] for s in SPEAKERS]
 
 
 def build_cast():
     lines = []
     ctx = CONFIG.get("context")
+    if not NAMED:
+        lines.append("Speakers are anonymous diarization clusters "
+                     f"({', '.join(NAMES)}); keep each turn's cluster as its "
+                     "speaker unless conversational flow clearly shows a mis-split."
+                     + (f" Context: {ctx}" if ctx else ""))
+        return "\n".join(lines)
     lines.append(f"The conversation has EXACTLY {len(SPEAKERS)} participants."
                  + (f" Context: {ctx}" if ctx else "") + " Profiles:\n")
     for s in SPEAKERS:
@@ -49,7 +61,17 @@ def build_cast():
 
 
 CAST = build_cast()
+VOCAB = CONFIG.get("vocabulary") or []
+VOCAB_BLOCK = ""
+if VOCAB:
+    VOCAB_BLOCK = (
+        "\nDOMAIN VOCABULARY -- these exact terms appear in this conversation. The ASR "
+        "does not know them and renders them as phonetically-similar English (often "
+        "several different spellings for one term). When a word is phonetically close "
+        "to one of these, correct it to this exact spelling: "
+        + ", ".join(VOCAB) + "\n")
 RULES = f"""\
+{VOCAB_BLOCK}
 For EACH numbered turn, decide who is speaking. Use, in priority order:
 1. Any GROUND TRUTH lines above (those exact turns are fixed).
 2. Content & speech-pattern matching against the profiles.

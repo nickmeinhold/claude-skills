@@ -67,6 +67,22 @@ person said, verbatim-ish) dramatically improve attribution accuracy.
 
 - `num_speakers` (optional): if you know the headcount, it's passed to pyannote
   (`num_speakers=N`) and sharply reduces over/under-clustering. Omit to auto-detect.
+- `vocabulary` (optional but HIGH VALUE): proper nouns and domain terms likely to be
+  spoken — project names, product names, people, jargon. The ASR is blind to
+  out-of-vocabulary words and renders them as phonetically-similar English, often
+  inconsistently (a real call rendered "aiko" as archo/archa/icoservices). The
+  attribution pass corrects garbled words to these exact spellings.
+
+### Mine the vocabulary before running (instruction to the invoking agent)
+
+Before a run, spend 60 seconds assembling `vocabulary` from what you already know:
+the project's `MEMORY.md`/memory dir, repo and package names in the working
+directory, the names of people in the session context, and any topic the user
+mentioned when asking for the transcription. If you know ANY of this, write a
+speakers.json even when speaker names are unknown — profiles/anchors can be added
+later via `--reattribute`, but a first pass with vocabulary avoids systematic
+name-garbling throughout. (Without a speakers.json there is no LLM pass, so no
+vocabulary correction happens.)
 
 ## Pipeline (what run.sh does)
 

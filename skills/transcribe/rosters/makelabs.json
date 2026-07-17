@@ -1,0 +1,26 @@
+{
+  "title": "MakeLabs — Elena Kelareva call",
+  "context": "A phone call about MakeLabs, a proposed network of regional-Victorian community workshops (STEAM 'learn by doing' spaces; local nodes are '<Town> MakeLab', e.g. Bendigo MakeLab). Nick and Alexar are picking Elena Kelareva's brain on regional tech/maker initiatives — funding, mentors, gender-inclusive design, getting young regional people engaged. Alexar leads the concept pitch; Nick frames why they're talking to her and steers; Elena gives the unvarnished regional read from her GippsTech / Startup Gippsland experience. (This concept was earlier explored as 'BIT Centers' — that name is retired; it is MakeLabs now.)",
+  "num_speakers": 3,
+  "glossary": [
+    "MakeLabs", "MakeLab", "Bendigo MakeLab", "Ballarat Hackerspace", "GippsTech",
+    "Startup Gippsland", "Gippsland", "Binary Shift", "Hackers on the Train", "Starlink",
+    "V/Line", "Learn Local", "neighbourhood houses", "peppercorn rent", "the Herd",
+    "LaunchVic", "complex adaptive systems", "Toowoomba", "hackerspace", "Bendigo",
+    "Shepparton", "Raspberry Pi", "IoT", "STEAM", "social enterprise", "Alexar", "Elena Kelareva"
+  ],
+  "speakers": [
+    {
+      "name": "Elena",
+      "profile": "Elena Kelareva (She/Her) — CEO/Founder of GippsTech and Startup Gippsland, lives in Gippsland ~2h from Melbourne, runs the Binary Shift conference. The expert being consulted. Speaks from lived regional experience: funding mixes, why community hubs are hard to make financially viable, partnering with neighbourhood houses / Learn Local / local council for peppercorn rent, gender-inclusive design so regional women don't self-exclude, mentor retention. Measured, reflective, gives caveated real-world detail. Ran a co-working space called 'the Herd'."
+    },
+    {
+      "name": "Alexar",
+      "profile": "Melbourne-based co-founder. Leads the MakeLabs concept pitch — the reverse-pump idea for regional towns, themed fortnights, Hackers on the Train. Energetic, storytelling, builds analogies (complex adaptive systems). Drives the vision; asks Elena to poke holes in it. Wants the concept framed as MakeLabs, not the old 'BIT Centers' name."
+    },
+    {
+      "name": "Nick",
+      "profile": "Frames why they're talking to Elena and steers the conversation. Tells the story of starting a hackerspace in Toowoomba as a med student that's still running, now run by the young people who took it over. Draws out Elena's experience; interjects with clarifying questions."
+    }
+  ]
+}
