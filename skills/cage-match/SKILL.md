@@ -9,7 +9,7 @@ Five AI reviewers enter. One PR leaves (hopefully improved).
 
 **Maxwell** (Claude/you), **Kelvin** (Gemini), **Carnot** (Codex/OpenAI GPT), **Tesla, the Arc-Prophet** (xAI Grok), and **Wu, the Parity-Breaker** (Moonshot Kimi K3) will each review the PR in parallel. Maxwell then critiques the others.
 
-**Why five?** One reviewer-of-record is a single point of failure — Kelvin's capacity has degraded silently before. Each added reviewer is a different model family with a different inductive bias, and because all five run concurrently they cost zero added latency. Maxwell hunts the illegal move; Kelvin the cold fault; Carnot the wasted work; Tesla the resonant frequency at which the whole thing shakes itself apart; Wu the assumed symmetry that was never actually there. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot, Tesla, Wu). Only if ALL FOUR adversarial reviewers fail do we **HARD FAIL** rather than silently degrading to "proxy sign-off".
+**Why five?** One reviewer-of-record is a single point of failure — Kelvin's capacity has degraded silently before. Each added reviewer is a different model family with a different inductive bias, and because all five run concurrently the wall-clock cost is only the slowest reviewer, not the sum. Maxwell hunts the illegal move; Kelvin the cold fault; Carnot the wasted work; Tesla the resonant frequency at which the whole thing shakes itself apart; Wu the assumed symmetry that was never actually there. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot, Tesla, Wu). Only if ALL FOUR adversarial reviewers fail do we **HARD FAIL** rather than silently degrading to "proxy sign-off".
 
 ## Setup
 
@@ -59,7 +59,7 @@ cat /tmp/pr-$1-diff.txt
 
 ## Rounds 2 ∥ 3 ∥ 4 ∥ 5 ∥ 6: Maxwell + Kelvin + Carnot + Tesla + Wu Reviews (parallel)
 
-**Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
+**Performance note.** All five reviews are independent — they don't read each other. Fire Kelvin, Carnot, Tesla, AND Wu as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max of the slowest reviewer (each adversary ~30-120s; Maxwell ~1-2 min), so each added adversary costs no additional wall-clock unless it becomes the new slow pole.
 
 **Adversary-prompt safety (READ BEFORE EDITING ANY PROMPT BELOW).** Kelvin's and Carnot's prompts contain backtick-quoted identifiers (`` `enum` ``, `` `dart test` ``, `` `pubspec.yaml` ``). A backtick inside a **double-quoted** bash string — or an **unquoted** `<<EOF` heredoc — is command substitution: bash runs the identifier as a command (`command not found`) and the word **silently vanishes** from the brief (this bit a real run — `historyContiguousThrough` in backticks dropped out of Kelvin's prompt). The hand-escaping workaround (`` \` ``) is fragile — one missed escape reopens the hole. So every prompt below is built the same safe way: **static text → a QUOTED heredoc** (`<<'EOF'`, backticks and `$` literal, zero escaping), **dynamic data (PR info, diff, prior reviews) → appended as literal files**, then handed to the CLI via `"$(cat file)"` (Gemini) or `< file` stdin (Codex). Command-substitution output is never re-parsed for backticks, so it's injection-proof regardless of diff contents. **Never inline a prompt as a double-quoted string or an unquoted heredoc.**
 
@@ -309,7 +309,7 @@ TESLA_PID=$!
 
 **Step B3 — fire Wu's review as a fourth backgrounded bash (Moonshot Kimi K3):**
 
-Wu is the fifth family (Moonshot Kimi K3), invoked via the `kimi` CLI's headless print mode (`--quiet` = `--print --output-format text --final-message-only`, exits after one turn). The CLI lives in `~/.local/bin` (installed via `uv tool install kimi-cli`); auth is OAuth (`kimi login`, browser). Kimi is agentic like Codex/Grok, so `--plan` restricts it to read-only tools AND the prompt forbids tool use — belt and braces, same "review by diff" pattern as the others. Output is free text (no `--output-schema`), so the verdict parses from the text like Kelvin/Tesla. An unauthenticated CLI prints "LLM not set" and exits — `wu_ok()` downstream treats an empty/verdict-less file as "unavailable", so a missing login or exhausted credits degrades gracefully rather than blocking the gate. `WU_MODEL` defaults to `kimi-code/k3` (Moonshot's flagship since 2026-07-17, namespaced exactly as in `~/.kimi/config.toml`'s model registry — bare `k3` fails with "LLM not set"); if the account's plan rejects that model id, set `WU_MODEL` to the account default or empty.
+Wu is the fifth family (Moonshot Kimi K3), invoked via the `kimi` CLI's headless print mode (`--quiet` = `--print --output-format text --final-message-only`, exits after one turn). The CLI lives in `~/.local/bin` (installed via `uv tool install kimi-cli`); auth is OAuth (`kimi login`, browser). Kimi is agentic like Codex/Grok, so `--plan` restricts it to read-only tools AND the prompt forbids tool use — belt and braces, same "review by diff" pattern as the others. Output is free text (no `--output-schema`), so the verdict parses from the text like Kelvin/Tesla. An unauthenticated CLI prints "LLM not set" and exits — `wu_ok()` downstream treats an empty/verdict-less file as "unavailable", so a missing login or exhausted credits degrades gracefully rather than blocking the gate. `WU_MODEL` defaults to `kimi-code/k3` (Moonshot's flagship since 2026-07-17, namespaced exactly as in `~/.kimi/config.toml`'s model registry — bare `k3` fails with "LLM not set"); if the account's plan rejects that model id, export `WU_MODEL` as another registry id, or export it EMPTY (`WU_MODEL=`) to omit `-m` entirely and use the CLI's configured default. (The assignment below uses `${WU_MODEL-…}` — dash, not colon-dash — so an explicitly-empty export survives defaulting and the `${WU_MODEL:+…}` expansion then drops the `-m` flag; Carnot + Tesla both caught the `:-` version silently resurrecting the pin.)
 
 ```bash
 # Same file-based QUOTED-heredoc pattern: static persona text (literal backticks,
@@ -352,7 +352,7 @@ cat /tmp/pr-$1-diff.txt >> /tmp/wu-prompt-$1.txt
 
 # Backgrounded alongside Kelvin + Carnot + Tesla. wait $WU_PID below.
 export PATH="$HOME/.local/bin:$PATH"
-WU_MODEL="${WU_MODEL:-kimi-code/k3}"
+WU_MODEL="${WU_MODEL-kimi-code/k3}"   # dash not colon-dash: explicit WU_MODEL= means "no -m flag"
 kimi --quiet --plan ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log &
 WU_PID=$!
 ```
@@ -448,7 +448,7 @@ kelvin_ok() {
   [ "$KELVIN_RC" -eq 0 ] \
     && [ -s /tmp/kelvin-review-$1.md ] \
     && [ "$(wc -c < /tmp/kelvin-review-$1.md)" -gt 200 ] \
-    && grep -q "Verdict:" /tmp/kelvin-review-$1.md
+    && grep -qE '^\*\*Verdict:\*\*' /tmp/kelvin-review-$1.md
 }
 # Carnot validates against the structured JSON (the source of truth)
 # rather than the rendered markdown, so a botched jq filter doesn't
@@ -468,16 +468,19 @@ tesla_ok() {
   [ "$TESLA_RC" -eq 0 ] \
     && [ -s /tmp/tesla-review-$1.md ] \
     && [ "$(wc -c < /tmp/tesla-review-$1.md)" -gt 200 ] \
-    && grep -q "Verdict:" /tmp/tesla-review-$1.md
+    && grep -qE '^\*\*Verdict:\*\*' /tmp/tesla-review-$1.md
 }
 # Wu (Kimi) is free-text like Kelvin/Tesla — validate size + a Verdict marker.
-# "LLM not set" (no login) or exhausted credits produce a tiny/verdict-less
-# file, which fails this check and degrades gracefully.
+# "LLM not set" (no login), quota exhaustion (403 access_terminated_error), or a
+# wrong model id all produce a tiny/verdict-less file, which fails this check and
+# degrades gracefully. The Verdict grep is LINE-ANCHORED (^**Verdict:**) so an
+# agentic model echoing the prompt's format template mid-error can't fake
+# availability (Carnot's catch — the prompt itself contains "Verdict:").
 wu_ok() {
   [ "$WU_RC" -eq 0 ] \
     && [ -s /tmp/wu-review-$1.md ] \
     && [ "$(wc -c < /tmp/wu-review-$1.md)" -gt 200 ] \
-    && grep -q "Verdict:" /tmp/wu-review-$1.md
+    && grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md
 }
 
 KELVIN_AVAILABLE=0
@@ -492,14 +495,14 @@ wu_ok     $1 && WU_AVAILABLE=1
 echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE Tesla=$TESLA_AVAILABLE Wu=$WU_AVAILABLE"
 ```
 
-## Round 5: Strict Merge Gate
+## Round 7: Strict Merge Gate
 
 The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Tesla, Wu)**.
 
 | State | Action |
 |---|---|
 | Maxwell ✓ + any of (Kelvin, Carnot, Tesla, Wu) ✓ | Ship — note any unavailable reviewer in the summary |
-| Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ + Wu ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
+| Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ + Wu ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 10 (post + merge) |
 
 ```bash
 if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_AVAILABLE" -eq 0 ] && [ "$WU_AVAILABLE" -eq 0 ]; then
@@ -533,7 +536,7 @@ fi
 
 The skill MUST NOT proceed past this gate if all four adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
 
-## Round 6: The Critique
+## Round 8: The Critique
 
 Now read whichever adversarial reviews are available and critique them. Did Kelvin/Carnot miss anything you caught? Did either find something you missed?
 
@@ -571,9 +574,9 @@ KELVIN_CRITIQUE_TAIL_EOF
 fi
 ```
 
-(Carnot's counter-critique is optional — if you want it, mirror the pattern via `codex exec` with stdin. The default flow keeps it to Kelvin for tradition; the third reviewer's job is review breadth, not the promo.)
+(Counter-critiques from Carnot, Tesla, or Wu are optional — mirror the pattern via `codex exec` stdin / `grok --prompt-file` / `kimi --quiet -p` respectively. The default flow keeps the promo to Kelvin for tradition; the added reviewers' job is review breadth, not the promo. Maxwell's own critique in this round MUST cover every review that showed up — all four adversaries, not just Kelvin.)
 
-## Round 7: Final Verdict
+## Round 9: Final Verdict
 
 Based on all available reviews and critiques, synthesize a final assessment:
 
@@ -581,7 +584,7 @@ Based on all available reviews and critiques, synthesize a final assessment:
 2. **Disputed items** - Where reviewers disagree (needs human judgment)
 3. **Unique catches** - Issues only one reviewer found (investigate further)
 
-## Round 8: Post Reviews to GitHub (parallel)
+## Round 10: Post Reviews to GitHub (parallel)
 
 Generate App tokens in parallel — independent calls to the same helper script. Carnot now has its own GitHub App (CarnotCodeCarver), so when `CARNOT_APP_ID` is configured its review posts as a **formal PR review** carrying its verdict (so an adversarial APPROVE actually satisfies branch protection). If the Carnot App env is absent (older setup), it falls back to a plain `gh pr comment` labelled `## CarnotCodeCarver's Review`.
 
@@ -612,10 +615,18 @@ KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHAN
 CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
 # Tesla's and Wu's verdicts are parsed from their free-text reviews (the **Verdict:** line).
-TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-case "$TESLA_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) TESLA_VERDICT="COMMENT" ;; esac
-WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-case "$WU_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) WU_VERDICT="COMMENT" ;; esac
+# Parse ONLY when available — an unavailable reviewer must stay distinct from an explicit
+# COMMENT (Carnot's conflation catch); posting below is availability-gated anyway.
+TESLA_VERDICT=""
+if [ "$TESLA_AVAILABLE" -eq 1 ]; then
+  TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+  case "$TESLA_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) TESLA_VERDICT="COMMENT" ;; esac
+fi
+WU_VERDICT=""
+if [ "$WU_AVAILABLE" -eq 1 ]; then
+  WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+  case "$WU_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) WU_VERDICT="COMMENT" ;; esac
+fi
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -643,8 +654,13 @@ fi
 # If a TeslaArcProphet App is later configured (TESLA_APP_ID + TESLA_PRIVATE_KEY_B64),
 # mirror Carnot's formal-review path so a Tesla APPROVE satisfies branch protection.
 if [ "$TESLA_AVAILABLE" -eq 1 ]; then
+  TESLA_TOKEN=""
   if [ -n "${TESLA_APP_ID:-}" ] && [ -n "${TESLA_PRIVATE_KEY_B64:-}" ]; then
-    TESLA_TOKEN=$(~/.claude/scripts/github-app-token.sh "$TESLA_APP_ID" "$TESLA_PRIVATE_KEY_B64" "$REPO")
+    TESLA_TOKEN=$(~/.claude/scripts/github-app-token.sh "$TESLA_APP_ID" "$TESLA_PRIVATE_KEY_B64" "$REPO" 2>/dev/null)
+  fi
+  # Empty token (App not configured OR mint failed) → plain-comment fallback, never
+  # a silent gh call with GH_TOKEN="" (Kelvin's catch: unchecked token generation).
+  if [ -n "$TESLA_TOKEN" ]; then
     GH_TOKEN=$TESLA_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
       -f body="$(cat /tmp/tesla-review-$1.md)" \
       -f event="$TESLA_VERDICT" &
@@ -653,12 +669,15 @@ if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   fi
 fi
 
-# Wu (Kimi) has no GitHub App yet — post as a plain comment (verdict in the body).
-# If a WuParityBreaker App is later configured (WU_APP_ID + WU_PRIVATE_KEY_B64),
-# mirror Carnot's formal-review path so a Wu APPROVE satisfies branch protection.
+# Wu (Kimi): formal review when the WuParityBreaker App is configured
+# (WU_APP_ID + WU_PRIVATE_KEY_B64 — created 2026-07-18), plain comment otherwise.
 if [ "$WU_AVAILABLE" -eq 1 ]; then
+  WU_TOKEN=""
   if [ -n "${WU_APP_ID:-}" ] && [ -n "${WU_PRIVATE_KEY_B64:-}" ]; then
-    WU_TOKEN=$(~/.claude/scripts/github-app-token.sh "$WU_APP_ID" "$WU_PRIVATE_KEY_B64" "$REPO")
+    WU_TOKEN=$(~/.claude/scripts/github-app-token.sh "$WU_APP_ID" "$WU_PRIVATE_KEY_B64" "$REPO" 2>/dev/null)
+  fi
+  # Same empty-token fallback as Tesla — mint failure degrades to a comment.
+  if [ -n "$WU_TOKEN" ]; then
     GH_TOKEN=$WU_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
       -f body="$(cat /tmp/wu-review-$1.md)" \
       -f event="$WU_VERDICT" &
@@ -670,7 +689,7 @@ fi
 wait
 ```
 
-## Round 9: Auto-apply the `cage-matched` label on consensus APPROVE
+## Round 11: Auto-apply the `cage-matched` label on consensus APPROVE
 
 A downstream merge gate (live on `nickmeinhold/the-dreaming-repo`, being mirrored to `flux-shadow`) refuses to auto-merge a sensitive PR unless it carries the `cage-matched` label. Apply that label automatically when the cage match reaches a clean consensus, so the label means exactly "a cage match approved this" rather than "a human remembered to click".
 
@@ -691,7 +710,7 @@ if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 fi
 # Re-parse Tesla's and Wu's verdicts from their review files (this runs in a fresh
-# shell, so the Round 8 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
+# shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
 TESLA_VERDICT=""
 if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')

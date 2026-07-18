@@ -129,7 +129,7 @@ Google OAuth credentials for `/slides` (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECR
 
 Avatar art for all five lives in `assets/avatars/` (`<name>.svg` source → 512px `<name>.png` via `rsvg-convert -w 512 -h 512 <name>.svg -o <name>.png`) — upload the PNG as each GitHub App's display picture.
 
-**Setup:** Add App credentials to `.env`, install both GitHub Apps on your repos, and symlink the helper script. Requires Gemini CLI installed (`brew install gemini` or similar).
+**Setup:** Add App credentials to `.env`, install the reviewer GitHub Apps on your repos (Maxwell/Kelvin/Carnot required for /ship; Tesla/Wu optional — they degrade to plain comments), and symlink the helper script. CLI prerequisites per seat: `gemini` (Kelvin), `codex` (Carnot), `grok` (Tesla), `kimi` via `uv tool install kimi-cli` + `kimi login` OAuth (Wu).
 
 ## Development Workflow
 

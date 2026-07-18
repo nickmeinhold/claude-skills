@@ -277,24 +277,28 @@ codex exec "You are CarnotCodeCarver — perfectionist measuring against theoret
 CARNOT_PID=$!
 
 # Wu (Kimi K3) — assumed-invariant-hunting vantage. Degrades gracefully: an
-# unauthenticated kimi CLI ("LLM not set") or exhausted credits yields an
-# empty/tiny wu-retro.md, which the gate below simply counts as unavailable.
+# unauthenticated kimi CLI ("LLM not set"), quota exhaustion (403), or a wrong
+# model id yields an empty/tiny wu-retro.md, which the gate below counts as
+# unavailable. stderr goes to its own file (NOT 2>&1) so CLI error text can't
+# masquerade as retro content that Maxwell then synthesizes as a peer's view.
 export PATH="$HOME/.local/bin:$PATH"
-kimi --quiet --plan -m "${WU_MODEL:-kimi-code/k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
+kimi --quiet --plan -m "${WU_MODEL-kimi-code/k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
 
-$(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>&1 &
+$(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>$SD/wu-retro.err &
 WU_PID=$!
 
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
 # Compose your own surprises/mistakes/crux directly to $SD/maxwell-retro.md.
 
-# Wait for all
-until ! ps -p $KELVIN_PID $CARNOT_PID $WU_PID > /dev/null 2>&1; do sleep 5; done
+# Wait for all — plain `wait` (event-driven, same shell), not a ps-poll (Kelvin's catch).
+# Valid ONLY because fire-and-wait run in this one bash block; PIDs don't survive
+# across separate Bash tool calls (feedback_cross_bash_wait_invalid).
+wait $KELVIN_PID $CARNOT_PID $WU_PID
 ```
 
 ### The strict-gate analogue from cage-match
 
-Same gate as cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot, Wu)** must succeed. If Kelvin AND Carnot AND Wu all fail (Gemini quota exhausted + Codex unavailable + Kimi unauthenticated), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
+Same gate as cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot, Wu)** must succeed. "Succeed" is a byte-level predicate, not a PID-exit one: the retro file must be non-empty, >200 bytes, and contain actual retrospective content (for Wu, check `$SD/wu-retro.md` is substantive and `$SD/wu-retro.err` doesn't show a quota/auth error — a PID finishing is not a review existing). If Kelvin AND Carnot AND Wu all fail (Gemini quota exhausted + Codex unavailable + Kimi unauthenticated/out-of-quota), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
 
 If only one of (Kelvin, Carnot, Wu) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
 
