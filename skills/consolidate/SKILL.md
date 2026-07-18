@@ -123,15 +123,19 @@ Agent({
   model: "haiku",
   mode: "bypassPermissions",
   prompt: `
-Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
-  jq -r 'select(.type=="user")
-    | select(.message.content
-        | type == "string" or any(.[]?; .type=="text"))
-    | "\(.timestamp) | \(.message.content
-        | if type=="string" then .
-          else (.[] | select(.type=="text") | .text)
-          end)"' "$JSONL_PATH"
-The top-level `.type=="user"` identifies user-direction records (NOT `.role == "user"` — that field doesn't exist at the top level in Claude Code JSONL). `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks — the filter handles both and EXCLUDES records where content is only `tool_result` blocks (those are tool responses, not Nick's input). Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
+Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract Nick's messages — BOTH normal turns AND mid-work interrupts — using:
+  jq -r '
+    (select(.type=="user")
+      | select(.message.content
+          | type == "string" or any(.[]?; .type=="text"))
+      | "\(.timestamp) | \(.message.content
+          | if type=="string" then .
+            else (.[] | select(.type=="text") | .text)
+            end)"),
+    (select(.type=="queue-operation" and .operation=="enqueue")
+      | "\(.timestamp) | [interrupt] \(.content)")
+  ' "$JSONL_PATH"
+The top-level `.type=="user"` identifies normal user-direction records (NOT `.role == "user"` — that field doesn't exist at the top level in Claude Code JSONL). `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks — the filter handles both and EXCLUDES records where content is only `tool_result` blocks (those are tool responses, not Nick's input). **Mid-work interrupts (Nick redirecting while the agent is working) are NOT stored as `.type=="user"` records at all** — they land as `queue-operation` records (`operation` enqueue/remove pair, text as a plain string in `.content`; verified live 2026-07-18). The second clause surfaces them, filtered to `enqueue` only so the enqueue/remove pair doesn't double-count, tagged `[interrupt]`. Interrupts are often the HIGHEST-signal steering in the session (Nick interrupting = strong redirect) — weight `[interrupt]`-tagged lines accordingly. Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
 
 Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
 
@@ -165,12 +169,15 @@ Haiku-extracted marker candidates are CANDIDATES, not ground truth — Haiku wil
 # composing the present-to-Nick dotpoints):
 while IFS= read -r line; do
   quote=$(echo "$line" | grep -o '"[^"]*"' | head -1)
-  if [ -n "$quote" ] && jq -r 'select(.type=="user") | .message.content | if type=="string" then . else (.[]? | select(.type=="text") | .text) end' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
+  if [ -n "$quote" ] && jq -r '(select(.type=="user") | .message.content | if type=="string" then . else (.[]? | select(.type=="text") | .text) end), (select(.type=="queue-operation" and .operation=="enqueue") | .content)' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
     echo "$line"  # keep
   else
     echo "DROPPED (no JSONL match): $line" >&2
   fi
-done < "$SD/raw/marker-candidates.md" > "$SD/raw/marker-candidates-verified.md"
+done < "$SD/raw/marker-candidates.md" > "$SD/raw/marker-candidates-verified.md.tmp" \
+  && mv "$SD/raw/marker-candidates-verified.md.tmp" "$SD/raw/marker-candidates-verified.md"
+# temp+mv so an interrupt mid-loop can't leave a partial verified file that a
+# later phase would silently trust (same atomic-write rule as the validation gate).
 ```
 
 Maxwell then composes the dotpoints from `$SD/raw/marker-candidates-verified.md`. If `$JSONL_PATH` is unavailable (session hasn't flushed), skip validation and present raw candidates with an explicit "(unverified — JSONL not available)" prefix on each dotpoint.
