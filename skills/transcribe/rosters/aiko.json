@@ -110,7 +110,37 @@
     "Lean",
     "category theory",
     "correct by construction",
-    "formal verification"
+    "formal verification",
+    {
+      "term": "Clojure",
+      "url": "https://clojure.org"
+    },
+    {
+      "term": "EDN",
+      "url": "https://github.com/edn-format/edn"
+    },
+    "Lisp",
+    "Scheme",
+    "Rich Hickey",
+    "Guy Steele",
+    "Gerald Sussman",
+    "Cray Research",
+    "Cray-1",
+    "Cray-2",
+    "Enspyr",
+    "TechWorld",
+    "Maxwell",
+    "Kelvin",
+    "Carnot",
+    "Tesla, the Arc-Prophet",
+    "Wu, the Parity-Breaker",
+    "Kimi K3",
+    "AI+ML+Robots",
+    "vibe coding",
+    "parser generator",
+    "Glassdoor",
+    "feature request",
+    "Heidi Health"
   ],
   "speakers": [
     {
