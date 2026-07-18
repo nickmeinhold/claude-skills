@@ -144,6 +144,12 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  .far{{display:none;color:#777}}
  .far.shown{{display:inline}}
  .done{{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:.8rem 1rem;margin:1rem 0;display:none}}
+ .okbtn{{border-color:#059669;background:#059669;color:#fff;font-weight:600;margin-left:.6rem}}
+ .endbar{{display:flex;gap:.6rem;align-items:center;border-top:1px solid #ddd;margin-top:1.6rem;padding-top:1.1rem}}
+ .endbar #endsummary{{color:#555;font-size:.9rem;margin-right:auto}}
+ .finished{{display:none;text-align:center;padding:4rem 1rem;color:#333}}
+ body.closed .card,body.closed .toolbar,body.closed .endbar,body.closed .done,body.closed .sub{{display:none}}
+ body.closed .finished{{display:block}}
 </style></head><body>
 <h1>Repair review — {escape(TITLE)}</h1>
 <div class="sub">{len(proposed)} proposals · click Apply / Reject per finding (saved locally as you go),
@@ -157,8 +163,19 @@ then Export to download the decided <code>corrections.json</code></div>
 </div>
 <div class="done" id="done">Exported. Move the download over
 <code>{escape(str(cpath))}</code> then run:
-<code>run.sh --apply "{escape(str(WORK))}" &lt;speakers.json&gt;</code></div>
+<code>run.sh --apply "{escape(str(WORK))}" &lt;speakers.json&gt;</code>
+<button class="okbtn" onclick="finish()">OK</button></div>
 {''.join(cards)}
+<div class="endbar">
+  <span id="endsummary"></span>
+  <button class="export" onclick="doExport()">Export corrections.json</button>
+  <button class="okbtn" onclick="finish()">OK — done reviewing</button>
+</div>
+<div class="finished" id="finished">
+  <h2>Review finished</h2>
+  <p id="finalcount"></p>
+  <p>Decisions are saved. This tab can be closed.</p>
+</div>
 <script>
 const CORR = {corr_json};
 const KEY = "repair-review::{escape(str(WORK))}";
@@ -176,6 +193,26 @@ function paint() {{
   }});
   document.getElementById("count").textContent =
     `${{a}} apply · ${{r}} reject · ${{pending}} undecided`;
+  const end = document.getElementById("endsummary");
+  if (end) end.textContent = pending
+    ? `${{pending}} still undecided`
+    : `All ${{a + r}} decided (${{a}} apply · ${{r}} reject)` +
+      (exported ? " · exported" : " · not yet exported");
+}}
+let exported = false;
+function finish() {{
+  const pending = document.querySelectorAll(".card:not(.approved):not(.rejected)").length;
+  if (pending && !confirm(`${{pending}} proposals are still undecided — finish anyway? (Undecided stay proposed.)`)) return;
+  const a = Object.values(decisions).filter(v => v === "approved").length;
+  if (a && !exported && !confirm(`${{a}} approvals have NOT been exported — finish without exporting?`)) return;
+  window.close();
+  // browsers only let scripts close windows they opened; fall back to a
+  // visible end state so the flow still terminates
+  setTimeout(() => {{
+    document.getElementById("finalcount").textContent =
+      document.getElementById("count").textContent;
+    document.body.classList.add("closed");
+  }}, 150);
 }}
 function decide(idx, verdict) {{
   decisions[idx] = decisions[idx] === verdict ? undefined : verdict;
@@ -214,7 +251,9 @@ function doExport() {{
   a.href = URL.createObjectURL(blob);
   a.download = "corrections.json";
   a.click();
+  exported = true;
   document.getElementById("done").style.display = "block";
+  paint();
 }}
 paint();
 </script>
