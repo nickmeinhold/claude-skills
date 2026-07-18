@@ -75,11 +75,12 @@ for idx, c in proposed:
         except re.error:
             replacement = c["replacement"]
         lead = (f'<a class="more" onclick="expand(this)" title="show the rest '
-                f'of the turn">…</a><span class="far">{escape(far_before)}</span>'
+                f'of the turn">⟨ more before ⟩</a>'
+                f'<span class="far">{escape(far_before)}</span>'
                 if far_before else '')
         tail = (f'<span class="far">{escape(far_after)}</span>'
                 f'<a class="more" onclick="expand(this)" title="show the rest '
-                f'of the turn">…</a>'
+                f'of the turn">⟨ more after ⟩</a>'
                 if far_after else '')
         ctx_html = (f'<span class="ctx">{lead}{escape(before)}</span>'
                     f'<del>{escape(matched)}</del>'
@@ -146,8 +147,11 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  del{{background:#fee2e2;color:#b91c1c;text-decoration:line-through;padding:.06rem .15rem;border-radius:3px}}
  ins{{background:#dcfce7;color:#15803d;text-decoration:none;padding:.06rem .15rem;border-radius:3px;font-weight:600}}
  .note{{font-size:.85rem;color:#555;border-left:3px solid #e2e2e2;padding-left:.6rem}}
- .more{{cursor:pointer;color:#2563eb;font-weight:700;padding:0 .15rem;user-select:none}}
- .more:hover{{background:#eff6ff;border-radius:3px}}
+ .more{{cursor:pointer;color:#2563eb;font-weight:700;user-select:none;
+        background:#eff6ff;border:1px solid #bfdbfe;border-radius:9999px;
+        padding:0 .5rem;margin:0 .3rem;font-size:.8rem;white-space:nowrap;
+        display:inline-block;line-height:1.4}}
+ .more:hover{{background:#dbeafe}}
  .far{{display:none;color:#777}}
  .far.shown{{display:inline}}
  .done{{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:.8rem 1rem;margin:1rem 0;display:none}}
