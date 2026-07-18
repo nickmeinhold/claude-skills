@@ -74,6 +74,12 @@ MAXWELL_APP_ID=123456                    # MaxwellMergeSlam App (Claude reviewer
 MAXWELL_PRIVATE_KEY_B64=base64-pem...    # base64-encoded private key
 KELVIN_APP_ID=789012                     # KelvinBitBrawler App (Gemini reviewer)
 KELVIN_PRIVATE_KEY_B64=base64-pem...     # base64-encoded private key
+CARNOT_APP_ID=345678                     # CarnotCodeCarver App (Codex/GPT reviewer)
+CARNOT_PRIVATE_KEY_B64=base64-pem...     # base64-encoded private key
+TESLA_APP_ID=901234                      # TeslaArcProphet App (Grok reviewer) — optional; falls back to gh pr comment
+TESLA_PRIVATE_KEY_B64=base64-pem...      # base64-encoded private key
+WU_APP_ID=567890                         # WuParityBreaker App (Kimi K3 reviewer) — optional; falls back to gh pr comment
+WU_PRIVATE_KEY_B64=base64-pem...         # base64-encoded private key
 
 # For /ship - admin PAT for branch protection setup (optional, admin-only)
 ENSPYR_ADMIN_PAT=ghp_...
@@ -96,7 +102,7 @@ Google OAuth credentials for `/slides` (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECR
 | `/ship` | Commit, push, create PR, review, merge - auto-escalates to cage match for large changes |
 | `/ship-major-feature` | Like /ship but with dual adversarial review (cage match) |
 | `/pr-review <pr>` | Code review a PR as MaxwellMergeSlam (Claude) |
-| `/cage-match <pr>` | Adversarial review: Maxwell (Claude) vs Kelvin (Gemini) |
+| `/cage-match <pr>` | Adversarial review: Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (GPT) vs Tesla (Grok) vs Wu (Kimi K3) |
 | `/review-respond [pr]` | Respond to PR review comments with user input |
 | `/pm <action>` | Project management (issues, planning) |
 | `/slides` | Generate Google Slides presentations (delegates to sibling `claude-slides` build) |
@@ -117,6 +123,11 @@ Google OAuth credentials for `/slides` (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECR
 **Reviewers:**
 - **MaxwellMergeSlam [bot]** - Claude instance (GitHub App, uses `MAXWELL_APP_ID` + `MAXWELL_PRIVATE_KEY_B64`)
 - **KelvinBitBrawler [bot]** - Gemini instance (GitHub App, uses `KELVIN_APP_ID` + `KELVIN_PRIVATE_KEY_B64`)
+- **CarnotCodeCarver [bot]** - Codex/GPT instance (GitHub App, uses `CARNOT_APP_ID` + `CARNOT_PRIVATE_KEY_B64`)
+- **TeslaArcProphet [bot]** - Grok instance via `grok` CLI (App optional — `TESLA_APP_ID` + `TESLA_PRIVATE_KEY_B64`; posts a plain comment without it)
+- **WuParityBreaker [bot]** - Kimi K3 instance via `kimi` CLI (App optional — `WU_APP_ID` + `WU_PRIVATE_KEY_B64`; posts a plain comment without it). Requires `kimi login` (OAuth) once; unauthenticated Wu degrades to "unavailable" at the gate.
+
+Avatar art for all five lives in `assets/avatars/` (`<name>.svg` source → 512px `<name>.png` via `rsvg-convert -w 512 -h 512 <name>.svg -o <name>.png`) — upload the PNG as each GitHub App's display picture.
 
 **Setup:** Add App credentials to `.env`, install both GitHub Apps on your repos, and symlink the helper script. Requires Gemini CLI installed (`brew install gemini` or similar).
 

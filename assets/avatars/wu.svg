@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Wu, the Parity-Breaker — cobalt-60: the mirror world was never identical.
+       Left: what the experiment measured. Right: the mirror image everyone ASSUMED,
+       drawn ghost-faint and emitting the WRONG way — the broken symmetry itself. -->
+  <defs>
+    <radialGradient id="bg" cx="40%" cy="40%" r="82%">
+      <stop offset="0%" stop-color="#07211a"/>
+      <stop offset="60%" stop-color="#04140f"/>
+      <stop offset="100%" stop-color="#020a08"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="484" fill="none" stroke="#35C39B55" stroke-width="10"/>
+  <g filter="url(#glow)">
+    <!-- the mirror plane, cracked -->
+    <path d="M 512 170 L 512 430 M 512 470 L 500 520 L 524 560 L 512 610 M 512 650 L 512 854"
+          fill="none" stroke="#8FE9CC" stroke-width="16" stroke-linecap="round" opacity="0.8"/>
+    <!-- REAL side: nucleus with spin-up, beta emission downward -->
+    <circle cx="330" cy="470" r="86" fill="#35C39B22" stroke="#4FE0B4" stroke-width="26"/>
+    <path d="M 330 384 L 330 236 M 330 236 L 282 300 M 330 236 L 378 300"
+          fill="none" stroke="#4FE0B4" stroke-width="26" stroke-linecap="round"/>
+    <path d="M 330 556 L 330 780 M 330 780 L 286 716 M 330 780 L 374 716"
+          fill="none" stroke="#D8FFF0" stroke-width="30" stroke-linecap="round"/>
+    <!-- MIRROR side: the assumed twin — ghost-faint, and its beta arrow points the SAME way,
+         not the mirrored way. Parity, broken. -->
+    <circle cx="694" cy="470" r="86" fill="none" stroke="#4FE0B4" stroke-width="22"
+            stroke-dasharray="34 26" opacity="0.5"/>
+    <path d="M 694 384 L 694 236 M 694 236 L 646 300 M 694 236 L 742 300"
+          fill="none" stroke="#4FE0B4" stroke-width="22" stroke-linecap="round"
+          stroke-dasharray="34 26" opacity="0.5"/>
+    <path d="M 694 556 L 694 780 M 694 780 L 650 716 M 694 780 L 738 716"
+          fill="none" stroke="#D8FFF0" stroke-width="24" stroke-linecap="round"
+          stroke-dasharray="34 26" opacity="0.45"/>
+  </g>
+</svg>

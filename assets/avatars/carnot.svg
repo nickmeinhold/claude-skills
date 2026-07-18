@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- CarnotCodeCarver — the ideal cycle on the p-V plane: no real engine reaches it -->
+  <defs>
+    <radialGradient id="bg" cx="45%" cy="42%" r="80%">
+      <stop offset="0%" stop-color="#221606"/>
+      <stop offset="60%" stop-color="#130c04"/>
+      <stop offset="100%" stop-color="#0a0602"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="484" fill="none" stroke="#E8B84B55" stroke-width="10"/>
+  <g filter="url(#glow)">
+    <!-- p-V axes, faint: the plane every engine is judged on -->
+    <path d="M 240 200 L 240 800 L 840 800" fill="none" stroke="#E8B84B" stroke-width="14"
+          stroke-linecap="round" opacity="0.45"/>
+    <!-- the closed cycle: hot isotherm, adiabat, cold isotherm, adiabat -->
+    <path d="M 330 300
+             C 470 300, 600 340, 700 430
+             C 745 520, 760 600, 755 690
+             C 620 690, 480 650, 385 560
+             C 345 470, 330 385, 330 300 Z"
+          fill="#E8B84B14" stroke="#FFCF5E" stroke-width="30" stroke-linejoin="round"/>
+    <!-- cycle direction: work is extracted clockwise -->
+    <path d="M 520 318 L 596 332 M 596 332 L 546 292 M 596 332 L 536 366"
+          fill="none" stroke="#FFE9A8" stroke-width="20" stroke-linecap="round"/>
+    <path d="M 560 668 L 470 652 M 470 652 L 524 692 M 470 652 L 532 620"
+          fill="none" stroke="#FFE9A8" stroke-width="20" stroke-linecap="round"/>
+  </g>
+</svg>
