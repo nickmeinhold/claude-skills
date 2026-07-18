@@ -113,13 +113,20 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <style>
  body{{font-family:-apple-system,system-ui,sans-serif;max-width:860px;margin:0 auto;padding:2rem 1.25rem;line-height:1.55;color:#1a1a1a}}
  h1{{font-size:1.4rem;margin-bottom:.2rem}} .sub{{color:#666;font-size:.9rem;margin-bottom:1.2rem}}
- .toolbar{{position:sticky;top:0;background:#fff;padding:.7rem 0;border-bottom:1px solid #ddd;margin-bottom:1.2rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;z-index:2}}
+ .toolbar{{position:sticky;top:0;background:#fff;padding:.7rem 0 .5rem;border-bottom:1px solid #ddd;margin-bottom:1.2rem;z-index:2}}
+ .toolbar .row{{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}}
  .toolbar .count{{margin-left:auto;color:#555;font-size:.9rem}}
+ .progress{{height:8px;background:#eee;border-radius:4px;margin-top:.55rem;overflow:hidden;display:flex}}
+ .progress .fa{{background:#059669;transition:width .3s}}
+ .progress .fr{{background:#dc2626;transition:width .3s}}
+ .toggle{{font-size:.85rem;color:#555;display:flex;align-items:center;gap:.3rem;user-select:none}}
  button{{font:inherit;padding:.3rem .8rem;border-radius:6px;border:1px solid #ccc;background:#f6f6f6;cursor:pointer}}
  button:hover{{filter:brightness(.96)}}
  .apply{{border-color:#059669;color:#059669}} .reject{{border-color:#dc2626;color:#dc2626}}
  .export{{border-color:#2563eb;color:#2563eb;font-weight:600}}
- .card{{border:1px solid #e2e2e2;border-radius:10px;padding: .9rem 1rem;margin-bottom:1rem;transition:opacity .2s}}
+ .card{{border:1px solid #e2e2e2;border-radius:10px;padding: .9rem 1rem;margin-bottom:1rem;transition:opacity .35s,transform .35s}}
+ .card.leaving{{opacity:0;transform:translateX(2rem)}}
+ body:not(.showdecided) .card.decided{{display:none}}
  .card.approved{{border-color:#059669;background:#f0fdf6}}
  .card.rejected{{border-color:#dc2626;background:#fef2f2;opacity:.6}}
  .card.approved .apply,.card.rejected .reject{{outline:2px solid currentColor}}
@@ -155,11 +162,16 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div class="sub">{len(proposed)} proposals · click Apply / Reject per finding (saved locally as you go),
 then Export to download the decided <code>corrections.json</code></div>
 <div class="toolbar">
-  <button class="apply" onclick="bulk('approved')">Apply all remaining</button>
-  <button class="reject" onclick="bulk('rejected')">Reject all remaining</button>
-  <button onclick="clearAll()">Clear decisions</button>
-  <button class="export" onclick="doExport()">Export corrections.json</button>
-  <span class="count" id="count"></span>
+  <div class="row">
+    <button class="apply" onclick="bulk('approved')">Apply all remaining</button>
+    <button class="reject" onclick="bulk('rejected')">Reject all remaining</button>
+    <button onclick="clearAll()">Clear decisions</button>
+    <label class="toggle"><input type="checkbox" id="showdec"
+      onchange="document.body.classList.toggle('showdecided', this.checked); paint()">
+      show decided</label>
+    <span class="count" id="count"></span>
+  </div>
+  <div class="progress"><div class="fa" id="pa"></div><div class="fr" id="pr"></div></div>
 </div>
 <div class="done" id="done">Exported. Move the download over
 <code>{escape(str(cpath))}</code> then run:
@@ -198,16 +210,20 @@ let decisions = JSON.parse(localStorage.getItem(KEY) || "{{}}");
 
 function paint() {{
   let a = 0, r = 0, pending = 0;
-  document.querySelectorAll(".card").forEach(el => {{
+  const cards = document.querySelectorAll(".card");
+  cards.forEach(el => {{
     const idx = el.dataset.idx;
-    el.classList.remove("approved", "rejected");
+    el.classList.remove("approved", "rejected", "decided");
     const d = decisions[idx];
-    if (d === "approved") {{ el.classList.add("approved"); a++; }}
-    else if (d === "rejected") {{ el.classList.add("rejected"); r++; }}
+    if (d === "approved") {{ el.classList.add("approved", "decided"); a++; }}
+    else if (d === "rejected") {{ el.classList.add("rejected", "decided"); r++; }}
     else pending++;
   }});
   document.getElementById("count").textContent =
     `${{a}} apply · ${{r}} reject · ${{pending}} undecided`;
+  const total = cards.length || 1;
+  document.getElementById("pa").style.width = (a / total * 100) + "%";
+  document.getElementById("pr").style.width = (r / total * 100) + "%";
   const end = document.getElementById("endsummary");
   if (end) end.textContent = pending
     ? `${{pending}} still undecided`
@@ -248,10 +264,29 @@ async function finish() {{
   }}
 }}
 function decide(idx, verdict) {{
-  decisions[idx] = decisions[idx] === verdict ? undefined : verdict;
-  if (decisions[idx] === undefined) delete decisions[idx];
+  const undoing = decisions[idx] === verdict;
+  if (undoing) delete decisions[idx]; else decisions[idx] = verdict;
   localStorage.setItem(KEY, JSON.stringify(decisions));
-  paint();
+  const el = document.querySelector(`.card[data-idx="${{idx}}"]`);
+  if (!undoing && el && !document.body.classList.contains("showdecided")) {{
+    // let the card slide out before it collapses from the list
+    el.classList.add("leaving", verdict, "decided");
+    setTimeout(() => {{ el.classList.remove("leaving"); paint(); }}, 350);
+    // still update the tallies/progress immediately
+    paintCounts();
+  }} else paint();
+}}
+function paintCounts() {{
+  let a = 0, r = 0, pending = 0;
+  document.querySelectorAll(".card").forEach(el => {{
+    const d = decisions[el.dataset.idx];
+    if (d === "approved") a++; else if (d === "rejected") r++; else pending++;
+  }});
+  document.getElementById("count").textContent =
+    `${{a}} apply · ${{r}} reject · ${{pending}} undecided`;
+  const total = a + r + pending || 1;
+  document.getElementById("pa").style.width = (a / total * 100) + "%";
+  document.getElementById("pr").style.width = (r / total * 100) + "%";
 }}
 function bulk(verdict) {{
   document.querySelectorAll(".card").forEach(el => {{
