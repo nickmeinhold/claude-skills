@@ -3,6 +3,7 @@
 # Usage: run.sh <audio-or-video-file> [speakers.json]
 #        run.sh --reattribute <workdir> <speakers.json>   # re-run name attribution only
 #        run.sh --repair <workdir> <speakers.json>        # re-run repair pass only
+#        run.sh --review <workdir> <speakers.json>        # interactive review: OK applies + rebuilds
 #        run.sh --apply <workdir> [speakers.json]         # apply approved corrections + rebuild
 set -euo pipefail
 
@@ -57,6 +58,18 @@ if [ "${1:-}" = "--repair" ]; then
   echo "Done -> $WORK/transcript.html (review $WORK/repair_review.html)"
   command -v open >/dev/null && open "$WORK/repair_review.html" || true
   exit 0
+fi
+
+# --review: serve the review page from a local server so the OK button APPLIES
+# approved proposals and rebuilds, no export/file dance. Blocks until the
+# reviewer clicks the final OK (or ^C).
+if [ "${1:-}" = "--review" ]; then
+  WORK="${2:?usage: run.sh --review <workdir> <speakers.json>}"
+  CONFIG="${3:-}"
+  export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
+  export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
+  "$PARAKEET_PY" "$DIR/make_review.py"
+  exec "$PARAKEET_PY" "$DIR/review_server.py"
 fi
 
 # --apply: apply approved corrections.json entries + rebuild (no LLM calls).

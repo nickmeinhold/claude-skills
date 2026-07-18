@@ -77,20 +77,31 @@ catch (7.3 session, 2026-07-18):
 `status: "proposed"` with a readable `repair_report.md` — and, the primary
 review surface, **`repair_review.html`**: every proposal rendered in its
 turn's context as a diff (struck-out red original, green replacement) with
-per-finding **Apply / Reject** buttons, bulk buttons, and a live tally.
-Decisions persist in localStorage as you click; **Export** downloads the
-decided `corrections.json` — move it over the work-dir copy and run `--apply`.
-The review page is regenerated at every stage that can change the proposal
-set (full run, `--repair`, `--apply`, `--reattribute`), so it always shows
-exactly the still-undecided proposals. The review loop:
+per-finding **Apply / Reject** buttons, bulk buttons, expandable `…` context,
+and a live tally. The review loop is ONE command:
 
 ```bash
-# 1. open repair_review.html; click Apply/Reject per finding; Export
-# 2. move the downloaded corrections.json over the work-dir copy, then:
-bash ~/.claude/skills/transcribe/scripts/run.sh --apply <workdir> <speakers.json>
+bash ~/.claude/skills/transcribe/scripts/run.sh --review <workdir> <speakers.json>
+```
+
+This serves the page from a tiny localhost server (stdlib, 127.0.0.1, free
+port) and opens it. Click through the proposals; the final **OK** posts your
+decisions, applies the approved corrections, regenerates the page, rebuilds
+the transcript, and shuts the server down. Undecided proposals stay proposed
+for a later pass. Opened as a bare `file://` (no server), the page falls back
+to an Export button that downloads the decided `corrections.json` for a
+manual `--apply`.
+
+```bash
 # re-run the repair hunt later (e.g. after growing the glossary):
 bash ~/.claude/skills/transcribe/scripts/run.sh --repair <workdir> <speakers.json>
+# apply already-approved corrections without reviewing (no LLM):
+bash ~/.claude/skills/transcribe/scripts/run.sh --apply <workdir> <speakers.json>
 ```
+
+The review page is regenerated at every stage that can change the proposal
+set (full run, `--repair`, `--apply`, `--reattribute`, each server-side
+apply), so it always shows exactly the still-undecided proposals.
 
 `corrections.json` is the durable home of every fix (regex `pattern` →
 `replacement`, optional `flags: "i"`, `scope: correction|edit`): approved

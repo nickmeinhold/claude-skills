@@ -168,14 +168,29 @@ then Export to download the decided <code>corrections.json</code></div>
 {''.join(cards)}
 <div class="endbar">
   <span id="endsummary"></span>
-  <button class="export" onclick="doExport()">Export corrections.json</button>
-  <button class="okbtn" onclick="finish()">OK — done reviewing</button>
+  <button class="export" id="exportbtn" onclick="doExport()">Export corrections.json</button>
+  <button class="okbtn" id="okbtn" onclick="finish()">OK</button>
 </div>
 <div class="finished" id="finished">
   <h2>Review finished</h2>
   <p id="finalcount"></p>
-  <p>Decisions are saved. This tab can be closed.</p>
+  <p id="finishedhow"></p>
 </div>
+<script>
+// live mode (review server): OK applies + rebuilds; export is a fallback for
+// a bare file:// open, so hide it when the server is here
+document.addEventListener("DOMContentLoaded", () => {{
+  if (location.protocol.startsWith("http")) {{
+    document.getElementById("exportbtn").style.display = "none";
+    document.getElementById("okbtn").textContent = "OK — apply approved & rebuild";
+    document.getElementById("finishedhow").textContent =
+      "Approved changes applied and transcript rebuilt. This tab can be closed.";
+  }} else {{
+    document.getElementById("finishedhow").textContent =
+      "Decisions are saved locally. Export + run.sh --apply to apply them.";
+  }}
+}});
+</script>
 <script>
 const CORR = {corr_json};
 const KEY = "repair-review::{escape(str(WORK))}";
@@ -200,19 +215,37 @@ function paint() {{
       (exported ? " · exported" : " · not yet exported");
 }}
 let exported = false;
-function finish() {{
+const LIVE = location.protocol.startsWith("http");  // served by review_server.py
+
+function endPage() {{
+  document.getElementById("finalcount").textContent =
+    document.getElementById("count").textContent;
+  document.body.classList.add("closed");
+  window.close();  // best-effort; the 'Review finished' card is the fallback
+}}
+
+async function finish() {{
   const pending = document.querySelectorAll(".card:not(.approved):not(.rejected)").length;
   if (pending && !confirm(`${{pending}} proposals are still undecided — finish anyway? (Undecided stay proposed.)`)) return;
-  const a = Object.values(decisions).filter(v => v === "approved").length;
-  if (a && !exported && !confirm(`${{a}} approvals have NOT been exported — finish without exporting?`)) return;
-  window.close();
-  // browsers only let scripts close windows they opened; fall back to a
-  // visible end state so the flow still terminates
-  setTimeout(() => {{
-    document.getElementById("finalcount").textContent =
-      document.getElementById("count").textContent;
-    document.body.classList.add("closed");
-  }}, 150);
+  if (LIVE) {{
+    const decided = Object.keys(decisions).length;
+    try {{
+      if (decided) {{
+        const r = await fetch("/apply", {{method: "POST",
+          headers: {{"Content-Type": "application/json"}},
+          body: JSON.stringify({{decisions}})}});
+        const res = await r.json();
+        if (!res.ok) {{ alert("Apply failed — see the terminal running --review."); return; }}
+        localStorage.removeItem(KEY);
+      }}
+      await fetch("/finish", {{method: "POST"}});
+    }} catch (e) {{ alert("Review server unreachable: " + e); return; }}
+    endPage();
+  }} else {{
+    const a = Object.values(decisions).filter(v => v === "approved").length;
+    if (a && !exported && !confirm(`${{a}} approvals have NOT been exported — finish without exporting?`)) return;
+    endPage();
+  }}
 }}
 function decide(idx, verdict) {{
   decisions[idx] = decisions[idx] === verdict ? undefined : verdict;
