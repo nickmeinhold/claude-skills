@@ -36,22 +36,24 @@ gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files 
 PR_BASE=$(jq -r .baseRefName   /tmp/pr-$1-info.json)
 PR_HEAD_BRANCH=$(jq -r .headRefName /tmp/pr-$1-info.json)
 
-# Head-settle guard — anchor on LOCAL HEAD, never server-vs-server.
-# On a RE-review you almost always have the PR's head branch checked out locally:
-# you just pushed the fix, so the local branch tip IS the intended head. GitHub's
-# headRefOid can lag that push by seconds, and every server-side read (gh pr view,
-# the pull/$1/head refspec) lags *together* — so a naive `until [server == server]`
-# poll is a no-op that instantly "confirms" a stale head and grades one-commit-old
-# code (this is exactly how a Gate-1 re-review slipped). Anchor on the local SHA:
-# poll until GitHub's headRefOid converges to what we pushed, THEN snapshot PR_HEAD.
-LOCAL_HEAD=$(git rev-parse --verify -q "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null || true)
-if [ -n "$LOCAL_HEAD" ]; then
-  for _ in $(seq 1 30); do   # bounded ~60s; if it never converges we proceed with the server head
-    [ "$(gh pr view $1 --json headRefOid -q .headRefOid)" = "$LOCAL_HEAD" ] && break
-    sleep 2
-  done
+# Head ground truth — read the remote's ref DIRECTLY over the git protocol.
+# The failure class here is API propagation lag: gh pr view's headRefOid can lag a
+# push by seconds, and every server-side API read lags *together*, so any poll of
+# API-vs-API (or API-vs-local, when local is itself stale) can "settle" on a
+# one-commit-old head and grade stale code — a Gate-1 re-review slipped exactly
+# this way once, and round-1 adversaries showed the local-branch anchor has the
+# same hole (local stale at A + API stale at A = instant false settle while the
+# real head B propagates). `git ls-remote` doesn't poll and can't false-settle:
+# it reads the ACTUAL current ref from the server over the git protocol, which is
+# what the push wrote — the coupling to API propagation is removed, not guarded.
+PR_HEAD=$(git ls-remote origin "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null | awk '{print $1}')
+if [ -z "$PR_HEAD" ]; then
+  # Fork PR (head branch lives on another repo) or renamed/deleted head ref:
+  # ls-remote of our origin can't see it. Degrade to the API's headRefOid and SAY
+  # SO — on a re-review this value may lag a just-pushed fix by a few seconds.
+  PR_HEAD=$(gh pr view $1 --json headRefOid -q .headRefOid)
+  echo "WARN: head branch not on origin (fork PR?) — using API headRefOid $PR_HEAD; on a re-review this can lag a just-pushed fix. Verify the diff line count against your expectation before trusting verdicts." >&2
 fi
-PR_HEAD=$(gh pr view $1 --json headRefOid -q .headRefOid)   # read AFTER settling
 
 # Diff the exact PR head commit locally. `pull/$1/head` is the GitHub refspec for
 # the PR head (works for forks too); after fetching it the commit is addressable by
