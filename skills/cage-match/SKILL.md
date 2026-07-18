@@ -351,11 +351,41 @@ printf '\n\nDiff:\n' >> /tmp/wu-prompt-$1.txt
 cat /tmp/pr-$1-diff.txt >> /tmp/wu-prompt-$1.txt
 
 # Backgrounded alongside Kelvin + Carnot + Tesla. wait $WU_PID below.
+#
+# Quota fallback (added after Wu's 2026-07-18 debut bench): K3 sits behind a
+# 5-hour rolling Code-quota window that a single thinking review can exhaust.
+# Rather than a pre-probe (a probe is itself a quota poke, and can pass while
+# the real call still dies), attempt the review on $WU_MODEL first; if the
+# output carries a quota signature, retry ONCE on $WU_FALLBACK_MODEL (K2.7
+# Coding — same Moonshot lineage, far lighter quota weight) inside the same
+# backgrounded subshell, so a healthy K3 costs nothing extra and a fallback
+# stays parallel with the other reviewers. NOTE the 403 text lands on STDOUT
+# (observed live — it was in wu-review, not the err log), so grep both files.
+# Set WU_FALLBACK_MODEL= (empty) to disable the fallback entirely.
 export PATH="$HOME/.local/bin:$PATH"
 WU_MODEL="${WU_MODEL-kimi-code/k3}"   # dash not colon-dash: explicit WU_MODEL= means "no -m flag"
-kimi --quiet --plan ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log &
+WU_FALLBACK_MODEL="${WU_FALLBACK_MODEL-kimi-code/kimi-for-coding}"
+# Scratch workdir + empty skills dir: kimi is an AGENT CLI — invoked from a repo
+# root it bootstraps with the working dir's context, and with the default
+# merge_all_available_skills=true it can ingest every discovered SKILL.md as
+# system prompt ON EVERY CALL. That overhead (not the visible prompt) is what
+# exhausted a 5-hour quota window on 2026-07-18 with three "tiny" probes. The
+# review needs none of it — the diff is already in the prompt file.
+WU_SCRATCH=$(mktemp -d)
+(
+  kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log
+  if ! grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md \
+     && grep -qiE 'usage limit|access_terminated|quota' /tmp/wu-review-$1.md /tmp/wu-err-$1.log 2>/dev/null \
+     && [ -n "$WU_FALLBACK_MODEL" ] && [ "$WU_FALLBACK_MODEL" != "$WU_MODEL" ]; then
+    echo "primary $WU_MODEL quota-limited; retrying on $WU_FALLBACK_MODEL" >> /tmp/wu-err-$1.log
+    kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" -m "$WU_FALLBACK_MODEL" -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>>/tmp/wu-err-$1.log \
+      && printf '\n\n*(Reviewed on fallback model `%s` — `%s` was quota-limited this window.)*\n' "$WU_FALLBACK_MODEL" "$WU_MODEL" >> /tmp/wu-review-$1.md
+  fi
+) &
 WU_PID=$!
 ```
+
+`wu_ok()` needs no change for the fallback: the subshell's exit status is unreliable as a success signal (a skipped fallback branch exits 0 even after a failed review), but the gate's real teeth are the byte checks — size > 200 and the line-anchored `^**Verdict:**` — which only a completed review satisfies. If both models are quota-dead, the review file holds two error dumps and no anchored verdict line, and Wu degrades to unavailable exactly as before.
 
 **Step C — compose Maxwell's review in-process while Kelvin, Carnot, Tesla, and Wu resolve:**
 
