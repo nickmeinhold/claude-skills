@@ -282,9 +282,26 @@ CARNOT_PID=$!
 # unavailable. stderr goes to its own file (NOT 2>&1) so CLI error text can't
 # masquerade as retro content that Maxwell then synthesizes as a peer's view.
 export PATH="$HOME/.local/bin:$PATH"
-kimi --quiet --plan -m "${WU_MODEL-kimi-code/k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
+# Quota discipline, mirroring cage-match Step B3 (2026-07-18 lesson — three "tiny"
+# probes exhausted a 5-hour Code window): (1) run in a SCRATCH workdir with an
+# empty --skills-dir so the agent bootstrap doesn't ingest the repo + every
+# SKILL.md as context (kimi is an agent CLI; merge_all_available_skills=true
+# makes cwd expensive); (2) attempt $WU_MODEL, retry ONCE on $WU_FALLBACK_MODEL
+# if the output carries a quota signature (403 text lands on STDOUT — grep both).
+WU_MODEL="${WU_MODEL-kimi-code/k3}"
+WU_FALLBACK_MODEL="${WU_FALLBACK_MODEL-kimi-code/kimi-for-coding}"
+WU_SCRATCH=$(mktemp -d)
+WU_RETRO_PROMPT="You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
 
-$(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>$SD/wu-retro.err &
+$(cat $SD/session-summary.md)"
+(
+  kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" ${WU_MODEL:+-m "$WU_MODEL"} -p "$WU_RETRO_PROMPT" > $SD/wu-retro.md 2>$SD/wu-retro.err
+  if { [ ! -s $SD/wu-retro.md ] || grep -qiE 'usage limit|access_terminated|quota' $SD/wu-retro.md $SD/wu-retro.err 2>/dev/null; } \
+     && [ -n "$WU_FALLBACK_MODEL" ] && [ "$WU_FALLBACK_MODEL" != "$WU_MODEL" ]; then
+    echo "primary ${WU_MODEL:-default} quota-limited; retrying on $WU_FALLBACK_MODEL" >> $SD/wu-retro.err
+    kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" -m "$WU_FALLBACK_MODEL" -p "$WU_RETRO_PROMPT" > $SD/wu-retro.md 2>>$SD/wu-retro.err
+  fi
+) &
 WU_PID=$!
 
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
