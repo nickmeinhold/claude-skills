@@ -62,9 +62,13 @@ def main():
     turns = json.loads(target.read_text())
 
     counts = {}
-    for t in turns:
+    for i, t in enumerate(turns):
         txt = t.get("text", "")
         for c in approved:
+            # turn-scoped corrections (repair.py findings) only apply to the
+            # turn their evidence came from; unscoped ones apply globally
+            if c.get("turn") is not None and c["turn"] != i:
+                continue
             flags = re.I if "i" in c.get("flags", "") else 0
             txt, n = re.subn(c["pattern"], c["replacement"], txt, flags=flags)
             if n:

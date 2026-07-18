@@ -169,18 +169,23 @@ def main():
     if cpath.exists():
         data = json.loads(cpath.read_text())
         existing = data.get("corrections", data if isinstance(data, list) else [])
-    known = {(c.get("pattern"), c.get("replacement")) for c in existing}
+    known = {(c.get("pattern"), c.get("replacement"), c.get("turn"))
+             for c in existing}
     added = 0
     for f in findings:
+        # "turn" anchors the fix to the turn the EVIDENCE came from: the
+        # applier only touches that turn, so a short verbatim like "the list"
+        # can never rewrite innocent occurrences elsewhere in the transcript.
         entry = {"pattern": re.escape(f["verbatim"]),
                  "replacement": f["proposed"],
+                 "turn": f["i"],
                  "scope": f.get("scope", "correction"),
                  "status": "proposed",
                  "class": f.get("class", "?"),
                  "note": f.get("evidence", "")}
-        if (entry["pattern"], entry["replacement"]) not in known:
+        if (entry["pattern"], entry["replacement"], entry["turn"]) not in known:
             existing.append(entry)
-            known.add((entry["pattern"], entry["replacement"]))
+            known.add((entry["pattern"], entry["replacement"], entry["turn"]))
             added += 1
     cpath.write_text(json.dumps({"corrections": existing}, indent=1,
                                 ensure_ascii=False))

@@ -38,11 +38,18 @@ def fmt_ts(t):
     return f"{int(t//3600):02d}:{int(t%3600//60):02d}:{int(t%60):02d}"
 
 
-def find_context(pattern, flags):
-    """Locate the first turn matching the pattern; return (ts, speaker,
-    before, matched, after) with ~120 chars of context each side."""
+def find_context(pattern, flags, turn=None):
+    """Locate the matching turn — the ANCHORED turn when the correction is
+    turn-scoped, else the first match — and return (ts, speaker, before,
+    matched, after) with ~120 chars of context each side. A turn-scoped
+    correction whose anchored turn no longer matches returns None rather
+    than showing a misleading match from elsewhere."""
     f = re.I if "i" in (flags or "") else 0
-    for t in turns:
+    if turn is not None:
+        candidates = [turns[turn]] if 0 <= turn < len(turns) else []
+    else:
+        candidates = turns
+    for t in candidates:
         m = re.search(pattern, t.get("text", ""), flags=f)
         if m:
             txt = t["text"]
@@ -54,7 +61,7 @@ def find_context(pattern, flags):
 
 cards = []
 for idx, c in proposed:
-    ctx = find_context(c["pattern"], c.get("flags"))
+    ctx = find_context(c["pattern"], c.get("flags"), c.get("turn"))
     if ctx:
         ts, spk, before, matched, after = ctx
         # what the replacement renders to, with backrefs resolved
