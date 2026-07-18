@@ -273,7 +273,7 @@ CARNOT_PID=$!
 # unauthenticated kimi CLI ("LLM not set") or exhausted credits yields an
 # empty/tiny wu-retro.md, which the gate below simply counts as unavailable.
 export PATH="$HOME/.local/bin:$PATH"
-kimi --quiet --plan -m "${WU_MODEL:-k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
+kimi --quiet --plan -m "${WU_MODEL:-kimi-code/k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
 
 $(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>&1 &
 WU_PID=$!

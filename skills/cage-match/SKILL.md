@@ -309,7 +309,7 @@ TESLA_PID=$!
 
 **Step B3 — fire Wu's review as a fourth backgrounded bash (Moonshot Kimi K3):**
 
-Wu is the fifth family (Moonshot Kimi K3), invoked via the `kimi` CLI's headless print mode (`--quiet` = `--print --output-format text --final-message-only`, exits after one turn). The CLI lives in `~/.local/bin` (installed via `uv tool install kimi-cli`); auth is OAuth (`kimi login`, browser). Kimi is agentic like Codex/Grok, so `--plan` restricts it to read-only tools AND the prompt forbids tool use — belt and braces, same "review by diff" pattern as the others. Output is free text (no `--output-schema`), so the verdict parses from the text like Kelvin/Tesla. An unauthenticated CLI prints "LLM not set" and exits — `wu_ok()` downstream treats an empty/verdict-less file as "unavailable", so a missing login or exhausted credits degrades gracefully rather than blocking the gate. `WU_MODEL` defaults to `k3` (Moonshot's flagship since 2026-07-17); if the account's plan rejects that model id, set `WU_MODEL` to the account default or empty.
+Wu is the fifth family (Moonshot Kimi K3), invoked via the `kimi` CLI's headless print mode (`--quiet` = `--print --output-format text --final-message-only`, exits after one turn). The CLI lives in `~/.local/bin` (installed via `uv tool install kimi-cli`); auth is OAuth (`kimi login`, browser). Kimi is agentic like Codex/Grok, so `--plan` restricts it to read-only tools AND the prompt forbids tool use — belt and braces, same "review by diff" pattern as the others. Output is free text (no `--output-schema`), so the verdict parses from the text like Kelvin/Tesla. An unauthenticated CLI prints "LLM not set" and exits — `wu_ok()` downstream treats an empty/verdict-less file as "unavailable", so a missing login or exhausted credits degrades gracefully rather than blocking the gate. `WU_MODEL` defaults to `kimi-code/k3` (Moonshot's flagship since 2026-07-17, namespaced exactly as in `~/.kimi/config.toml`'s model registry — bare `k3` fails with "LLM not set"); if the account's plan rejects that model id, set `WU_MODEL` to the account default or empty.
 
 ```bash
 # Same file-based QUOTED-heredoc pattern: static persona text (literal backticks,
@@ -352,7 +352,7 @@ cat /tmp/pr-$1-diff.txt >> /tmp/wu-prompt-$1.txt
 
 # Backgrounded alongside Kelvin + Carnot + Tesla. wait $WU_PID below.
 export PATH="$HOME/.local/bin:$PATH"
-WU_MODEL="${WU_MODEL:-k3}"
+WU_MODEL="${WU_MODEL:-kimi-code/k3}"
 kimi --quiet --plan ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log &
 WU_PID=$!
 ```
