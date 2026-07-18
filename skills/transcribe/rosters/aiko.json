@@ -151,6 +151,11 @@
     {
       "name": "Nick",
       "profile": "Building aiko_chat on top of aiko_services; the main interlocutor asking integration questions on his own terms. Mentions ingesting docs into Claude to ask targeted questions."
+    },
+    {
+      "name": "DreamFinder",
+      "profile": "OPTIONAL cast member \u2014 Nick's voice AI agent, sometimes present in the room via TTS. Poetic, whimsical register (imagination/dream imagery), formal complete sentences, zero disfluency; also restates technical points cleanly. Include when the session had DreamFinder running; a TTS voice counts as a diarization speaker, so add 1 to num_speakers when present.",
+      "anchor": "You've wandered into the room where imagination"
     }
   ]
 }
