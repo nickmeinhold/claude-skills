@@ -1,7 +1,7 @@
 {
-  "_note": "Reusable roster profile for aiko / aiko_services conversations. Core cast is Nick + Andy. Guests (e.g. someone who drops into one call) are NOT listed here on purpose — the DETECTED speaker count catches an extra voice so you can name them per-recording without polluting the standing roster. GLOSSARY GROWTH LOOP: whenever a transcript surfaces a new garbled term (ASR mishearing of a name/jargon), append the CORRECT spelling here in the same session — the next call inherits every catch.",
+  "_note": "Reusable roster profile for aiko / aiko_services conversations. Core cast is Nick + Andy. Guests (e.g. someone who drops into one call) are NOT listed here on purpose \u2014 the DETECTED speaker count catches an extra voice so you can name them per-recording without polluting the standing roster. GLOSSARY GROWTH LOOP: whenever a transcript surfaces a new garbled term (ASR mishearing of a name/jargon), append the CORRECT spelling here in the same session \u2014 the next call inherits every catch.",
   "title": "aiko_services / aiko_chat working call",
-  "context": "A technical working conversation in the aiko / aiko_services world: building aiko_chat on Andy Gelme's aiko_services framework — the aiko CLI, REPL, hyperspace, the actor model, storage/process-manager bootstrap, ChatServer, federation. Andy is the framework author and dominant teaching voice; Nick drives integration questions.",
+  "context": "A technical working conversation in the aiko / aiko_services world: building aiko_chat on Andy Gelme's aiko_services framework \u2014 the aiko CLI, REPL, hyperspace, the actor model, storage/process-manager bootstrap, ChatServer, federation. Andy is the framework author and dominant teaching voice; Nick drives integration questions.",
   "glossary": [
     "aiko",
     {
@@ -102,12 +102,20 @@
       "url": "https://letsencrypt.org"
     },
     "sovereign identity",
-    "aiko engine"
+    "aiko engine",
+    {
+      "term": "seL4",
+      "url": "https://sel4.systems"
+    },
+    "Lean",
+    "category theory",
+    "correct by construction",
+    "formal verification"
   ],
   "speakers": [
     {
       "name": "Andy",
-      "profile": "Andy Gelme — old-school distributed-systems hacker, author of aiko_services. The dominant, teaching voice: explains the aiko CLI, REPL, hyperspace, actors, storage/process-manager bootstrap, ChatServer, federation. Frames things in priority order around what the others need.",
+      "profile": "Andy Gelme \u2014 old-school distributed-systems hacker, author of aiko_services. The dominant, teaching voice: explains the aiko CLI, REPL, hyperspace, actors, storage/process-manager bootstrap, ChatServer, federation. Frames things in priority order around what the others need.",
       "anchor": "rather than getting a long, waffley thing from me. You're basically getting the specific thing via Claude."
     },
     {
