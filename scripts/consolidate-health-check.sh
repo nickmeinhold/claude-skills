@@ -38,6 +38,10 @@
 #   3. memory-health — phantom-write rate (memory files the scorecard claimed but
 #      that graded null = "missing on disk") over the last --window readtime
 #      files. A real defect signal, not a proxy. Breach: phantom% > --phantom-pct.
+#   4. memory-index budget — per-project MEMORY.md byte size vs --index-budget.
+#      The loader truncates ~24.4KB (silent recall loss). Path derived from cwd
+#      (readtime-check.sh slug formula); SKIP when absent (fail-safe outside the
+#      project root). INFO at >90% of budget, breach over budget.
 #
 # CONFIG (flag overrides env overrides default):
 #   --budget BYTES          HEALTH_BUDGET            (default 36864)
@@ -46,6 +50,8 @@
 #   --window N              HEALTH_WINDOW            (default 10)
 #   --phantom-pct PCT       HEALTH_PHANTOM_PCT       (default 5)
 #   --corpus-glob GLOB      HEALTH_CORPUS_GLOB       (default ~/.claude/consolidation/*/readtime-score.json)
+#   --index-md PATH         HEALTH_INDEX_MD          (default ~/.claude/projects/<cwd-slug>/memory/MEMORY.md)
+#   --index-budget BYTES    HEALTH_INDEX_BUDGET      (default 24576)
 #   --verbose               also print GREEN statuses (default: breach-only)
 #   --json                  emit a machine-readable JSON object instead of markdown
 #
@@ -73,6 +79,13 @@ TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
 WINDOW="${HEALTH_WINDOW:-10}"
 PHANTOM_PCT="${HEALTH_PHANTOM_PCT:-5}"
 CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.json}"
+# Check 4 — per-project memory INDEX (MEMORY.md) budget. MEMORY.md is PER-PROJECT
+# (unlike the global CLAUDE.md directive layer): derive its path from cwd like
+# readtime-check.sh. Loader truncates ~24.4KB (silent recall loss). --index-md
+# overrides; derived default fails SAFE (SKIP) when cwd isn't repo root.
+_proj_slug="$(echo "${CLAUDE_PROJECT_DIR:-$PWD}" | sed 's|/|-|g')"
+INDEX_MD="${HEALTH_INDEX_MD:-$HOME/.claude/projects/$_proj_slug/memory/MEMORY.md}"
+INDEX_BUDGET="${HEALTH_INDEX_BUDGET:-24576}"
 VERBOSE=0
 JSON=0
 
@@ -84,15 +97,18 @@ while [ "$#" -gt 0 ]; do
     --window)            WINDOW="$2"; shift 2 ;;
     --phantom-pct)       PHANTOM_PCT="$2"; shift 2 ;;
     --corpus-glob)       CORPUS_GLOB="$2"; shift 2 ;;
+    --index-md)          INDEX_MD="$2"; shift 2 ;;
+    --index-budget)      INDEX_BUDGET="$2"; shift 2 ;;
     --verbose)           VERBOSE=1; shift ;;
     --json)              JSON=1; shift ;;
-    -h|--help)           sed -n '2,55p' "$0"; exit 0 ;;
-    *) echo "usage: consolidate-health-check.sh [--budget B] [--claude-md PATH] [--timing PATH] [--window N] [--phantom-pct P] [--corpus-glob G] [--verbose] [--json]" >&2; exit 2 ;;
+    -h|--help)           sed -n '2,61p' "$0"; exit 0 ;;
+    *) echo "usage: consolidate-health-check.sh [--budget B] [--claude-md PATH] [--timing PATH] [--window N] [--phantom-pct P] [--corpus-glob G] [--index-md PATH] [--index-budget B] [--verbose] [--json]" >&2; exit 2 ;;
   esac
 done
 
 BUDGET="$BUDGET" CLAUDE_MD="$CLAUDE_MD" TIMING="$TIMING" \
 WINDOW="$WINDOW" PHANTOM_PCT="$PHANTOM_PCT" CORPUS_GLOB="$CORPUS_GLOB" \
+INDEX_MD="$INDEX_MD" INDEX_BUDGET="$INDEX_BUDGET" \
 VERBOSE="$VERBOSE" JSON="$JSON" python3 <<'PY'
 import os, re, glob, json, statistics
 
@@ -102,6 +118,8 @@ timing_path     = os.environ["TIMING"]
 window          = int(os.environ["WINDOW"])
 phantom_max     = float(os.environ["PHANTOM_PCT"])
 corpus_glob     = os.environ["CORPUS_GLOB"]
+index_md        = os.environ["INDEX_MD"]
+index_budget    = int(os.environ["INDEX_BUDGET"])
 verbose         = os.environ["VERBOSE"] == "1"
 as_json         = os.environ["JSON"] == "1"
 
@@ -224,6 +242,32 @@ else:
               f"Action: check memory-writer's on-disk verify step (step 4 `ls` gate) "
               f"and the scorecard's memories_written list against the memory dir.")
     add("memory-health", "BREACH" if breach else "GREEN", head, detail if breach else "")
+
+# --- Check 4: memory-index budget (per-project MEMORY.md) ----------------------
+# The auto-memory loader TRUNCATES MEMORY.md at ~24.4KB — an over-budget index
+# silently loses whatever entries fall past the cut (recall loss with no error).
+# This check surfaces the bloat at consolidation time instead. MEMORY.md is
+# PER-PROJECT, so the default path is derived from cwd (readtime-check.sh's slug
+# formula); when cwd isn't the project root the derived path simply won't exist
+# and the check SKIPs — fail-safe, never a false breach.
+if not os.path.isfile(index_md):
+    add("memory-index-budget", "SKIP", f"MEMORY.md not found at {index_md}")
+else:
+    idx_bytes = os.path.getsize(index_md)
+    pct = 100.0 * idx_bytes / index_budget
+    head = f"memory index {idx_bytes} / {index_budget} bytes ({pct:.0f}% of budget)"
+    detail = (f"The per-project MEMORY.md index is at or over the loader's ~24.4KB "
+              f"truncation threshold — entries past the cut are silently unloaded "
+              f"(recall loss). Action: shorten index entries to one line under "
+              f"~200 chars; move detail into topic files; merge/retire stale entries.")
+    if idx_bytes > index_budget:
+        add("memory-index-budget", "BREACH", head, detail)
+    elif idx_bytes > 0.9 * index_budget:
+        add("memory-index-budget", "INFO",
+            head + " — approaching the loader truncation threshold",
+            detail)
+    else:
+        add("memory-index-budget", "GREEN", head)
 
 # --- emit ----------------------------------------------------------------------
 breaches = [c for c in checks if c["status"] == "BREACH"]
