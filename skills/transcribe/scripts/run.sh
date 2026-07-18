@@ -32,6 +32,7 @@ if [ "${1:-}" = "--reattribute" ]; then
   "$PARAKEET_PY" "$DIR/attribute.py"
   echo "[re-attribute] re-applying approved corrections (corrections.json)"
   "$PARAKEET_PY" "$DIR/apply_corrections.py"
+  "$PARAKEET_PY" "$DIR/make_review.py"
   echo "[re-attribute] building outputs"
   "$PARAKEET_PY" "$DIR/build_outputs.py"
   echo "Done -> $WORK/transcript.html"
@@ -51,8 +52,10 @@ if [ "${1:-}" = "--repair" ]; then
   echo "[repair] LLM repair pass (propose-only)"
   "$PARAKEET_PY" "$DIR/repair.py"
   "$PARAKEET_PY" "$DIR/apply_corrections.py"
+  "$PARAKEET_PY" "$DIR/make_review.py"
   "$PARAKEET_PY" "$DIR/build_outputs.py"
-  echo "Done -> $WORK/transcript.html (review $WORK/repair_report.md)"
+  echo "Done -> $WORK/transcript.html (review $WORK/repair_review.html)"
+  command -v open >/dev/null && open "$WORK/repair_review.html" || true
   exit 0
 fi
 
@@ -64,6 +67,7 @@ if [ "${1:-}" = "--apply" ]; then
   export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
   "$PARAKEET_PY" "$DIR/apply_corrections.py"
+  "$PARAKEET_PY" "$DIR/make_review.py"   # refresh: applied proposals leave the page
   "$PARAKEET_PY" "$DIR/build_outputs.py"
   echo "Done -> $WORK/transcript.html"
   exit 0
@@ -143,6 +147,7 @@ else
   echo "[6/7] repair pass skipped"
 fi
 "$PARAKEET_PY" "$DIR/apply_corrections.py"
+"$PARAKEET_PY" "$DIR/make_review.py"
 
 echo "[7/7] building outputs"
 "$PARAKEET_PY" "$DIR/build_outputs.py"

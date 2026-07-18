@@ -74,11 +74,19 @@ catch (7.3 session, 2026-07-18):
   dangling conjunctions) that only ever affect `transcript_edited.html`
 
 **Nothing auto-applies.** Findings land in `corrections.json` as
-`status: "proposed"` with a readable `repair_report.md`. The review loop:
+`status: "proposed"` with a readable `repair_report.md` — and, the primary
+review surface, **`repair_review.html`**: every proposal rendered in its
+turn's context as a diff (struck-out red original, green replacement) with
+per-finding **Apply / Reject** buttons, bulk buttons, and a live tally.
+Decisions persist in localStorage as you click; **Export** downloads the
+decided `corrections.json` — move it over the work-dir copy and run `--apply`.
+The review page is regenerated at every stage that can change the proposal
+set (full run, `--repair`, `--apply`, `--reattribute`), so it always shows
+exactly the still-undecided proposals. The review loop:
 
 ```bash
-# 1. read repair_report.md; flip good proposals to "status": "approved"
-# 2. apply + rebuild (no LLM):
+# 1. open repair_review.html; click Apply/Reject per finding; Export
+# 2. move the downloaded corrections.json over the work-dir copy, then:
 bash ~/.claude/skills/transcribe/scripts/run.sh --apply <workdir> <speakers.json>
 # re-run the repair hunt later (e.g. after growing the glossary):
 bash ~/.claude/skills/transcribe/scripts/run.sh --repair <workdir> <speakers.json>
