@@ -78,8 +78,10 @@ fi
 if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
   git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
 else
-  # Fallback (head commit still not fetchable — rare): the head was already settled
-  # above whenever a local branch existed, so PR_HEAD is current; best-effort diff.
+  # Fallback (head commit still not fetchable — rare): degrade to GitHub's
+  # server-side diff and SAY SO — this path shares the API's propagation timing,
+  # so on a re-review it can serve a diff that lags a just-pushed fix.
+  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix. Check the diff line count below against your expectation." >&2
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
