@@ -83,7 +83,7 @@ CORPUS_GLOB="${HEALTH_CORPUS_GLOB:-$HOME/.claude/consolidation/*/readtime-score.
 # (unlike the global CLAUDE.md directive layer): derive its path from cwd like
 # readtime-check.sh. Loader truncates ~24.4KB (silent recall loss). --index-md
 # overrides; derived default fails SAFE (SKIP) when cwd isn't repo root.
-_proj_slug="$(echo "${CLAUDE_PROJECT_DIR:-$PWD}" | sed 's|/|-|g')"
+_proj_slug="$(printf '%s\n' "${CLAUDE_PROJECT_DIR:-$PWD}" | sed 's|/|-|g')"
 INDEX_MD="${HEALTH_INDEX_MD:-$HOME/.claude/projects/$_proj_slug/memory/MEMORY.md}"
 INDEX_BUDGET="${HEALTH_INDEX_BUDGET:-24576}"
 VERBOSE=0
@@ -250,7 +250,12 @@ else:
 # PER-PROJECT, so the default path is derived from cwd (readtime-check.sh's slug
 # formula); when cwd isn't the project root the derived path simply won't exist
 # and the check SKIPs — fail-safe, never a false breach.
-if not os.path.isfile(index_md):
+if index_budget <= 0:
+    # A zero/negative budget is a misconfiguration, not a health signal — and it
+    # would divide-by-zero below. Fail safe (a reporter must never crash out and
+    # take Checks 1-3's emit with it): SKIP with the reason.
+    add("memory-index-budget", "SKIP", f"invalid --index-budget {index_budget} (must be > 0)")
+elif not os.path.isfile(index_md):
     add("memory-index-budget", "SKIP", f"MEMORY.md not found at {index_md}")
 else:
     idx_bytes = os.path.getsize(index_md)
