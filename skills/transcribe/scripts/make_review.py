@@ -105,6 +105,12 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  .card.approved{{border-color:#059669;background:#f0fdf6}}
  .card.rejected{{border-color:#dc2626;background:#fef2f2;opacity:.6}}
  .card.approved .apply,.card.rejected .reject{{outline:2px solid currentColor}}
+ /* decided cards show the OUTCOME, not the diff: Apply -> clean corrected
+    text; Reject -> original text stays, proposal disappears */
+ .card.approved del{{display:none}}
+ .card.approved ins{{background:none;font-weight:inherit;color:inherit;padding:0}}
+ .card.rejected ins{{display:none}}
+ .card.rejected del{{background:none;color:inherit;text-decoration:none;padding:0}}
  .head{{display:flex;gap:.8rem;align-items:baseline;font-size:.82rem;margin-bottom:.45rem}}
  .ts{{color:#888;font-variant-numeric:tabular-nums}}
  .cls{{background:#eef2ff;color:#4338ca;border-radius:4px;padding:.05rem .5rem;font-weight:600}}
