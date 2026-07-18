@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- KelvinBitBrawler — the ice crystal at absolute zero: six-fold, exact, merciless -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#081826"/>
+      <stop offset="60%" stop-color="#050e18"/>
+      <stop offset="100%" stop-color="#03070d"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="484" fill="none" stroke="#7FD4FF55" stroke-width="10"/>
+  <g filter="url(#glow)">
+    <!-- six arms at 60°, each with one clean chevron barb pair near the tip -->
+    <g stroke="#9FE2FF" stroke-width="28" stroke-linecap="round" fill="none">
+      <g id="arm">
+        <path d="M 512 512 L 512 240"/>
+        <path d="M 512 300 L 448 364 M 512 300 L 576 364"/>
+      </g>
+      <use href="#arm" transform="rotate(60 512 512)"/>
+      <use href="#arm" transform="rotate(120 512 512)"/>
+      <use href="#arm" transform="rotate(180 512 512)"/>
+      <use href="#arm" transform="rotate(240 512 512)"/>
+      <use href="#arm" transform="rotate(300 512 512)"/>
+    </g>
+    <!-- absolute zero: the still point at the heart -->
+    <circle cx="512" cy="512" r="34" fill="#D9F4FF"/>
+  </g>
+</svg>

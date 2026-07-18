@@ -19,7 +19,7 @@ The five ascending termini, in order:
 
 ## The cast (round-robin, cross-family)
 
-Run three voices, ideally **different model families** (the `/cage-match` cast, polarity flipped from kill→ignite): **Maxwell** (Claude), **Kelvin** (Gemini), **Carnot** (GPT). Each takes a turn as the **ember-dropper**; the other two ascend it. Three ascents climbing at once. Cross-family is the point — the same vision lit from three inductive biases climbs higher than any one can push, because each catches a different facet on fire. This produces **harmonics**, not the disagreement a cage-match mines.
+Run three voices, ideally **different model families** (drawn from the `/cage-match` cast, polarity flipped from kill→ignite): **Maxwell** (Claude), **Kelvin** (Gemini), **Carnot** (GPT), with **Tesla** (Grok) and **Wu** (Kimi K3) as substitutes when a family is down — any three of the five. Each takes a turn as the **ember-dropper**; the other two ascend it. Three ascents climbing at once. Cross-family is the point — the same vision lit from three inductive biases climbs higher than any one can push, because each catches a different facet on fire. This produces **harmonics**, not the disagreement a cage-match mines.
 
 > If real cross-family agents are unavailable, you MAY run the voices in-context as personae to validate the *mechanic* — but say so, and treat the temperature score as provisional. Persona modulates noise, not capability (`concept_persona_modulates_noise_not_capability`); in-context voices prove the five termini work, not the cross-family harmonics.
 

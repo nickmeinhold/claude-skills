@@ -123,15 +123,19 @@ Agent({
   model: "haiku",
   mode: "bypassPermissions",
   prompt: `
-Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract only Nick's messages using:
-  jq -r 'select(.type=="user")
-    | select(.message.content
-        | type == "string" or any(.[]?; .type=="text"))
-    | "\(.timestamp) | \(.message.content
-        | if type=="string" then .
-          else (.[] | select(.type=="text") | .text)
-          end)"' "$JSONL_PATH"
-The top-level `.type=="user"` identifies user-direction records (NOT `.role == "user"` — that field doesn't exist at the top level in Claude Code JSONL). `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks — the filter handles both and EXCLUDES records where content is only `tool_result` blocks (those are tool responses, not Nick's input). Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
+Read the session transcript at $JSONL_PATH. Each line is a JSON object — parse it with jq. Extract Nick's messages — BOTH normal turns AND mid-work interrupts — using:
+  jq -r '
+    (select(.type=="user")
+      | select(.message.content
+          | type == "string" or any(.[]?; .type=="text"))
+      | "\(.timestamp) | \(.message.content
+          | if type=="string" then .
+            else (.[] | select(.type=="text") | .text)
+            end)"),
+    (select(.type=="queue-operation" and .operation=="enqueue")
+      | "\(.timestamp) | [interrupt] \(.content)")
+  ' "$JSONL_PATH"
+The top-level `.type=="user"` identifies normal user-direction records (NOT `.role == "user"` — that field doesn't exist at the top level in Claude Code JSONL). `.message.content` is either a plain string (Nick typed raw text) or an array of typed blocks — the filter handles both and EXCLUDES records where content is only `tool_result` blocks (those are tool responses, not Nick's input). **Mid-work interrupts (Nick redirecting while the agent is working) are NOT stored as `.type=="user"` records at all** — they land as `queue-operation` records (`operation` enqueue/remove pair, text as a plain string in `.content`; verified live 2026-07-18). The second clause surfaces them, filtered to `enqueue` only so the enqueue/remove pair doesn't double-count, tagged `[interrupt]`. Interrupts are often the HIGHEST-signal steering in the session (Nick interrupting = strong redirect) — weight `[interrupt]`-tagged lines accordingly. Do NOT substring-grep the raw lines — that produces false positives from nested tool_use / tool_result content blocks.
 
 Scan ONLY Nick's messages for marker language (these are the categories — adjust emoji per category):
 
@@ -165,12 +169,15 @@ Haiku-extracted marker candidates are CANDIDATES, not ground truth — Haiku wil
 # composing the present-to-Nick dotpoints):
 while IFS= read -r line; do
   quote=$(echo "$line" | grep -o '"[^"]*"' | head -1)
-  if [ -n "$quote" ] && jq -r 'select(.type=="user") | .message.content | if type=="string" then . else (.[]? | select(.type=="text") | .text) end' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
+  if [ -n "$quote" ] && jq -r '(select(.type=="user") | .message.content | if type=="string" then . else (.[]? | select(.type=="text") | .text) end), (select(.type=="queue-operation" and .operation=="enqueue") | .content)' "$JSONL_PATH" 2>/dev/null | grep -qF "${quote//\"/}"; then
     echo "$line"  # keep
   else
     echo "DROPPED (no JSONL match): $line" >&2
   fi
-done < "$SD/raw/marker-candidates.md" > "$SD/raw/marker-candidates-verified.md"
+done < "$SD/raw/marker-candidates.md" > "$SD/raw/marker-candidates-verified.md.tmp" \
+  && mv "$SD/raw/marker-candidates-verified.md.tmp" "$SD/raw/marker-candidates-verified.md"
+# temp+mv so an interrupt mid-loop can't leave a partial verified file that a
+# later phase would silently trust (same atomic-write rule as the validation gate).
 ```
 
 Maxwell then composes the dotpoints from `$SD/raw/marker-candidates-verified.md`. If `$JSONL_PATH` is unavailable (session hasn't flushed), skip validation and present raw candidates with an explicit "(unverified — JSONL not available)" prefix on each dotpoint.
@@ -250,11 +257,11 @@ If Nick tagged zero markers "real" (or skipped the conversation), still create `
 
 You may also amend `$SD/session-summary.md` with anything the conversation surfaced that belongs in the agents' primary context — the amendment fence (Burst 1 dispatch) still applies.
 
-## Phase 0b: Three-pole retrospective (Maxwell + Kelvin + Carnot)
+## Phase 0b: Multi-pole retrospective (Maxwell + Kelvin + Carnot + Wu)
 
-A single-perspective retrospective misses what other perspectives catch. Same shape as cage-match: different model families with different inductive biases find different things. So before the agent phases, run all three reviewers cold-reading `session-summary.md` in parallel.
+A single-perspective retrospective misses what other perspectives catch. Same shape as cage-match: different model families with different inductive biases find different things. So before the agent phases, run all reviewers cold-reading `session-summary.md` in parallel.
 
-### Fire all three concurrently
+### Fire all of them concurrently
 
 ```bash
 # Use the absolute session dir from setup (the `latest` symlink no
@@ -269,18 +276,31 @@ KELVIN_PID=$!
 codex exec "You are CarnotCodeCarver — perfectionist measuring against theoretical maximum, doing a SESSION retrospective. Read the session summary in <stdin>. Same three questions as above (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: did Maxwell mis-calibrate confidence claims? Defer judgments to Nick that should have been Maxwell's call? Treat any hypothesis as confirmed too quickly? Cite section names. End with efficiency assessment 0.0-1.0 vs Carnot ideal of session productivity (1.0 = no entropy lost to misframing)." < $SD/session-summary.md > $SD/carnot-retro.md 2>&1 &
 CARNOT_PID=$!
 
+# Wu (Kimi K3) — assumed-invariant-hunting vantage. Degrades gracefully: an
+# unauthenticated kimi CLI ("LLM not set"), quota exhaustion (403), or a wrong
+# model id yields an empty/tiny wu-retro.md, which the gate below counts as
+# unavailable. stderr goes to its own file (NOT 2>&1) so CLI error text can't
+# masquerade as retro content that Maxwell then synthesizes as a peer's view.
+export PATH="$HOME/.local/bin:$PATH"
+kimi --quiet --plan -m "${WU_MODEL-kimi-code/k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
+
+$(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>$SD/wu-retro.err &
+WU_PID=$!
+
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
 # Compose your own surprises/mistakes/crux directly to $SD/maxwell-retro.md.
 
-# Wait for both
-until ! ps -p $KELVIN_PID $CARNOT_PID > /dev/null 2>&1; do sleep 5; done
+# Wait for all — plain `wait` (event-driven, same shell), not a ps-poll (Kelvin's catch).
+# Valid ONLY because fire-and-wait run in this one bash block; PIDs don't survive
+# across separate Bash tool calls (feedback_cross_bash_wait_invalid).
+wait $KELVIN_PID $CARNOT_PID $WU_PID
 ```
 
 ### The strict-gate analogue from cage-match
 
-Same gate as three-way cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot)** must succeed. If both Kelvin AND Carnot fail (Gemini quota exhausted + Codex unavailable), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
+Same gate as cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot, Wu)** must succeed. "Succeed" is a byte-level predicate, not a PID-exit one: the retro file must be non-empty, >200 bytes, and contain actual retrospective content (for Wu, check `$SD/wu-retro.md` is substantive and `$SD/wu-retro.err` doesn't show a quota/auth error — a PID finishing is not a review existing). If Kelvin AND Carnot AND Wu all fail (Gemini quota exhausted + Codex unavailable + Kimi unauthenticated/out-of-quota), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
 
-If only one of (Kelvin, Carnot) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
+If only one of (Kelvin, Carnot, Wu) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
 
 ### Synthesise — Nick is the gating function
 

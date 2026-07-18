@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Flux Shadow — field lines thread the loop; the shadow disc swallows them mid-flight.
+       Flux is what passes through; shadow is what it passes into. -->
+  <defs>
+    <radialGradient id="bg" cx="46%" cy="40%" r="82%">
+      <stop offset="0%" stop-color="#0a1230"/>
+      <stop offset="60%" stop-color="#060a1c"/>
+      <stop offset="100%" stop-color="#03050e"/>
+    </radialGradient>
+    <radialGradient id="disc" cx="38%" cy="34%" r="90%">
+      <stop offset="0%" stop-color="#10142a"/>
+      <stop offset="100%" stop-color="#04060f"/>
+    </radialGradient>
+    <linearGradient id="fade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5FD3FF"/>
+      <stop offset="72%" stop-color="#5FD3FF"/>
+      <stop offset="100%" stop-color="#5FD3FF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="484" fill="none" stroke="#5FD3FF44" stroke-width="10"/>
+  <g filter="url(#glow)">
+    <!-- the loop the flux threads: a tilted ellipse -->
+    <ellipse cx="430" cy="512" rx="150" ry="290" fill="none"
+             stroke="#8FE2FF" stroke-width="26" transform="rotate(-18 430 512)"/>
+    <!-- three field lines entering from the left, threading the loop,
+         dying into the shadow on the right -->
+    <g stroke="url(#fade)" stroke-width="24" stroke-linecap="round" fill="none">
+      <path d="M 120 380 C 300 350, 520 360, 800 400"/>
+      <path d="M 110 512 C 300 500, 540 505, 820 520"/>
+      <path d="M 120 644 C 300 660, 520 655, 800 630"/>
+    </g>
+    <!-- arrowheads mid-flight, before the shadow takes them -->
+    <path d="M 360 366 L 300 336 M 360 366 L 306 408" fill="none" stroke="#BFEFFF" stroke-width="20" stroke-linecap="round"/>
+    <path d="M 370 506 L 312 474 M 370 506 L 314 546" fill="none" stroke="#BFEFFF" stroke-width="20" stroke-linecap="round"/>
+    <path d="M 360 652 L 302 628 M 360 652 L 310 696" fill="none" stroke="#BFEFFF" stroke-width="20" stroke-linecap="round"/>
+  </g>
+  <!-- the shadow: a matte disc with the faintest lit rim, eating the field lines -->
+  <circle cx="712" cy="486" r="196" fill="url(#disc)"/>
+  <path d="M 570 350 A 196 196 0 0 0 560 590" fill="none" stroke="#5FD3FF55" stroke-width="8"/>
+</svg>

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- MaxwellMergeSlam — the electromagnetic wave: E and B fields locked orthogonal, always moving -->
+  <defs>
+    <radialGradient id="bg" cx="42%" cy="38%" r="80%">
+      <stop offset="0%" stop-color="#2a1208"/>
+      <stop offset="60%" stop-color="#140a06"/>
+      <stop offset="100%" stop-color="#0a0504"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="484" fill="none" stroke="#E2582266" stroke-width="10"/>
+  <g filter="url(#glow)">
+    <!-- E field: bold horizontal-axis sine -->
+    <path d="M 160 512 C 240 300, 320 300, 400 512 S 560 724, 640 512 S 800 300, 880 512"
+          fill="none" stroke="#FF6A2B" stroke-width="34" stroke-linecap="round"/>
+    <!-- B field: the orthogonal partner, phase-locked, cooler tone -->
+    <path d="M 160 512 C 240 640, 320 640, 400 512 S 560 384, 640 512 S 800 640, 880 512"
+          fill="none" stroke="#FFC46B" stroke-width="20" stroke-linecap="round" opacity="0.85"/>
+    <!-- propagation arrow: it never stops moving -->
+    <path d="M 700 200 L 880 200 M 880 200 L 820 156 M 880 200 L 820 244"
+          fill="none" stroke="#FF6A2B" stroke-width="22" stroke-linecap="round"/>
+  </g>
+</svg>
