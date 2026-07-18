@@ -10,6 +10,10 @@ FILLERS = {
     "um", "umm", "ummm", "uh", "uhh", "uhhh", "er", "err", "erm", "hmm", "hmmm",
     "mm", "mmm", "mhm", "mmhm", "uh-huh", "mm-hmm", "ah", "ahh", "eh",
 }
+# colliding coordinators ("and but", "but and"): a self-repair collision where
+# only the SECOND conjunction is the intended one. Immediate same-word repeats
+# ("and and") are already collapsed by the repeat rule below.
+CONJUNCTIONS = {"and", "but"}
 _word_re = re.compile(r"[A-Za-z']+")
 
 
@@ -27,6 +31,11 @@ def clean(text):
         if core is not None and core == prev:
             if len(tok) > len(out[-1]):
                 out[-1] = tok
+            continue
+        if (core in CONJUNCTIONS and prev in CONJUNCTIONS and out
+                and re.fullmatch(r"[A-Za-z']+,?", out[-1])):
+            out[-1] = tok  # "and but" -> "but": keep the self-repair
+            prev = core
             continue
         out.append(tok)
         prev = core

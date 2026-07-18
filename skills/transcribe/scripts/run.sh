@@ -2,6 +2,8 @@
 # transcribe — orchestrate local speaker-attributed transcription.
 # Usage: run.sh <audio-or-video-file> [speakers.json]
 #        run.sh --reattribute <workdir> <speakers.json>   # re-run name attribution only
+#        run.sh --repair <workdir> <speakers.json>        # re-run repair pass only
+#        run.sh --apply <workdir> [speakers.json]         # apply approved corrections + rebuild
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,10 +30,42 @@ if [ "${1:-}" = "--reattribute" ]; then
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$("$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG")}"
   echo "[re-attribute] LLM identity attribution on $WORK"
   "$PARAKEET_PY" "$DIR/attribute.py"
+  echo "[re-attribute] re-applying approved corrections (corrections.json)"
+  "$PARAKEET_PY" "$DIR/apply_corrections.py"
   echo "[re-attribute] building outputs"
   "$PARAKEET_PY" "$DIR/build_outputs.py"
   echo "Done -> $WORK/transcript.html"
   command -v open >/dev/null && open "$WORK/transcript.html" || true
+  exit 0
+fi
+
+# --repair: (re-)run the propose-only repair pass on an EXISTING work dir, then
+# apply whatever is approved and rebuild. Proposals land in corrections.json as
+# status=proposed with a human-readable repair_report.md.
+if [ "${1:-}" = "--repair" ]; then
+  WORK="${2:?usage: run.sh --repair <workdir> <speakers.json>}"
+  CONFIG="${3:?usage: run.sh --repair <workdir> <speakers.json>}"
+  [ -f "$WORK/turns_named.json" ] || [ -f "$WORK/turns.json" ] || { echo "no turns in $WORK" >&2; exit 1; }
+  export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
+  export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$("$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG")}"
+  echo "[repair] LLM repair pass (propose-only)"
+  "$PARAKEET_PY" "$DIR/repair.py"
+  "$PARAKEET_PY" "$DIR/apply_corrections.py"
+  "$PARAKEET_PY" "$DIR/build_outputs.py"
+  echo "Done -> $WORK/transcript.html (review $WORK/repair_report.md)"
+  exit 0
+fi
+
+# --apply: apply approved corrections.json entries + rebuild (no LLM calls).
+# Use after reviewing repair_report.md and flipping proposals to approved.
+if [ "${1:-}" = "--apply" ]; then
+  WORK="${2:?usage: run.sh --apply <workdir> [speakers.json]}"
+  CONFIG="${3:-}"
+  export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
+  export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
+  "$PARAKEET_PY" "$DIR/apply_corrections.py"
+  "$PARAKEET_PY" "$DIR/build_outputs.py"
+  echo "Done -> $WORK/transcript.html"
   exit 0
 fi
 
@@ -92,13 +126,25 @@ echo "[4/6] word-level fusion + cleanup"
 "$PARAKEET_PY" "$DIR/wordmerge.py"
 
 if [ -n "$CONFIG" ]; then
-  echo "[5/6] LLM identity attribution (headless Claude)"
+  echo "[5/7] LLM identity attribution (headless Claude)"
   "$PARAKEET_PY" "$DIR/attribute.py"
 else
-  echo "[5/6] no speakers.json -> anonymous speakers (skipping attribution)"
+  echo "[5/7] no speakers.json -> anonymous speakers (skipping attribution)"
 fi
 
-echo "[6/6] building outputs"
+# Repair pass: propose-only hunt for residual garbles + ordinary-word slips
+# (semantic absurdity, polarity flips, grammar artifacts) + edit suggestions.
+# Proposals go to corrections.json/repair_report.md for human review — nothing
+# is auto-applied. Skip with TRANSCRIBE_SKIP_REPAIR=1.
+if [ -n "$CONFIG" ] && [ "${TRANSCRIBE_SKIP_REPAIR:-}" != "1" ]; then
+  echo "[6/7] LLM repair pass (propose-only)"
+  "$PARAKEET_PY" "$DIR/repair.py" || echo "  repair pass failed (non-fatal); continuing"
+else
+  echo "[6/7] repair pass skipped"
+fi
+"$PARAKEET_PY" "$DIR/apply_corrections.py"
+
+echo "[7/7] building outputs"
 "$PARAKEET_PY" "$DIR/build_outputs.py"
 
 echo "Done -> $WORK/transcript.html"
