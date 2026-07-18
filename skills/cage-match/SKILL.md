@@ -650,6 +650,22 @@ Based on all available reviews and critiques, synthesize a final assessment:
 2. **Disputed items** - Where reviewers disagree (needs human judgment)
 3. **Unique catches** - Issues only one reviewer found (investigate further)
 
+## Round 9.5: Disposition — fix inline, don't defer
+
+Act on the findings before merging; don't just catalogue them. For each finding
+AND non-blocking suggestion:
+
+- **Small + relevant to THIS PR → fix inline and push.** Reviewers re-grade on
+  re-review. This includes the "nice-to-have" nits the adversaries raised as
+  explicitly non-blocking — they are still 5-minute fixes to the code under review.
+- **Genuinely standalone (a separate feature, a large refactor) → `TaskCreate`**
+  with rich context. Only these become follow-ups.
+
+A merged PR must not leave a trail of 5-minute fixes wearing task labels — that
+converts review into backlog and pushes a context-switch onto the human. (Blocking
+`REQUEST_CHANGES` findings must reach consensus regardless — that's the strict merge
+gate above; this step is about the non-blocking remainder.)
+
 ## Round 10: Post Reviews to GitHub (parallel)
 
 Generate App tokens in parallel — independent calls to the same helper script. Carnot now has its own GitHub App (CarnotCodeCarver), so when `CARNOT_APP_ID` is configured its review posts as a **formal PR review** carrying its verdict (so an adversarial APPROVE actually satisfies branch protection). If the Carnot App env is absent (older setup), it falls back to a plain `gh pr comment` labelled `## CarnotCodeCarver's Review`.
