@@ -54,8 +54,12 @@ def find_context(pattern, flags, turn=None):
         if m:
             txt = t["text"]
             a, b = m.start(), m.end()
+            # near context shown by default; far context hidden behind a
+            # clickable "…" that expands to the full turn on that side
             return (fmt_ts(t["start"]), t.get("speaker", "?"),
-                    txt[max(0, a - 120):a], txt[a:b], txt[b:b + 120])
+                    txt[:max(0, a - 120)], txt[max(0, a - 120):a],
+                    txt[a:b],
+                    txt[b:b + 120], txt[b + 120:])
     return None
 
 
@@ -63,17 +67,24 @@ cards = []
 for idx, c in proposed:
     ctx = find_context(c["pattern"], c.get("flags"), c.get("turn"))
     if ctx:
-        ts, spk, before, matched, after = ctx
+        ts, spk, far_before, before, matched, after, far_after = ctx
         # what the replacement renders to, with backrefs resolved
         try:
             replacement = re.sub(c["pattern"], c["replacement"], matched,
                                  flags=re.I if "i" in c.get("flags", "") else 0)
         except re.error:
             replacement = c["replacement"]
-        ctx_html = (f'<span class="ctx">…{escape(before)}</span>'
+        lead = (f'<a class="more" onclick="expand(this)" title="show the rest '
+                f'of the turn">…</a><span class="far">{escape(far_before)}</span>'
+                if far_before else '')
+        tail = (f'<span class="far">{escape(far_after)}</span>'
+                f'<a class="more" onclick="expand(this)" title="show the rest '
+                f'of the turn">…</a>'
+                if far_after else '')
+        ctx_html = (f'<span class="ctx">{lead}{escape(before)}</span>'
                     f'<del>{escape(matched)}</del>'
                     f'<ins>{escape(replacement)}</ins>'
-                    f'<span class="ctx">{escape(after)}…</span>')
+                    f'<span class="ctx">{escape(after)}{tail}</span>')
     else:
         ts, spk = "—", "?"
         ctx_html = (f'<del>{escape(c["pattern"])}</del>'
@@ -128,6 +139,10 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  del{{background:#fee2e2;color:#b91c1c;text-decoration:line-through;padding:.06rem .15rem;border-radius:3px}}
  ins{{background:#dcfce7;color:#15803d;text-decoration:none;padding:.06rem .15rem;border-radius:3px;font-weight:600}}
  .note{{font-size:.85rem;color:#555;border-left:3px solid #e2e2e2;padding-left:.6rem}}
+ .more{{cursor:pointer;color:#2563eb;font-weight:700;padding:0 .15rem;user-select:none}}
+ .more:hover{{background:#eff6ff;border-radius:3px}}
+ .far{{display:none;color:#777}}
+ .far.shown{{display:inline}}
  .done{{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:.8rem 1rem;margin:1rem 0;display:none}}
 </style></head><body>
 <h1>Repair review — {escape(TITLE)}</h1>
@@ -180,6 +195,13 @@ function clearAll() {{
   decisions = {{}};
   localStorage.removeItem(KEY);
   paint();
+}}
+function expand(el) {{
+  const far = el.previousElementSibling?.classList?.contains("far")
+    ? el.previousElementSibling
+    : el.nextElementSibling;
+  if (far) far.classList.add("shown");
+  el.remove();
 }}
 function doExport() {{
   const out = JSON.parse(JSON.stringify(CORR));
