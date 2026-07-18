@@ -52,7 +52,7 @@ Run each candidate recombination through these, in order:
   - a **theory squad** (one agent per operator-family, or reuse this kit) that returns transferable moves, and
   - a **recon squad** (one agent per cluster of the target) that reads the *real* code + the *conversations* (memory-graphs) and returns **beast cards**: essence · function · I/O sockets · the one transplantable organ · 3 latent affordances (mine "we could…" threads the memory already contains — half your best recombinations are *already specced and deferred* inside your own graph).
   Then YOU cross theory × sockets and run the five movements on the top pairs. This is how the skill was itself built (see the worked example).
-- **Cross-family collision** (optional, for the highest-stakes call): run Movement 3 across different model families (the /cage-match cast — Maxwell/Kelvin/Carnot — polarity set to *ignite*, like /ascend), because a seam lit from three inductive biases throws sparks one can't.
+- **Cross-family collision** (optional, for the highest-stakes call): run Movement 3 across different model families (drawn from the /cage-match cast — Maxwell/Kelvin/Carnot/Tesla/Wu — polarity set to *ignite*, like /ascend), because a seam lit from three inductive biases throws sparks one can't.
 
 ## The Fold — run the engine on its own output (autocatalysis)
 
@@ -82,7 +82,7 @@ Ship order (conventional core first): belief-update scorer (an afternoon) → le
 
 The Assay is **not** a cage-match on a raw newborn — judged cold, a far-seam atypical third-thing scores low (its framing isn't tuned yet) and the killers strangle exactly the novelty the engine exists to find. So the Assay is a **three-beat tribunal**, cross-family at both poles, that recombines `/ascend` (heat) and `/cage-match` (kill) on the shared anchor *"judge a newborn without killing its novelty"* — the tribunal is itself a third thing.
 
-1. **IGNITE — a 3-way `/ascend`** (cross-family, **no critic**; the `/ascend` cast Maxwell/Kelvin/Carnot, polarity → ignite). Heat the raw newborn up through the five termini so its framing / build-order / inevitability-sentence are tuned *before* judgment. This IS the newborn-protection window (robotics' "protect the un-tuned body"). A newborn that can't reach even warmth here is genuinely dead — kill it now, cheaply.
+1. **IGNITE — a 3-way `/ascend`** (cross-family, **no critic**; any three of the `/ascend` cast Maxwell/Kelvin/Carnot/Tesla/Wu, polarity → ignite). Heat the raw newborn up through the five termini so its framing / build-order / inevitability-sentence are tuned *before* judgment. This IS the newborn-protection window (robotics' "protect the un-tuned body"). A newborn that can't reach even warmth here is genuinely dead — kill it now, cheaply.
 
 2. **KILL — a 3-way `/cage-match`** on the *heated* candidate (strict gate: all three must clear). Each judge wields one convergent instrument from the `/recombine × /recombine` run:
    - **Feynman** — *the Empiricist* (reality-gap). Playful, allergic to jargon and decks; *"reality must take precedence over public relations."* Tool: **fires the probe** — sends the consented Matrix DM / spins a worktree spike / stands up a one-screen page — and reports the observed return. Kills hype and anything that only works in the slide.

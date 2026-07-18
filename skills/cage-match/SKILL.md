@@ -1,15 +1,15 @@
 ---
 argument-hint: <pr-number>
-description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (Codex/GPT) vs Tesla (Grok) — four-way with strict merge gate
+description: Adversarial PR review - Maxwell (Claude) vs Kelvin (Gemini) vs Carnot (Codex/GPT) vs Tesla (Grok) vs Wu (Kimi K3) — five-way with strict merge gate
 ---
 
 # Cage Match Code Review
 
-Four AI reviewers enter. One PR leaves (hopefully improved).
+Five AI reviewers enter. One PR leaves (hopefully improved).
 
-**Maxwell** (Claude/you), **Kelvin** (Gemini), **Carnot** (Codex/OpenAI GPT), and **Tesla, the Arc-Prophet** (xAI Grok) will each review the PR in parallel. Maxwell then critiques the others.
+**Maxwell** (Claude/you), **Kelvin** (Gemini), **Carnot** (Codex/OpenAI GPT), **Tesla, the Arc-Prophet** (xAI Grok), and **Wu, the Parity-Breaker** (Moonshot Kimi K3) will each review the PR in parallel. Maxwell then critiques the others.
 
-**Why four?** One reviewer-of-record is a single point of failure — Kelvin's capacity has degraded silently before. Each added reviewer is a different model family with a different inductive bias, and because all four run concurrently they cost zero added latency. Maxwell hunts the illegal move; Kelvin the cold fault; Carnot the wasted work; Tesla the resonant frequency at which the whole thing shakes itself apart. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot, Tesla). Only if ALL THREE adversarial reviewers fail do we **HARD FAIL** rather than silently degrading to "proxy sign-off".
+**Why five?** One reviewer-of-record is a single point of failure — Kelvin's capacity has degraded silently before. Each added reviewer is a different model family with a different inductive bias, and because all five run concurrently they cost zero added latency. Maxwell hunts the illegal move; Kelvin the cold fault; Carnot the wasted work; Tesla the resonant frequency at which the whole thing shakes itself apart; Wu the assumed symmetry that was never actually there. The merge gate is **strict**: Maxwell + at least one of (Kelvin, Carnot, Tesla, Wu). Only if ALL FOUR adversarial reviewers fail do we **HARD FAIL** rather than silently degrading to "proxy sign-off".
 
 ## Setup
 
@@ -57,7 +57,7 @@ cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
 
-## Rounds 2 ∥ 3 ∥ 4 ∥ 5: Maxwell + Kelvin + Carnot + Tesla Reviews (parallel)
+## Rounds 2 ∥ 3 ∥ 4 ∥ 5 ∥ 6: Maxwell + Kelvin + Carnot + Tesla + Wu Reviews (parallel)
 
 **Performance note.** All three reviews are independent — they don't read each other. Fire Kelvin and Carnot as backgrounded bashes BEFORE composing Maxwell's review. Wall-clock = max(Maxwell ~1-2 min, Kelvin ~30-90s, Carnot ~30-90s) = Maxwell's ~1-2 min. **Adding Carnot costs zero latency.**
 
@@ -307,7 +307,57 @@ grok --prompt-file /tmp/tesla-prompt-$1.txt --output-format plain > /tmp/tesla-r
 TESLA_PID=$!
 ```
 
-**Step C — compose Maxwell's review in-process while Kelvin and Carnot resolve:**
+**Step B3 — fire Wu's review as a fourth backgrounded bash (Moonshot Kimi K3):**
+
+Wu is the fifth family (Moonshot Kimi K3), invoked via the `kimi` CLI's headless print mode (`--quiet` = `--print --output-format text --final-message-only`, exits after one turn). The CLI lives in `~/.local/bin` (installed via `uv tool install kimi-cli`); auth is OAuth (`kimi login`, browser). Kimi is agentic like Codex/Grok, so `--plan` restricts it to read-only tools AND the prompt forbids tool use — belt and braces, same "review by diff" pattern as the others. Output is free text (no `--output-schema`), so the verdict parses from the text like Kelvin/Tesla. An unauthenticated CLI prints "LLM not set" and exits — `wu_ok()` downstream treats an empty/verdict-less file as "unavailable", so a missing login or exhausted credits degrades gracefully rather than blocking the gate. `WU_MODEL` defaults to `k3` (Moonshot's flagship since 2026-07-17); if the account's plan rejects that model id, set `WU_MODEL` to the account default or empty.
+
+```bash
+# Same file-based QUOTED-heredoc pattern: static persona text (literal backticks,
+# no escaping), then PR info + diff appended as data, handed over via "$(cat …)" —
+# command-substitution output is never re-parsed for backticks, so it's
+# injection-proof regardless of diff contents.
+cat > /tmp/wu-prompt-$1.txt <<'WU_PROMPT_EOF'
+You are Wu, the Parity-Breaker — an adversarial code reviewer with a PERSONALITY.
+
+Your character:
+- You are Chien-Shiung Wu, the First Lady of Physics — the experimentalist the theorists call when they need to know whether the universe actually behaves the way their elegant equations assume. In 1956 the entire field ASSUMED parity conservation; you ran the cobalt-60 experiment that proved the mirror-world is NOT identical. The symmetry everyone trusted was never there.
+- That is your reviewing bias: hunt the ASSUMED INVARIANT. Every diff carries symmetries the author believed without testing — "this is idempotent", "these two code paths are mirror images", "serialize/deserialize round-trips", "retry is harmless", "input order doesn't matter", "the empty case behaves like the singleton case". Find the one that breaks under reflection. The bug is never in what the author checked; it is in what they thought was so symmetric it needed no check.
+- You are precise, exacting, understated — devastating in the data, never in volume. Where the other reviewers shout, you present the decay spectrum and let it end the argument. Dry wit permitted. Quote the real Wu, formatted as: Wu: "It is shameful that there are so few women in science."
+- You know what it is to run the decisive experiment while others collect the prize — so you CITE EXACTLY: file:line, the exact call sequence, the exact input that breaks the claimed symmetry. Credit is claimed with evidence, nothing less.
+- Your inductive bias is Moonshot Kimi K3's — a different training lineage from Maxwell (Claude), Kelvin (Gemini), Carnot (GPT), and Tesla (Grok). Your job is to catch what all four would miss.
+
+Review THIS PR from the diff below. Do NOT run any tools, do NOT explore the filesystem, do NOT run tests — trust the build/test claims in the PR body and review by reading the diff. Verify by reading: if you see an unfamiliar API, check it against the diff/versions rather than assuming it doesn't exist (stale training data is the top false-positive source). Evaluate bugs, security, performance, and design appropriateness (closed sets should be enums/sealed types not strings; use current language idioms).
+
+Format your response EXACTLY as:
+## Wu, the Parity-Breaker's Review
+
+**Verdict:** [APPROVE/REQUEST_CHANGES/COMMENT]
+
+**Summary:** [one exact sentence]
+
+**Findings:**
+- [each broken symmetry with file:line]
+
+**The Good:**
+- [what survives reflection]
+
+**The Concerns:**
+- [where an assumed invariant is untested]
+
+PR Info:
+WU_PROMPT_EOF
+cat /tmp/pr-$1-info.json >> /tmp/wu-prompt-$1.txt
+printf '\n\nDiff:\n' >> /tmp/wu-prompt-$1.txt
+cat /tmp/pr-$1-diff.txt >> /tmp/wu-prompt-$1.txt
+
+# Backgrounded alongside Kelvin + Carnot + Tesla. wait $WU_PID below.
+export PATH="$HOME/.local/bin:$PATH"
+WU_MODEL="${WU_MODEL:-k3}"
+kimi --quiet --plan ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log &
+WU_PID=$!
+```
+
+**Step C — compose Maxwell's review in-process while Kelvin, Carnot, Tesla, and Wu resolve:**
 
 As **MaxwellMergeSlam**, perform your review with PERSONALITY:
 
@@ -371,6 +421,12 @@ if [ -n "$TESLA_PID" ]; then
 else
   TESLA_RC=99
 fi
+if [ -n "$WU_PID" ]; then
+  wait $WU_PID
+  WU_RC=$?
+else
+  WU_RC=99
+fi
 
 # Convert Carnot's structured JSON output to the markdown format the rest
 # of the skill expects. Skipped silently if the JSON file is missing or
@@ -414,31 +470,42 @@ tesla_ok() {
     && [ "$(wc -c < /tmp/tesla-review-$1.md)" -gt 200 ] \
     && grep -q "Verdict:" /tmp/tesla-review-$1.md
 }
+# Wu (Kimi) is free-text like Kelvin/Tesla — validate size + a Verdict marker.
+# "LLM not set" (no login) or exhausted credits produce a tiny/verdict-less
+# file, which fails this check and degrades gracefully.
+wu_ok() {
+  [ "$WU_RC" -eq 0 ] \
+    && [ -s /tmp/wu-review-$1.md ] \
+    && [ "$(wc -c < /tmp/wu-review-$1.md)" -gt 200 ] \
+    && grep -q "Verdict:" /tmp/wu-review-$1.md
+}
 
 KELVIN_AVAILABLE=0
 CARNOT_AVAILABLE=0
 TESLA_AVAILABLE=0
+WU_AVAILABLE=0
 kelvin_ok $1 && KELVIN_AVAILABLE=1
 carnot_ok $1 && CARNOT_AVAILABLE=1
 tesla_ok  $1 && TESLA_AVAILABLE=1
+wu_ok     $1 && WU_AVAILABLE=1
 
-echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE Tesla=$TESLA_AVAILABLE"
+echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE Tesla=$TESLA_AVAILABLE Wu=$WU_AVAILABLE"
 ```
 
 ## Round 5: Strict Merge Gate
 
-The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Tesla)**.
+The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Tesla, Wu)**.
 
 | State | Action |
 |---|---|
-| Maxwell ✓ + any of (Kelvin, Carnot, Tesla) ✓ | Ship — note any unavailable reviewer in the summary |
-| Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
+| Maxwell ✓ + any of (Kelvin, Carnot, Tesla, Wu) ✓ | Ship — note any unavailable reviewer in the summary |
+| Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ + Wu ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 7 (post + merge) |
 
 ```bash
-if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_AVAILABLE" -eq 0 ]; then
+if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_AVAILABLE" -eq 0 ] && [ "$WU_AVAILABLE" -eq 0 ]; then
   echo ""
   echo "============================================================"
-  echo "CAGE MATCH HARD FAIL: all three adversarial reviewers unavailable"
+  echo "CAGE MATCH HARD FAIL: all four adversarial reviewers unavailable"
   echo "============================================================"
   echo "Kelvin (Gemini) exit=$KELVIN_RC. Tail of /tmp/kelvin-review-$1.md:"
   tail -20 /tmp/kelvin-review-$1.md 2>/dev/null
@@ -452,6 +519,11 @@ if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_A
   tail -20 /tmp/tesla-review-$1.md 2>/dev/null
   tail -10 /tmp/tesla-err-$1.log 2>/dev/null
   echo ""
+  echo "Wu (Kimi) exit=$WU_RC. Tail of /tmp/wu-review-$1.md + err log:"
+  tail -20 /tmp/wu-review-$1.md 2>/dev/null
+  tail -10 /tmp/wu-err-$1.log 2>/dev/null
+  echo "('LLM not set' means kimi is not logged in — run: kimi login)"
+  echo ""
   echo "Refusing to proceed: Maxwell alone is not a valid dual review."
   echo "Investigate (capacity limits? auth? CLI error?) and re-run /cage-match."
   echo "Do NOT merge this PR via cage-match until at least one adversarial reviewer is restored."
@@ -459,7 +531,7 @@ if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_A
 fi
 ```
 
-The skill MUST NOT proceed past this gate if all three adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
+The skill MUST NOT proceed past this gate if all four adversarial reviewers failed. The previous "proxy sign-off" path is removed — silent degradation to single-reviewer-of-record was the defect this revision exists to fix.
 
 ## Round 6: The Critique
 
@@ -539,9 +611,11 @@ KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHAN
 # Carnot's verdict is the source of truth in its structured JSON.
 CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
-# Tesla's verdict is parsed from its free-text review (the **Verdict:** line).
+# Tesla's and Wu's verdicts are parsed from their free-text reviews (the **Verdict:** line).
 TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
 case "$TESLA_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) TESLA_VERDICT="COMMENT" ;; esac
+WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+case "$WU_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) WU_VERDICT="COMMENT" ;; esac
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -579,6 +653,20 @@ if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   fi
 fi
 
+# Wu (Kimi) has no GitHub App yet — post as a plain comment (verdict in the body).
+# If a WuParityBreaker App is later configured (WU_APP_ID + WU_PRIVATE_KEY_B64),
+# mirror Carnot's formal-review path so a Wu APPROVE satisfies branch protection.
+if [ "$WU_AVAILABLE" -eq 1 ]; then
+  if [ -n "${WU_APP_ID:-}" ] && [ -n "${WU_PRIVATE_KEY_B64:-}" ]; then
+    WU_TOKEN=$(~/.claude/scripts/github-app-token.sh "$WU_APP_ID" "$WU_PRIVATE_KEY_B64" "$REPO")
+    GH_TOKEN=$WU_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
+      -f body="$(cat /tmp/wu-review-$1.md)" \
+      -f event="$WU_VERDICT" &
+  else
+    gh pr comment $1 --body "$(cat /tmp/wu-review-$1.md)" &
+  fi
+fi
+
 wait
 ```
 
@@ -602,16 +690,20 @@ CARNOT_VERDICT=""
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 fi
-# Re-parse Tesla's verdict from its review file (this runs in a fresh shell, so
-# the Round 8 variable doesn't persist — mirror how CARNOT_VERDICT is re-derived).
+# Re-parse Tesla's and Wu's verdicts from their review files (this runs in a fresh
+# shell, so the Round 8 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
 TESLA_VERDICT=""
 if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
 fi
+WU_VERDICT=""
+if [ "$WU_AVAILABLE" -eq 1 ]; then
+  WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+fi
 
 # Any REQUEST_CHANGES from any reviewer is a hard block on the label.
 ANY_REQUEST_CHANGES=0
-for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT"; do
+for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT" "$WU_VERDICT"; do
   [ "$v" = "REQUEST_CHANGES" ] && ANY_REQUEST_CHANGES=1
 done
 
@@ -620,6 +712,7 @@ ADVERSARIAL_APPROVE=0
 { [ "$KELVIN_AVAILABLE" -eq 1 ] && [ "$KELVIN_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
 { [ "$CARNOT_AVAILABLE" -eq 1 ] && [ "$CARNOT_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
 { [ "$TESLA_AVAILABLE" -eq 1 ] && [ "$TESLA_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
+{ [ "$WU_AVAILABLE" -eq 1 ] && [ "$WU_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
 
 if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
    && [ "$MAXWELL_VERDICT" = "APPROVE" ] \
@@ -638,7 +731,7 @@ if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
     echo "WARN: failed to apply 'cage-matched' label (label missing? permissions?). Continuing — cage match itself succeeded."
   fi
 else
-  echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT) — NOT applying 'cage-matched' label."
+  echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT) — NOT applying 'cage-matched' label."
 fi
 ```
 
@@ -646,11 +739,11 @@ fi
 
 After posting reviews, provide a summary to the user:
 
-- Which reviewers showed up? (Maxwell always; Kelvin/Carnot per availability)
+- Which reviewers showed up? (Maxwell always; Kelvin/Carnot/Tesla/Wu per availability)
 - Did the reviewers agree? Where did they disagree?
 - What's the recommended action?
 - If a reviewer was unavailable, mention which and why (capacity? auth? error?) so the user can decide whether to re-run or escalate.
 
 If the consensus + disputed + unique-catches list totals **3 or more findings that look like they rhyme** (same shape played at different positions — e.g. several "single-owner" coordination issues, or several "string-doing-the-job-of-a-type" parsing issues, or several "gestural verification" issues), invoke `/spiral-review $1` next. The spiral pulls one principle out of the bouquet and fixes adjacent findings as a chord rather than a stack. See `~/.claude/consolidation/2026-05-12T19-51-spiral/spiral-audit-PR41.md` for the canonical worked example — PR #41's 5 findings collapsed into the single principle *gestural becomes auditable, with a named single owner*.
 
-Remember: Three heads (even artificial ones, from three different model families) are better than one. The goal is better code, not ego — and the strict gate exists so we never silently merge with effectively single-reviewer-of-record again.
+Remember: Five heads (even artificial ones, from five different model families) are better than one. The goal is better code, not ego — and the strict gate exists so we never silently merge with effectively single-reviewer-of-record again.

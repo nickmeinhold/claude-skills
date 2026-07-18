@@ -250,11 +250,11 @@ If Nick tagged zero markers "real" (or skipped the conversation), still create `
 
 You may also amend `$SD/session-summary.md` with anything the conversation surfaced that belongs in the agents' primary context — the amendment fence (Burst 1 dispatch) still applies.
 
-## Phase 0b: Three-pole retrospective (Maxwell + Kelvin + Carnot)
+## Phase 0b: Multi-pole retrospective (Maxwell + Kelvin + Carnot + Wu)
 
-A single-perspective retrospective misses what other perspectives catch. Same shape as cage-match: different model families with different inductive biases find different things. So before the agent phases, run all three reviewers cold-reading `session-summary.md` in parallel.
+A single-perspective retrospective misses what other perspectives catch. Same shape as cage-match: different model families with different inductive biases find different things. So before the agent phases, run all reviewers cold-reading `session-summary.md` in parallel.
 
-### Fire all three concurrently
+### Fire all of them concurrently
 
 ```bash
 # Use the absolute session dir from setup (the `latest` symlink no
@@ -269,18 +269,27 @@ KELVIN_PID=$!
 codex exec "You are CarnotCodeCarver — perfectionist measuring against theoretical maximum, doing a SESSION retrospective. Read the session summary in <stdin>. Same three questions as above (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: did Maxwell mis-calibrate confidence claims? Defer judgments to Nick that should have been Maxwell's call? Treat any hypothesis as confirmed too quickly? Cite section names. End with efficiency assessment 0.0-1.0 vs Carnot ideal of session productivity (1.0 = no entropy lost to misframing)." < $SD/session-summary.md > $SD/carnot-retro.md 2>&1 &
 CARNOT_PID=$!
 
+# Wu (Kimi K3) — assumed-invariant-hunting vantage. Degrades gracefully: an
+# unauthenticated kimi CLI ("LLM not set") or exhausted credits yields an
+# empty/tiny wu-retro.md, which the gate below simply counts as unavailable.
+export PATH="$HOME/.local/bin:$PATH"
+kimi --quiet --plan -m "${WU_MODEL:-k3}" -p "You are Wu, the Parity-Breaker — the experimentalist who tests the symmetry everyone else assumed, doing a SESSION retrospective. Read the session summary below. Same three questions (surprises Maxwell missed, mistakes Maxwell missed, the crux). Specifically interrogate: which invariant did Maxwell ASSUME without testing — a claim treated as symmetric ('this works both ways', 'the re-run is idempotent', 'the fix generalizes') that was never checked in the mirror direction? Cite section names. End with efficiency assessment 0.0-1.0. Session summary follows:
+
+$(cat $SD/session-summary.md)" > $SD/wu-retro.md 2>&1 &
+WU_PID=$!
+
 # Maxwell (you) — your own pass while the others resolve. You have the in-the-moment context but biased toward what was salient AT THE TIME.
 # Compose your own surprises/mistakes/crux directly to $SD/maxwell-retro.md.
 
-# Wait for both
-until ! ps -p $KELVIN_PID $CARNOT_PID > /dev/null 2>&1; do sleep 5; done
+# Wait for all
+until ! ps -p $KELVIN_PID $CARNOT_PID $WU_PID > /dev/null 2>&1; do sleep 5; done
 ```
 
 ### The strict-gate analogue from cage-match
 
-Same gate as three-way cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot)** must succeed. If both Kelvin AND Carnot fail (Gemini quota exhausted + Codex unavailable), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
+Same gate as cage-match: **Maxwell + at-least-one-of-(Kelvin, Carnot, Wu)** must succeed. If Kelvin AND Carnot AND Wu all fail (Gemini quota exhausted + Codex unavailable + Kimi unauthenticated), surface that loudly to Nick — single-perspective retrospective is degraded signal, and the agent's findings need extra triage from Nick.
 
-If only one of (Kelvin, Carnot) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
+If only one of (Kelvin, Carnot, Wu) succeeded: still better than solo-Maxwell. Note unavailability in the synthesis.
 
 ### Synthesise — Nick is the gating function
 
