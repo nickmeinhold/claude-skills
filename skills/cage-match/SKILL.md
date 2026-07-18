@@ -32,20 +32,56 @@ Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
 **Why not `gh pr diff`?** It serves GitHub's *server-side* diff, which lags a push by seconds. Run it in the same breath as `git push` — e.g. on a re-review after addressing findings — and it returns the **pre-push** diff, so all three reviewers grade stale code and can `REQUEST_CHANGES` over "fixes absent from the diff" that are actually present. The fix: fetch the PR head ref and diff the exact `headRefOid` locally — no propagation dependency, always current with the pushed HEAD.
 
 ```bash
-gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files > /tmp/pr-$1-info.json
-PR_BASE=$(jq -r .baseRefName /tmp/pr-$1-info.json)
-PR_HEAD=$(jq -r .headRefOid  /tmp/pr-$1-info.json)
+gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files,isCrossRepository > /tmp/pr-$1-info.json
+PR_BASE=$(jq -r .baseRefName   /tmp/pr-$1-info.json)
+PR_HEAD_BRANCH=$(jq -r .headRefName /tmp/pr-$1-info.json)
 
-# Diff the exact PR head commit locally. `pull/$1/head` is the GitHub refspec for
-# the PR head (works for forks too); after fetching it the commit is addressable by
-# SHA. Three-dot diff = changes since the merge-base, matching `gh pr diff` semantics.
-git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
+# Head ground truth — read the remote's ref DIRECTLY over the git protocol.
+# The failure class here is API propagation lag: gh pr view's headRefOid can lag a
+# push by seconds, and every server-side API read lags *together*, so any poll of
+# API-vs-API (or API-vs-local, when local is itself stale) can "settle" on a
+# one-commit-old head and grade stale code — a Gate-1 re-review slipped exactly
+# this way once, and round-1 adversaries showed the local-branch anchor has the
+# same hole (local stale at A + API stale at A = instant false settle while the
+# real head B propagates). `git ls-remote` doesn't poll and can't false-settle:
+# it reads the ACTUAL current ref from the server over the git protocol, which is
+# what the push wrote — the coupling to API propagation is removed, not guarded.
+# FORK GATE FIRST (Wu's debut catch): for a cross-repo PR, headRefName is the
+# branch name on the FORK — ls-remote of OUR origin for that name can return the
+# BASE repo's unrelated branch (a fork head named "main" resolves to our main:
+# non-empty, fresh, WRONG — the diff becomes base-vs-base, i.e. empty, and a
+# stale-head guard silently becomes an auto-approve machine). Only trust
+# ls-remote when the head branch actually lives on origin.
+IS_FORK=$(jq -r '.isCrossRepository' /tmp/pr-$1-info.json)
+PR_HEAD=""
+if [ "$IS_FORK" = "false" ]; then
+  PR_HEAD=$(git ls-remote origin "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null | head -1 | awk '{print $1}')
+fi
+if [ -z "$PR_HEAD" ]; then
+  # Fork PR, or same-repo head ref renamed/deleted: degrade to the API's
+  # headRefOid and SAY SO — on a re-review this value may lag a just-pushed fix.
+  PR_HEAD=$(gh pr view $1 --json headRefOid -q .headRefOid)
+  echo "WARN: head not resolvable on origin (fork PR or missing ref) — using API headRefOid $PR_HEAD; on a re-review this can lag a just-pushed fix. Verify the diff line count against your expectation before trusting verdicts." >&2
+fi
+
+# Make the head commit addressable locally. Same-repo: fetch the branch ref
+# itself over the git protocol (same ground truth ls-remote just read — no
+# dependency on GitHub's pull/N/head sync machinery, which can lag a push just
+# like the API). Fork: pull/$1/head is the only refspec the base remote has;
+# it shares the API's propagation timing, which the WARN above already names.
+# Three-dot diff = changes since the merge-base, matching `gh pr diff` semantics.
+if [ "$IS_FORK" = "false" ]; then
+  git fetch -q origin "$PR_BASE" "$PR_HEAD_BRANCH" 2>/dev/null
+else
+  git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
+fi
 if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
   git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
 else
-  # Fallback (head commit not fetchable — rare): verify GitHub's headRefOid is
-  # settled before trusting `gh pr diff`, so we don't capture a still-propagating diff.
-  until [ "$(gh pr view $1 --json headRefOid -q .headRefOid)" = "$PR_HEAD" ]; do sleep 2; done
+  # Fallback (head commit still not fetchable — rare): degrade to GitHub's
+  # server-side diff and SAY SO — this path shares the API's propagation timing,
+  # so on a re-review it can serve a diff that lags a just-pushed fix.
+  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix. Check the diff line count below against your expectation." >&2
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
