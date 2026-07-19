@@ -125,6 +125,14 @@ REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 
 # Generate a short-lived installation token for KelvinBitBrawler
 KELVIN_TOKEN=$(~/.claude/scripts/github-app-token.sh "$KELVIN_APP_ID" "$KELVIN_PRIVATE_KEY_B64" "$REPO")
+# Token-mint guard: an unchecked empty token would flow into GH_TOKEN=$KELVIN_TOKEN
+# below and post the review under ambient gh auth (wrong identity — and Maxwell,
+# as PR author via /ship, cannot approve its own PRs) or fail cryptically.
+# Fail LOUD and stop instead.
+if [ -z "$KELVIN_TOKEN" ]; then
+  echo "ABORT: Kelvin App token mint failed — check KELVIN_APP_ID / KELVIN_PRIVATE_KEY_B64 in ~/.claude/.env and that the KelvinBitBrawler App is installed on $REPO. Run ~/.claude/scripts/github-app-token.sh by hand for the real error." >&2
+  exit 1
+fi
 
 # Post review as KelvinBitBrawler [bot]
 GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
