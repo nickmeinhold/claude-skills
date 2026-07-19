@@ -584,31 +584,39 @@ wu_ok() {
     && grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md
 }
 
-# Wu plans-file auto-harvest — the K3 print-mode quirk in action (observed live
-# 2026-07-18/19): kimi sometimes SUMMARIZES to stdout (so /tmp/wu-review-$1.md
-# fails wu_ok on format) while saving the FULL review to
-# ~/.kimi/plans/<generated-name>.md. If the stdout names a verdict AND references
-# a saved plans file, harvest the newest plans file as Wu's review body, then
-# re-run wu_ok. The mtime guard is the stale-file canary: a plans file not newer
-# than this run's prompt is leftover from an EARLIER run and must NOT be
-# harvested — better to degrade Wu to unavailable than post a stale review.
+# Wu plans-file auto-harvest — K3 print-mode quirk (observed live 2026-07-18/19):
+# kimi sometimes SUMMARIZES to stdout (failing wu_ok on format) while saving the
+# FULL review to ~/.kimi/plans/<generated-name>.md. Recover it — but ~/.kimi/plans/
+# is a GLOBAL dir shared across ALL kimi sessions on this machine (a concurrent
+# peer session writes here too — proven during the 2026-07-18 forensics), so
+# `ls -t | head -1` can grab an UNRELATED review (namespace-collision class,
+# [[feedback_session_local_id_as_global_key]]). Instead parse the EXACT path kimi
+# printed to its own stdout ("...saved to `/Users/.../.kimi/plans/<name>.md`") —
+# that names the file THIS run wrote, immune to concurrent peers. The mtime check
+# vs the run prompt stays as belt-and-braces defense-in-depth.
 if ! wu_ok $1 \
-   && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null \
-   && grep -q '\.kimi/plans/' /tmp/wu-review-$1.md 2>/dev/null; then
-  WU_PLANS_FILE=$(ls -t ~/.kimi/plans/*.md 2>/dev/null | head -1)
-  if [ -n "$WU_PLANS_FILE" ] && [ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]; then
-    WU_STDOUT_VERDICT=$(grep -ioE 'verdict[^A-Za-z]*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md \
-      | grep -oiE 'APPROVE|REQUEST_CHANGES|COMMENT' | head -1 | tr '[:lower:]' '[:upper:]')
-    {
-      echo "## Wu, the Parity-Breaker's Review"
-      echo ""
-      echo "**Verdict:** $WU_STDOUT_VERDICT"
-      echo ""
-      cat "$WU_PLANS_FILE"
-    } > /tmp/wu-review-$1.md
+   && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null; then
+  WU_PLANS_FILE=$(grep -oE '/[^ `"]*/\.kimi/plans/[^ `"]*\.md' /tmp/wu-review-$1.md 2>/dev/null | head -1)
+  if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ] \
+     && [ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]; then
+    # Prefer the harvested body's OWN anchored verdict; only synthesize a header
+    # from the stdout summary's verdict if the plans file lacks the anchored line.
+    if grep -qE '^\*\*Verdict:\*\*' "$WU_PLANS_FILE"; then
+      cp "$WU_PLANS_FILE" /tmp/wu-review-$1.md
+    else
+      WU_STDOUT_VERDICT=$(grep -ioE 'verdict[^A-Za-z]*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md \
+        | grep -oiE 'APPROVE|REQUEST_CHANGES|COMMENT' | head -1 | tr '[:lower:]' '[:upper:]')
+      {
+        echo "## Wu, the Parity-Breaker's Review"
+        echo ""
+        echo "**Verdict:** $WU_STDOUT_VERDICT"
+        echo ""
+        cat "$WU_PLANS_FILE"
+      } > /tmp/wu-review-$1.md
+    fi
     echo "harvested Wu review body from $WU_PLANS_FILE (K3 summarized to stdout)" >> /tmp/wu-err-$1.log
   else
-    echo "Wu harvest skipped: no ~/.kimi/plans file newer than this run's prompt (stale-file canary)" >> /tmp/wu-err-$1.log
+    echo "Wu harvest skipped: no valid ~/.kimi/plans path named in stdout newer than this run's prompt (stale/foreign-file canary)" >> /tmp/wu-err-$1.log
   fi
 fi
 
