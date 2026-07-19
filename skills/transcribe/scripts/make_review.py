@@ -38,54 +38,70 @@ def fmt_ts(t):
     return f"{int(t//3600):02d}:{int(t%3600//60):02d}:{int(t%60):02d}"
 
 
+NEIGHBOURS = 4  # turns of conversation revealed on each side by the expander
+
+
 def find_context(pattern, flags, turn=None):
     """Locate the matching turn — the ANCHORED turn when the correction is
-    turn-scoped, else the first match — and return (ts, speaker, before,
-    matched, after) with ~120 chars of context each side. A turn-scoped
-    correction whose anchored turn no longer matches returns None rather
-    than showing a misleading match from elsewhere."""
+    turn-scoped, else the first match — and return
+    (turn_index, ts, speaker, before, matched, after). `before`/`after` are
+    the rest of the SAME turn around the match; surrounding turns are attached
+    separately by the caller. Returns None if a turn-scoped anchor no longer
+    matches (rather than a misleading match from elsewhere)."""
     f = re.I if "i" in (flags or "") else 0
     if turn is not None:
-        candidates = [turns[turn]] if 0 <= turn < len(turns) else []
+        candidates = [(turn, turns[turn])] if 0 <= turn < len(turns) else []
     else:
-        candidates = turns
-    for t in candidates:
+        candidates = list(enumerate(turns))
+    for ti, t in candidates:
         m = re.search(pattern, t.get("text", ""), flags=f)
         if m:
             txt = t["text"]
             a, b = m.start(), m.end()
-            # near context shown by default; far context hidden behind a
-            # clickable "…" that expands to the full turn on that side
-            return (fmt_ts(t["start"]), t.get("speaker", "?"),
-                    txt[:max(0, a - 120)], txt[max(0, a - 120):a],
-                    txt[a:b],
-                    txt[b:b + 120], txt[b + 120:])
+            return (ti, fmt_ts(t["start"]), t.get("speaker", "?"),
+                    txt[:a], txt[a:b], txt[b:])
     return None
+
+
+def neighbour_html(ti, direction):
+    """Render up to NEIGHBOURS surrounding turns as speaker-labelled lines,
+    hidden until the expander chip reveals them."""
+    if direction == "before":
+        idxs = range(max(0, ti - NEIGHBOURS), ti)
+    else:
+        idxs = range(ti + 1, min(len(turns), ti + 1 + NEIGHBOURS))
+    lines = "".join(
+        f'<div class="nt"><span class="ns">{escape(turns[j].get("speaker", "?"))}:</span> '
+        f'{escape(turns[j]["text"])}</div>'
+        for j in idxs)
+    return lines
 
 
 cards = []
 for idx, c in proposed:
     ctx = find_context(c["pattern"], c.get("flags"), c.get("turn"))
     if ctx:
-        ts, spk, far_before, before, matched, after, far_after = ctx
+        ti, ts, spk, before, matched, after = ctx
         # what the replacement renders to, with backrefs resolved
         try:
             replacement = re.sub(c["pattern"], c["replacement"], matched,
                                  flags=re.I if "i" in c.get("flags", "") else 0)
         except re.error:
             replacement = c["replacement"]
-        lead = (f'<a class="more" onclick="expand(this)" title="show the rest '
-                f'of the turn">⟨ more before ⟩</a>'
-                f'<span class="far">{escape(far_before)}</span>'
-                if far_before else '')
-        tail = (f'<span class="far">{escape(far_after)}</span>'
-                f'<a class="more" onclick="expand(this)" title="show the rest '
-                f'of the turn">⟨ more after ⟩</a>'
-                if far_after else '')
-        ctx_html = (f'<span class="ctx">{lead}{escape(before)}</span>'
+        before_nb = neighbour_html(ti, "before")
+        after_nb = neighbour_html(ti, "after")
+        lead = (f'<div class="far">{before_nb}</div>'
+                f'<a class="more" onclick="expand(this)">⟨ show earlier ⟩</a> '
+                if before_nb else '')
+        tail = (f' <a class="more" onclick="expand(this)">⟨ show later ⟩</a>'
+                f'<div class="far">{after_nb}</div>'
+                if after_nb else '')
+        ctx_html = (f'{lead}'
+                    f'<span class="ctx">{escape(before)}</span>'
                     f'<del>{escape(matched)}</del>'
                     f'<ins>{escape(replacement)}</ins>'
-                    f'<span class="ctx">{escape(after)}{tail}</span>')
+                    f'<span class="ctx">{escape(after)}</span>'
+                    f'{tail}')
     else:
         ts, spk = "—", "?"
         ctx_html = (f'<del>{escape(c["pattern"])}</del>'
@@ -152,8 +168,11 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
         padding:0 .5rem;margin:0 .3rem;font-size:.8rem;white-space:nowrap;
         display:inline-block;line-height:1.4}}
  .more:hover{{background:#dbeafe}}
- .far{{display:none;color:#777}}
- .far.shown{{display:inline}}
+ .far{{display:none}}
+ .far.shown{{display:block;margin:.5rem 0;padding:.5rem .7rem;background:#fafafa;
+             border-left:3px solid #e2e2e2;border-radius:0 6px 6px 0}}
+ .nt{{color:#777;font-size:.92rem;margin:.15rem 0}}
+ .ns{{font-weight:600;color:#555}}
  .done{{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:.8rem 1rem;margin:1rem 0;display:none}}
  .okbtn{{border-color:#059669;background:#059669;color:#fff;font-weight:600;margin-left:.6rem}}
  .endbar{{display:flex;gap:.6rem;align-items:center;border-top:1px solid #ddd;margin-top:1.6rem;padding-top:1.1rem}}
