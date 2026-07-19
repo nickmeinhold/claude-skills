@@ -245,14 +245,19 @@ scp skills/live-game/server.mjs skills/live-game/qr.mjs imagineering:apps/live-g
 ssh imagineering 'sudo systemctl restart live-game'
 ```
 
-Verify the new build is actually live — and **GET, never HEAD**: every route handler is
-gated on `req.method === 'GET'`, so a `curl -I` (HEAD) returns 404 on `/` and `/play`
-even when the server is healthy (it's a lying gauge — only `/state` happens to be the
-one you'd reach for with `-s`). Confirm with a GET plus a content check that proves the
-*new* code is running, not just that *a* server answers:
+Verify the new build is actually live — and **GET, never HEAD, with no exceptions**:
+every route handler is gated on `req.method === 'GET'`, so a `curl -I` (HEAD) returns
+404 on `/` and `/play` even when the server is healthy, and on `/events` it returns
+`text/plain` instead of the SSE content-type (verified on the live box during the
+2026-07-19 deploy — HEAD hits the GET-only mismatch, the same instrument-lie as `/`).
+Even a headers-only check must be a GET: use `-D -` to dump headers from a real GET
+rather than `-I`. Confirm with GETs plus a content check that proves the *new* code
+is running, not just that *a* server answers:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://quiz-game.imagineering.cc/   # expect 200 (GET)
+curl -s -N -D - --max-time 5 https://quiz-game.imagineering.cc/events -o /dev/null | grep -i content-type
+                                                                               # expect text/event-stream (GET headers; -I lies here)
 ssh imagineering 'grep -c host/advance apps/live-game/server.mjs'             # >0 = staging-slot build is live
 shasum -a256 skills/live-game/server.mjs                                       # compare against the box to confirm parity
 ```

@@ -526,7 +526,10 @@ fi
 ```
 
 Bounded poll for the deploy run on the merge commit (typed `seq` budget, typed
-exit on zero-match) — skipped when `deploy-workflow: none`:
+exit on zero-match) — skipped when `deploy-workflow: none`. The tail of the
+block then **asserts success — `completed` is not `success`**: a failed,
+cancelled, or timed-out deploy still has `status==completed`, so read
+`conclusion` and require literal `success`:
 
 ```bash
 if [ -z "$SKIP_DEPLOY_CHECK" ]; then
@@ -557,13 +560,8 @@ if [ -z "$DEPLOY_RUN" ] || [ "$DEPLOY_RUN" = "null" ]; then
   echo "State 3 not reached. Investigate before declaring shipped."
   exit 1
 fi
-```
 
-**Assert success — `completed` is not `success`.** A failed, cancelled, or
-timed-out deploy still has `status==completed`. Read `conclusion` and require
-literal `success`:
-
-```bash
+# Assert success — completed is not success.
 CONCLUSION=$(echo "$DEPLOY_RUN" | jq -r '.conclusion')
 if [ "$CONCLUSION" != "success" ]; then
   echo "ERROR: deploy run conclusion=$CONCLUSION (must be 'success')."

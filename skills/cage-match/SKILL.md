@@ -575,16 +575,42 @@ tesla_ok() {
 # agentic model echoing the prompt's format template mid-error can't fake
 # availability (Carnot's catch — the prompt itself contains "Verdict:").
 # HARVEST QUIRK: K3 print-mode sometimes SUMMARIZES to stdout and saves the full
-# review to ~/.kimi/plans/<generated-name>.md. If wu_ok fails on format but the
-# stdout file mentions a verdict + a saved review/plan, the orchestrator should
-# harvest the newest ~/.kimi/plans file as Wu's review body before declaring Wu
-# unavailable.
+# review to ~/.kimi/plans/<generated-name>.md. The harvest block after this
+# function recovers that case before Wu is declared unavailable.
 wu_ok() {
   [ "$WU_RC" -eq 0 ] \
     && [ -s /tmp/wu-review-$1.md ] \
     && [ "$(wc -c < /tmp/wu-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md
 }
+
+# Wu plans-file auto-harvest — the K3 print-mode quirk in action (observed live
+# 2026-07-18/19): kimi sometimes SUMMARIZES to stdout (so /tmp/wu-review-$1.md
+# fails wu_ok on format) while saving the FULL review to
+# ~/.kimi/plans/<generated-name>.md. If the stdout names a verdict AND references
+# a saved plans file, harvest the newest plans file as Wu's review body, then
+# re-run wu_ok. The mtime guard is the stale-file canary: a plans file not newer
+# than this run's prompt is leftover from an EARLIER run and must NOT be
+# harvested — better to degrade Wu to unavailable than post a stale review.
+if ! wu_ok $1 \
+   && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null \
+   && grep -q '\.kimi/plans/' /tmp/wu-review-$1.md 2>/dev/null; then
+  WU_PLANS_FILE=$(ls -t ~/.kimi/plans/*.md 2>/dev/null | head -1)
+  if [ -n "$WU_PLANS_FILE" ] && [ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]; then
+    WU_STDOUT_VERDICT=$(grep -ioE 'verdict[^A-Za-z]*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md \
+      | grep -oiE 'APPROVE|REQUEST_CHANGES|COMMENT' | head -1 | tr '[:lower:]' '[:upper:]')
+    {
+      echo "## Wu, the Parity-Breaker's Review"
+      echo ""
+      echo "**Verdict:** $WU_STDOUT_VERDICT"
+      echo ""
+      cat "$WU_PLANS_FILE"
+    } > /tmp/wu-review-$1.md
+    echo "harvested Wu review body from $WU_PLANS_FILE (K3 summarized to stdout)" >> /tmp/wu-err-$1.log
+  else
+    echo "Wu harvest skipped: no ~/.kimi/plans file newer than this run's prompt (stale-file canary)" >> /tmp/wu-err-$1.log
+  fi
+fi
 
 KELVIN_AVAILABLE=0
 CARNOT_AVAILABLE=0
@@ -852,6 +878,18 @@ A downstream merge gate (live on `nickmeinhold/the-dreaming-repo`, being mirrore
 The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action is attributable to the cage-match identity. Labeling is best-effort: the label may not exist on every repo, so we create-if-missing and tolerate any residual error rather than failing the whole cage match.
 
 ```bash
+# Re-mint Maxwell's token: this round runs in a fresh shell, so Round-10
+# variables (including MAXWELL_TOKEN) don't persist — same reason the verdicts
+# below are re-derived from files. Prefer the Round-10 token file (still valid
+# within its 1-hour TTL), then fall back to minting a fresh one (needs the App
+# creds from .env in this shell).
+source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
+MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(cat /tmp/maxwell-token-$1 2>/dev/null)}
+MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null)}
+if [ -z "$MAXWELL_TOKEN" ]; then
+  echo "WARN: could not mint MAXWELL_TOKEN — skipping 'cage-matched' labeling (best-effort; cage match itself is unaffected)."
+else
+
 # Verdicts:
 #  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
 #    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
@@ -906,6 +944,8 @@ if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
 else
   echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT) — NOT applying 'cage-matched' label."
 fi
+
+fi  # end empty-MAXWELL_TOKEN guard
 ```
 
 ## Summary
