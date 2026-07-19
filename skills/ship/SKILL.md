@@ -106,6 +106,13 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Generate Maxwell App token — PRs are created as MaxwellMergeSlam [bot]
 # so the human developer can approve them
 MAXWELL_TOKEN=$(~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO")
+# Token-mint guard: an unchecked empty token would flow into GH_TOKEN=$MAXWELL_TOKEN
+# below and create the PR under ambient gh auth (wrong identity — the human can't
+# approve their own PR) or fail cryptically. Fail LOUD and stop instead.
+if [ -z "$MAXWELL_TOKEN" ]; then
+  echo "ABORT: Maxwell App token mint failed — check MAXWELL_APP_ID / MAXWELL_PRIVATE_KEY_B64 in ~/.claude/.env and that the MaxwellMergeSlam App is installed on $REPO. Run ~/.claude/scripts/github-app-token.sh by hand for the real error." >&2
+  exit 1
+fi
 ```
 
 ## Workflow

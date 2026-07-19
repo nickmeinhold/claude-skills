@@ -273,7 +273,15 @@ cat /tmp/pr-$1-info.json >> /tmp/carnot-prompt-$1.txt
 printf '\n\nDiff:\n' >> /tmp/carnot-prompt-$1.txt
 cat /tmp/pr-$1-diff.txt >> /tmp/carnot-prompt-$1.txt
 
-DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 < /tmp/carnot-prompt-$1.txt &
+# Context isolation: codex resolves AGENTS.md from its working root, so running
+# it from a repo root silently feeds the repo's agent instructions into an
+# "independent" adversary (prompt contamination + token waste). `codex exec
+# --help` documents `-C, --cd <DIR>` ("Tell the agent to use the specified
+# directory as its working root") — point it at an empty scratch dir. Every
+# path in this command (schema, prompt, outputs) is ABSOLUTE, so the workdir
+# change is safe; keep it that way when editing.
+CARNOT_SCRATCH=$(mktemp -d)
+DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec -C "$CARNOT_SCRATCH" --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 < /tmp/carnot-prompt-$1.txt &
 CARNOT_PID=$!
 ```
 
@@ -339,7 +347,15 @@ cat /tmp/pr-$1-diff.txt >> /tmp/tesla-prompt-$1.txt
 
 # Backgrounded alongside Kelvin + Carnot. wait $TESLA_PID below.
 export PATH="$HOME/.grok/bin:$PATH"
-grok --prompt-file /tmp/tesla-prompt-$1.txt --output-format plain > /tmp/tesla-review-$1.md 2>/tmp/tesla-err-$1.log &
+# Context isolation: grok auto-reads the AGENTS.md family + CLAUDE.md + .claude/
+# from its working directory — from a repo root that contaminates an
+# "independent" adversary's prompt with the repo's agent instructions and wastes
+# tokens. Verified against `grok --help` (2026-07-19): there is no -w flag, but
+# there IS `--cwd <CWD>` ("Working directory") — use it to point grok at an
+# empty scratch dir (no subshell-cd needed). The prompt file and both output
+# paths are ABSOLUTE, so the workdir change is safe; keep it that way.
+TESLA_SCRATCH=$(mktemp -d)
+grok --cwd "$TESLA_SCRATCH" --prompt-file /tmp/tesla-prompt-$1.txt --output-format plain > /tmp/tesla-review-$1.md 2>/tmp/tesla-err-$1.log &
 TESLA_PID=$!
 ```
 
@@ -409,7 +425,23 @@ WU_FALLBACK_MODEL="${WU_FALLBACK_MODEL-kimi-code/kimi-for-coding}"
 # review needs none of it — the diff is already in the prompt file.
 WU_SCRATCH=$(mktemp -d)
 (
-  kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log
+  # Transient "LLM not set" retry: under CONCURRENT kimi use (another session or
+  # a parallel cage-match holding the CLI's credentials lock), a fully logged-in
+  # kimi can transiently report "LLM not set" — credentials-lock contention, not
+  # a real auth gap. Retry the PRIMARY model attempt up to 3 times, sleeping 8s
+  # between, so a lock blip doesn't demote Wu to unavailable. A genuinely
+  # logged-out CLI fails all 3 attempts and degrades exactly as before. This
+  # loop wraps ONLY the primary attempt; the quota fallback below is unchanged.
+  for WU_ATTEMPT in 1 2 3; do
+    kimi --quiet --plan -w "$WU_SCRATCH" --skills-dir "$WU_SCRATCH" ${WU_MODEL:+-m "$WU_MODEL"} -p "$(cat /tmp/wu-prompt-$1.txt)" > /tmp/wu-review-$1.md 2>/tmp/wu-err-$1.log
+    if [ "$WU_ATTEMPT" -lt 3 ] \
+       && grep -qi 'LLM not set' /tmp/wu-review-$1.md /tmp/wu-err-$1.log 2>/dev/null; then
+      echo "attempt $WU_ATTEMPT: 'LLM not set' (likely kimi credentials-lock contention under concurrent use) — retrying in 8s" >> /tmp/wu-err-$1.log
+      sleep 8
+    else
+      break
+    fi
+  done
   if ! grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md \
      && grep -qiE 'usage limit|access_terminated|quota' /tmp/wu-review-$1.md /tmp/wu-err-$1.log 2>/dev/null \
      && [ -n "$WU_FALLBACK_MODEL" ] && [ "$WU_FALLBACK_MODEL" != "$WU_MODEL" ]; then
@@ -542,6 +574,11 @@ tesla_ok() {
 # degrades gracefully. The Verdict grep is LINE-ANCHORED (^**Verdict:**) so an
 # agentic model echoing the prompt's format template mid-error can't fake
 # availability (Carnot's catch — the prompt itself contains "Verdict:").
+# HARVEST QUIRK: K3 print-mode sometimes SUMMARIZES to stdout and saves the full
+# review to ~/.kimi/plans/<generated-name>.md. If wu_ok fails on format but the
+# stdout file mentions a verdict + a saved review/plan, the orchestrator should
+# harvest the newest ~/.kimi/plans file as Wu's review body before declaring Wu
+# unavailable.
 wu_ok() {
   [ "$WU_RC" -eq 0 ] \
     && [ -s /tmp/wu-review-$1.md ] \
@@ -683,13 +720,40 @@ if [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNO
   ~/.claude/scripts/github-app-token.sh "$CARNOT_APP_ID" "$CARNOT_PRIVATE_KEY_B64" "$REPO" > /tmp/carnot-token-$1 &
 fi
 wait
-MAXWELL_TOKEN=$(cat /tmp/maxwell-token-$1)
-[ "$KELVIN_AVAILABLE" -eq 1 ] && KELVIN_TOKEN=$(cat /tmp/kelvin-token-$1)
-[ "$CARNOT_APP_CONFIGURED" -eq 1 ] && CARNOT_TOKEN=$(cat /tmp/carnot-token-$1)
+MAXWELL_TOKEN=$(cat /tmp/maxwell-token-$1 2>/dev/null)
+KELVIN_TOKEN=""
+[ "$KELVIN_AVAILABLE" -eq 1 ] && KELVIN_TOKEN=$(cat /tmp/kelvin-token-$1 2>/dev/null)
+CARNOT_TOKEN=""
+[ "$CARNOT_APP_CONFIGURED" -eq 1 ] && CARNOT_TOKEN=$(cat /tmp/carnot-token-$1 2>/dev/null)
 rm -f /tmp/maxwell-token-$1 /tmp/kelvin-token-$1 /tmp/carnot-token-$1
+
+# Token-mint guards. The parallel mints above were previously UNCHECKED — a
+# failed mint (App not installed, expired key, GitHub API hiccup) left an empty
+# token that flowed straight into `GH_TOKEN=$TOKEN gh api`, failing cryptically
+# or, worse, posting under ambient gh auth as the wrong identity.
+if [ -z "$MAXWELL_TOKEN" ]; then
+  echo "" >&2
+  echo "============================================================" >&2
+  echo "CAGE MATCH ABORT (Round 10): Maxwell App token mint FAILED" >&2
+  echo "============================================================" >&2
+  echo "Maxwell's token is load-bearing twice: it posts Maxwell's review here" >&2
+  echo "AND applies the Round 11 'cage-matched' label — without it, neither can" >&2
+  echo "happen and downstream label-gated merges would silently never fire." >&2
+  echo "Check: MAXWELL_APP_ID / MAXWELL_PRIVATE_KEY_B64 in ~/.claude/.env," >&2
+  echo "App installed on $REPO, and ~/.claude/scripts/github-app-token.sh" >&2
+  echo "run by hand for the real error. Fix and re-run Round 10." >&2
+  exit 1
+fi
+# Kelvin/Carnot: an empty mint degrades to a plain `gh pr comment` in the
+# posting blocks below — same guard shape as the existing Tesla/Wu fallbacks
+# (never a silent gh call with GH_TOKEN="").
+[ "$KELVIN_AVAILABLE" -eq 1 ] && [ -z "$KELVIN_TOKEN" ] \
+  && echo "WARN: Kelvin App token mint failed — Kelvin's review will post as a plain comment (verdict in body, does not satisfy branch protection)." >&2
+[ "$CARNOT_APP_CONFIGURED" -eq 1 ] && [ -z "$CARNOT_TOKEN" ] \
+  && echo "WARN: Carnot App token mint failed — Carnot's review will post as a plain comment (verdict in body, does not satisfy branch protection)." >&2
 ```
 
-Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin and Carnot each as a **formal review** carrying their verdict (App token), so an adversarial APPROVE counts toward the merge gate. Carnot falls back to a plain comment only if its App is not configured:
+Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin and Carnot each as a **formal review** carrying their verdict (App token), so an adversarial APPROVE counts toward the merge gate. Kelvin and Carnot each fall back to a plain comment if the App is not configured or the token mint failed:
 
 ```bash
 KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHANGES, or COMMENT
@@ -715,19 +779,27 @@ GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f event="COMMENT" &
 
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
-  GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-    -f body="$(cat /tmp/kelvin-review-$1.md)" \
-    -f event="$KELVIN_VERDICT" &
+  # Empty token (mint failed) → plain-comment fallback, never a silent gh call
+  # with GH_TOKEN="" (Kelvin's catch: unchecked token generation — same guard
+  # shape as Tesla/Wu below).
+  if [ -n "$KELVIN_TOKEN" ]; then
+    GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
+      -f body="$(cat /tmp/kelvin-review-$1.md)" \
+      -f event="$KELVIN_VERDICT" &
+  else
+    gh pr comment $1 --body "$(cat /tmp/kelvin-review-$1.md)" &
+  fi
 fi
 
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
-  if [ "$CARNOT_APP_CONFIGURED" -eq 1 ]; then
+  if [ "$CARNOT_APP_CONFIGURED" -eq 1 ] && [ -n "$CARNOT_TOKEN" ]; then
     # Formal review as CarnotCodeCarver[bot], verdict carried — an APPROVE counts.
     GH_TOKEN=$CARNOT_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
       -f body="$(cat /tmp/carnot-review-$1.md)" \
       -f event="$CARNOT_VERDICT" &
   else
-    # Fallback (App not configured): plain comment from the orchestrator's gh user.
+    # Fallback (App not configured, OR token mint failed): plain comment from
+    # the orchestrator's gh user — same guard shape as Tesla/Wu below.
     gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
   fi
 fi
