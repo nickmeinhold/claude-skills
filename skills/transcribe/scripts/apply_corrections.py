@@ -21,8 +21,9 @@ Convention:
 }
 
 Patterns are Python regexes matched against each turn's text. Replacements are
-applied in file order. Idempotent by construction when replacements don't
-re-match their own output (keep them literal).
+inserted LITERALLY (regex backreferences like \1 are NOT interpreted), so an
+LLM-proposed replacement containing a backslash can't crash or mangle. Applied
+in file order; idempotent when a replacement doesn't re-match its own output.
 
 Reads  $TRANSCRIBE_WORK/corrections.json (absent -> no-op)
 Edits  $TRANSCRIBE_WORK/turns_named.json (or turns.json if no attribution ran)
@@ -46,8 +47,11 @@ def load_corrections():
 
 def main():
     corrections = load_corrections()
+    # fail closed: only entries with an EXPLICIT status=="approved" are applied.
+    # A missing status is treated as not-yet-approved (proposed), never as an
+    # implicit go — this is a propose-only safety pipeline.
     approved = [c for c in corrections
-                if c.get("status", "approved") == "approved"
+                if c.get("status") == "approved"
                 and c.get("scope", "correction") == "correction"]
     proposed = sum(1 for c in corrections if c.get("status") == "proposed")
     if not approved:
@@ -70,7 +74,11 @@ def main():
             if c.get("turn") is not None and c["turn"] != i:
                 continue
             flags = re.I if "i" in c.get("flags", "") else 0
-            txt, n = re.subn(c["pattern"], c["replacement"], txt, flags=flags)
+            # literal replacement (lambda): a backslash or \1 in an LLM-proposed
+            # replacement is inserted verbatim, never interpreted as a regex
+            # backreference (which would raise re.error or silently mangle text).
+            txt, n = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
+                             txt, flags=flags)
             if n:
                 counts[c["pattern"]] = counts.get(c["pattern"], 0) + n
         t["text"] = txt

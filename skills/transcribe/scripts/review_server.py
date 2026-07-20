@@ -51,15 +51,24 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        payload = json.loads(self.rfile.read(n) or b"{}")
+        # fail closed: a malformed Content-Length or body returns 400 rather
+        # than crashing the single-threaded server and losing the session.
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(n) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            self._json(400, {"ok": False, "error": "malformed request"})
+            return
         if self.path == "/apply":
             cpath = WORK / "corrections.json"
             data = json.loads(cpath.read_text()) if cpath.exists() else {"corrections": []}
             corrections = data.get("corrections", [])
             decided = 0
             for idx, verdict in (payload.get("decisions") or {}).items():
-                i = int(idx)
+                try:
+                    i = int(idx)
+                except (ValueError, TypeError):
+                    continue
                 if 0 <= i < len(corrections) and verdict in ("approved", "rejected") \
                         and corrections[i].get("status") == "proposed":
                     corrections[i]["status"] = verdict

@@ -14,7 +14,7 @@ classes (each contributed by a real catch, 318 Russell St 7.3, 2026-07-18):
                            non-negated alternative resolves the contradiction
                            ("It's not a prenup, there's an agreement ahead of
                            time" -> "It's like a prenup, ...")
-4. grammar-disagreement  — subject-verb mismatch flags an ASR boundary
+4. grammar-artifact      — subject-verb mismatch flags an ASR boundary
                            artifact; the repair is the PHONETICALLY-nearest
                            token change, not the grammar-checker fix
                            ("borrow checkers certainly has" -> "borrow checker

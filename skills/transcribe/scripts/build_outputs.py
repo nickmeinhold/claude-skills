@@ -75,24 +75,34 @@ def is_orphan_echo(t, prev):
     return t["start"] - prev["end"] <= 3.0
 
 
-_kept, _prev = [], None
-for _t in turns:
-    if is_orphan_echo(_t, _prev):
-        print(f'  dedupe: dropped orphan echo at {_t["start"]:.1f}s '
-              f'({_t.get(KEY)}): "{_t["text"][:40]}"', flush=True)
-        continue
-    _kept.append(_t)
-    _prev = _t
-turns = _kept
+def drop_orphans(turn_list, log=False):
+    kept, prev = [], None
+    for t in turn_list:
+        if is_orphan_echo(t, prev):
+            if log:
+                print(f'  dedupe: dropped orphan echo at {t["start"]:.1f}s '
+                      f'({t.get(KEY)}): "{t["text"][:40]}"', flush=True)
+            continue
+        kept.append(t)
+        prev = t
+    return kept
+
+
+# orig_turns preserves the original turns_named.json indices, so scope=edit
+# corrections (anchored by turn index, exactly like scope=correction) map to
+# the right utterance even though orphan-drop reindexes the canonical list.
+orig_turns = list(turns)
+turns = drop_orphans(orig_turns, log=True)
 
 # intelligent-verbatim: approved scope=edit corrections drive a SECOND rendering
 EDITS = []
 _cpath = WORK / "corrections.json"
 if _cpath.exists():
     _cdata = json.loads(_cpath.read_text())
+    # fail closed: only an EXPLICIT status=="approved" edit is rendered.
     EDITS = [c for c in _cdata.get("corrections", [])
              if c.get("scope") == "edit"
-             and c.get("status", "approved") == "approved"]
+             and c.get("status") == "approved"]
 
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed",
            "#0891b2", "#db2777", "#65a30d", "#9333ea", "#0d9488"]
@@ -112,14 +122,20 @@ def fmt_srt(t):
 
 
 # coalesce consecutive same-speaker turns
-blocks = []
-for t in turns:
-    spk = nice(t[KEY])
-    if blocks and blocks[-1]["spk"] == spk:
-        blocks[-1]["text"] += " " + t["text"]
-        blocks[-1]["end"] = t["end"]
-    else:
-        blocks.append({"spk": spk, "text": t["text"], "start": t["start"], "end": t["end"]})
+def coalesce(turn_list):
+    out = []
+    for t in turn_list:
+        spk = nice(t[KEY])
+        if out and out[-1]["spk"] == spk:
+            out[-1]["text"] += " " + t["text"]
+            out[-1]["end"] = t["end"]
+        else:
+            out.append({"spk": spk, "text": t["text"],
+                        "start": t["start"], "end": t["end"]})
+    return out
+
+
+blocks = coalesce(turns)
 
 # discover speakers in first-appearance order
 seen = []
@@ -182,13 +198,30 @@ render_html(blocks, mode, "transcript.html")
 
 if EDITS:
     import copy
-    eblocks = copy.deepcopy(blocks)
+    # Apply edits at the TURN level (by turn index into orig_turns) so a
+    # turn-anchored edit touches ONLY its own utterance — the same evidence-
+    # local guarantee as scope=correction, instead of the old global re.subn
+    # over coalesced blocks. Literal replacement (lambda) so a backslash in the
+    # proposal is inserted verbatim, never read as a regex backreference. An
+    # unscoped edit (turn is None — a hand-written global edit) still applies
+    # everywhere, preserving that manual affordance.
+    edited_turns = copy.deepcopy(orig_turns)
     n_edits = 0
-    for b in eblocks:
-        for c in EDITS:
-            flags = re.I if "i" in c.get("flags", "") else 0
-            b["text"], k = re.subn(c["pattern"], c["replacement"], b["text"], flags=flags)
+    for c in EDITS:
+        flags = re.I if "i" in c.get("flags", "") else 0
+        tn = c.get("turn")
+        if isinstance(tn, int):
+            targets = [edited_turns[tn]] if 0 <= tn < len(edited_turns) else []
+        elif tn is None:
+            targets = edited_turns
+        else:
+            targets = []
+        for t in targets:
+            t["text"], k = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
+                                   t["text"], flags=flags)
             n_edits += k
+    eblocks = coalesce(drop_orphans(edited_turns))
+    for b in eblocks:
         # tidy double spaces edits leave behind
         b["text"] = re.sub(r"\s{2,}", " ", b["text"]).strip()
     render_html(eblocks, mode + " · intelligent verbatim (edited)", "transcript_edited.html")

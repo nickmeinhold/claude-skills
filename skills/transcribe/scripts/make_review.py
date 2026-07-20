@@ -123,7 +123,19 @@ for idx, c in proposed:
   <div class="note">{escape(c.get("note", ""))}</div>
 </div>''')
 
-corr_json = json.dumps({"corrections": corrections}, ensure_ascii=False)
+def js_safe(s):
+    """Make a JSON string safe to embed inside an HTML <script> block: neutralize
+    </script> breakout and the two line-separator code points JS forbids in
+    string literals. Applies to any transcript/LLM text carried into the page."""
+    return (s.replace("<", "\\u003c")
+             .replace(" ", "\\u2028")
+             .replace(" ", "\\u2029"))
+
+
+corr_json = js_safe(json.dumps({"corrections": corrections}, ensure_ascii=False))
+# JS string literal (not HTML): json.dumps gives a proper quoted/escaped literal;
+# html.escape would NOT (a quote/backslash/newline in WORK breaks the JS).
+key_js = js_safe(json.dumps("repair-review::" + str(WORK)))
 html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Repair review — {escape(TITLE)}</title>
@@ -228,7 +240,7 @@ document.addEventListener("DOMContentLoaded", () => {{
 </script>
 <script>
 const CORR = {corr_json};
-const KEY = "repair-review::{escape(str(WORK))}";
+const KEY = {key_js};
 let decisions = JSON.parse(localStorage.getItem(KEY) || "{{}}");
 
 function paint() {{
