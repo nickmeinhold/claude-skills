@@ -42,13 +42,22 @@ WORK = Path(os.environ["TRANSCRIBE_WORK"])
 
 def make_repl(r):
     """Literal + IDEMPOTENT replacement function for re.subn. Inserts r verbatim
-    (no regex backreferences), BUT if r is already present starting at the match
-    position, leaves the matched text untouched. This makes re-application a
-    no-op: running apply twice on already-corrected text can't re-expand a
-    self-matching replacement ("Worry"->"Worrying" then "Worryinging")."""
+    (no regex backreferences). Idempotent: if this match already lies INSIDE an
+    existing copy of r anywhere in the string, the matched text is left untouched
+    — so re-running apply on already-corrected text can't re-expand a
+    self-matching replacement, at ANY offset: "Worry"->"Worrying" (prefix),
+    "cat"->"the cat" (suffix), "bar"->"foobar" (internal). An empty r (deletion)
+    always applies and is naturally idempotent (the matched text is removed)."""
     def _repl(m):
-        s, a = m.string, m.start()
-        return m.group(0) if s[a:a + len(r)] == r else r
+        if not r:
+            return r
+        s, a, b = m.string, m.start(), m.end()
+        i = s.find(r)
+        while i != -1:
+            if i <= a and b <= i + len(r):
+                return m.group(0)  # match already inside an applied replacement
+            i = s.find(r, i + 1)
+        return r
     return _repl
 
 
