@@ -188,7 +188,10 @@ def main():
     # ALL statuses including rejected: re-running --repair will NOT re-surface a
     # finding the human already rejected (respect the veto — don't re-nag). To
     # reconsider a rejection, delete its row from corrections.json.
-    known = {(c.get("pattern"), c.get("replacement"), c.get("turn"), c.get("scope"))
+    # normalize existing scope through derive_scope too (NOT raw c.get("scope")),
+    # so a manual/old row with a missing scope keys the same way a new finding
+    # for the same text does — otherwise the dedup misses and duplicates pile up.
+    known = {(c.get("pattern"), c.get("replacement"), c.get("turn"), derive_scope(c))
              for c in existing}
     added = 0
     for f in findings:
