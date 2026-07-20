@@ -22,6 +22,11 @@ from pathlib import Path
 
 WORK = Path(os.environ["TRANSCRIBE_WORK"])
 TITLE = os.environ.get("TRANSCRIBE_TITLE", "Transcript")
+# CSRF nonce shared with review_server.py via env (run.sh --review mints it).
+# The page echoes it in a custom header on every mutating POST; a cross-origin
+# page can neither read it (same-origin) nor set a custom header without a CORS
+# preflight the server never grants.
+REVIEW_TOKEN = os.environ.get("TRANSCRIBE_REVIEW_TOKEN", "")
 
 cpath = WORK / "corrections.json"
 data = json.loads(cpath.read_text()) if cpath.exists() else {"corrections": []}
@@ -29,7 +34,8 @@ data = json.loads(cpath.read_text()) if cpath.exists() else {"corrections": []}
 corrections = (data.get("corrections", []) if isinstance(data, dict)
                else data if isinstance(data, list) else [])
 proposed = [(i, c) for i, c in enumerate(corrections)
-            if c.get("status") == "proposed"]
+            if c.get("status") == "proposed"
+            and c.get("pattern") and c.get("replacement") is not None]
 
 src = WORK / "turns_named.json"
 if not src.exists():
@@ -151,6 +157,7 @@ corr_json = js_safe(_raw_corr)
 # must not survive a change to the list they index into.
 _corr_fp = hashlib.sha1(_raw_corr.encode("utf-8")).hexdigest()[:8]
 key_js = js_safe(json.dumps("repair-review::" + str(WORK) + "::" + _corr_fp))
+token_js = js_safe(json.dumps(REVIEW_TOKEN))
 html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Repair review — {escape(TITLE)}</title>
@@ -256,6 +263,7 @@ document.addEventListener("DOMContentLoaded", () => {{
 <script>
 const CORR = {corr_json};
 const KEY = {key_js};
+const REVIEW_TOKEN = {token_js};
 let decisions = JSON.parse(localStorage.getItem(KEY) || "{{}}");
 
 function paint() {{
@@ -298,13 +306,14 @@ async function finish() {{
     try {{
       if (decided) {{
         const r = await fetch("/apply", {{method: "POST",
-          headers: {{"Content-Type": "application/json"}},
+          headers: {{"Content-Type": "application/json", "X-Review-Token": REVIEW_TOKEN}},
           body: JSON.stringify({{decisions}})}});
         const res = await r.json();
         if (!res.ok) {{ alert("Apply failed — see the terminal running --review."); return; }}
         localStorage.removeItem(KEY);
       }}
-      await fetch("/finish", {{method: "POST"}});
+      await fetch("/finish", {{method: "POST",
+        headers: {{"X-Review-Token": REVIEW_TOKEN}}}});
     }} catch (e) {{ alert("Review server unreachable: " + e); return; }}
     endPage();
   }} else {{

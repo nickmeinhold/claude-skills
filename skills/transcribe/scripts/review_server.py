@@ -26,6 +26,10 @@ from pathlib import Path
 WORK = Path(os.environ["TRANSCRIBE_WORK"])
 SCRIPTS = Path(__file__).parent
 PY = sys.executable
+# CSRF nonce: run.sh --review mints TRANSCRIBE_REVIEW_TOKEN and the served page
+# echoes it as X-Review-Token on every POST. When set, mismatching/absent tokens
+# are rejected — a cross-origin page can't read it or send the custom header.
+REVIEW_TOKEN = os.environ.get("TRANSCRIBE_REVIEW_TOKEN", "")
 
 
 def run_stage(script):
@@ -55,6 +59,10 @@ class Handler(SimpleHTTPRequestHandler):
     MAX_BODY = 4 << 20  # 4 MiB — a decisions map is tiny; refuse floods
 
     def do_POST(self):
+        # CSRF: reject any POST lacking the shared nonce (when one is configured).
+        if REVIEW_TOKEN and self.headers.get("X-Review-Token") != REVIEW_TOKEN:
+            self._json(403, {"ok": False, "error": "forbidden"})
+            return
         # fail closed: a malformed/oversized Content-Length or body returns an
         # error rather than crashing the single-threaded server.
         try:

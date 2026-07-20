@@ -70,6 +70,8 @@ if [ "${1:-}" = "--review" ]; then
   [ -n "$CONFIG" ] && [ ! -f "$CONFIG" ] && { echo "no such config: $CONFIG" >&2; exit 1; }
   export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
+  # CSRF nonce shared by make_review (embeds it) + review_server (requires it)
+  export TRANSCRIBE_REVIEW_TOKEN="${TRANSCRIBE_REVIEW_TOKEN:-$(python3 -c 'import secrets;print(secrets.token_urlsafe(18))')}"
   "$PARAKEET_PY" "$DIR/make_review.py"
   exec "$PARAKEET_PY" "$DIR/review_server.py"
 fi

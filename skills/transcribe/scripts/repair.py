@@ -150,6 +150,16 @@ def fmt_ts(t):
     return f"{int(t//3600):02d}:{int(t%3600//60):02d}:{int(t%60):02d}"
 
 
+def derive_scope(f):
+    """scope closed to {correction, edit}; a CLASS edit (case-folded) forces
+    scope=edit so a readability change can never bake into the canonical
+    verbatim. Any other value collapses to correction."""
+    if str(f.get("class", "")).strip().lower() == "edit" \
+            or str(f.get("scope", "")).strip().lower() == "edit":
+        return "edit"
+    return "correction"
+
+
 def main():
     src = WORK / "turns_named.json"
     if not src.exists():
@@ -177,15 +187,7 @@ def main():
              for c in existing}
     added = 0
     for f in findings:
-        klass = str(f.get("class", "?")).strip().lower()
-        # scope is derived from class, not trusted from the model: a CLASS edit
-        # ALWAYS gets scope=edit (so a readability change can never masquerade as
-        # a correction and get burned into the canonical verbatim). Case-folded so
-        # "Edit"/"EDIT"/" edit " don't fail open. Any other value -> "correction";
-        # the set is closed to {correction, edit}.
-        scope = "edit" if (klass == "edit"
-                           or str(f.get("scope", "")).strip().lower() == "edit") \
-            else "correction"
+        scope = derive_scope(f)
         # "turn" anchors the fix to the turn the EVIDENCE came from: the
         # applier only touches that turn, so a short verbatim like "the list"
         # can never rewrite innocent occurrences elsewhere in the transcript.
@@ -210,7 +212,7 @@ def main():
     for f in findings:
         t = turns[f["i"]]
         lines.append(f"- [{fmt_ts(t['start'])}] {t.get('speaker', '?')} "
-                     f"**{f.get('class', '?')}** ({f.get('scope', 'correction')}): "
+                     f"**{f.get('class', '?')}** ({derive_scope(f)}): "
                      f"“{f['verbatim']}” → “{f['proposed']}”"
                      f" — {f.get('evidence', '')}")
     unknowns = [f for f in findings if "UNKNOWN" in f.get("evidence", "").upper()]

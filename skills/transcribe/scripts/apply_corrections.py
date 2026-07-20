@@ -40,6 +40,18 @@ from pathlib import Path
 WORK = Path(os.environ["TRANSCRIBE_WORK"])
 
 
+def make_repl(r):
+    """Literal + IDEMPOTENT replacement function for re.subn. Inserts r verbatim
+    (no regex backreferences), BUT if r is already present starting at the match
+    position, leaves the matched text untouched. This makes re-application a
+    no-op: running apply twice on already-corrected text can't re-expand a
+    self-matching replacement ("Worry"->"Worrying" then "Worryinging")."""
+    def _repl(m):
+        s, a = m.string, m.start()
+        return m.group(0) if s[a:a + len(r)] == r else r
+    return _repl
+
+
 def load_corrections():
     p = WORK / "corrections.json"
     if not p.exists():
@@ -86,11 +98,11 @@ def main():
             # uses re.search); unscoped hand corrections (glossary fixes) still
             # replace every occurrence globally (count=0).
             count = 1 if c.get("turn") is not None else 0
-            # literal replacement (lambda): a backslash or \1 in an LLM-proposed
-            # replacement is inserted verbatim, never interpreted as a regex
-            # backreference (which would raise re.error or silently mangle text).
+            # literal + idempotent replacement (see make_repl): backrefs are never
+            # interpreted, and an already-applied replacement is left untouched so
+            # repeated apply passes don't re-expand self-matching text.
             try:
-                txt, n = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
+                txt, n = re.subn(c["pattern"], make_repl(c["replacement"]),
                                  txt, count=count, flags=flags)
             except re.error as e:
                 # a bad hand-written PATTERN skips itself, doesn't nuke the batch
