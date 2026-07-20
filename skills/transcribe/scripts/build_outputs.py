@@ -2,9 +2,13 @@
 """Assemble final deliverables: transcript.html / .txt / .srt.
 
 Reads turns_named.json if present (named speakers), else turns.json (anonymous
-clusters rendered as "Speaker 0/1/..."). Coalesces consecutive same-speaker turns,
-auto-discovers however many speakers in first-appearance order, assigns a stable
-colour per speaker.
+clusters rendered as "Speaker 0/1/..."). Drops orphan-echo duplicate turns,
+coalesces consecutive same-speaker turns, auto-discovers however many speakers
+in first-appearance order, assigns a stable colour per speaker.
+
+If corrections.json contains APPROVED scope=edit entries (intelligent-verbatim
+suggestions from repair.py), additionally renders transcript_edited.html with
+those edits applied. The canonical verbatim outputs are never touched by edits.
 """
 import json
 import os
@@ -25,14 +29,13 @@ if _cfg_path and Path(_cfg_path).exists():
         if isinstance(_t, dict) and _t.get("url"):
             LINKS[_t["term"]] = _t["url"]
 
-_linked = set()
 _patterns = sorted(LINKS, key=len, reverse=True)  # longest first: "aiko chat" before "aiko"
 
 
-def linkify(escaped_text):
+def linkify(escaped_text, linked):
     """Wrap the FIRST occurrence (per document) of each linked term in <a>."""
     for term in _patterns:
-        if term in _linked:
+        if term in linked:
             continue
         m = re.search(rf"\b{re.escape(escape(term))}\b", escaped_text, re.I)
         if m:
@@ -40,13 +43,70 @@ def linkify(escaped_text):
             escaped_text = (escaped_text[:m.start()]
                             + f'<a href="{url}">{m.group(0)}</a>'
                             + escaped_text[m.end():])
-            _linked.add(term)
+            linked.add(term)
     return escaped_text
+
 
 named = WORK / "turns_named.json"
 src = named if named.exists() else WORK / "turns.json"
 turns = json.loads(src.read_text())
 KEY = "speaker" if named.exists() else "cluster"
+
+
+def is_orphan_echo(t, prev):
+    """A diarization double-count: a short utterance assigned BOTH to the tail
+    of the previous turn and to a stray UNATTRIBUTED turn of its own ("nick has
+    as well" duplicated as SPEAKER_01 in a named transcript, 7.3 session).
+
+    Fires ONLY in named mode, ONLY on turns attribution left as a raw
+    SPEAKER_nn label. A speaker-change echo ("...yeah" followed by another
+    speaker's "yeah") is REAL backchannel speech — the first version of this
+    heuristic dropped 8 such turns on the 7.3 session, which is why the gate
+    is this tight. Every drop is logged."""
+    if KEY != "speaker":
+        return False  # anonymous mode: every label is SPEAKER_nn; never fire
+    if not re.match(r"SPEAKER_\d+$", str(t.get(KEY, ""))):
+        return False  # attribution assigned a real name: never drop
+    txt = t.get("text", "").strip()
+    if not txt or len(txt) > 40 or prev is None:
+        return False
+    if not prev.get("text", "").strip().lower().endswith(txt.lower()):
+        return False
+    return t["start"] - prev["end"] <= 3.0
+
+
+def drop_orphans(turn_list, log=False):
+    kept, prev = [], None
+    for t in turn_list:
+        if is_orphan_echo(t, prev):
+            if log:
+                print(f'  dedupe: dropped orphan echo at {t["start"]:.1f}s '
+                      f'({t.get(KEY)}): "{t["text"][:40]}"', flush=True)
+            continue
+        kept.append(t)
+        prev = t
+    return kept
+
+
+# orig_turns preserves the original turns_named.json indices, so scope=edit
+# corrections (anchored by turn index, exactly like scope=correction) map to
+# the right utterance even though orphan-drop reindexes the canonical list.
+orig_turns = list(turns)
+turns = drop_orphans(orig_turns, log=True)
+
+# intelligent-verbatim: approved scope=edit corrections drive a SECOND rendering
+EDITS = []
+_cpath = WORK / "corrections.json"
+if _cpath.exists():
+    _cdata = json.loads(_cpath.read_text())
+    # tolerant load: corrections.json may be {"corrections": [...]} or a bare list.
+    _clist = (_cdata.get("corrections", []) if isinstance(_cdata, dict)
+              else _cdata if isinstance(_cdata, list) else [])
+    # fail closed: only an EXPLICIT status=="approved" edit is rendered.
+    EDITS = [c for c in _clist
+             if c.get("scope") == "edit"
+             and c.get("status") == "approved"
+             and c.get("pattern") and c.get("replacement") is not None]
 
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed",
            "#0891b2", "#db2777", "#65a30d", "#9333ea", "#0d9488"]
@@ -66,21 +126,27 @@ def fmt_srt(t):
 
 
 # coalesce consecutive same-speaker turns
-blocks = []
-for t in turns:
-    spk = nice(t[KEY])
-    if blocks and blocks[-1]["spk"] == spk:
-        blocks[-1]["text"] += " " + t["text"]
-        blocks[-1]["end"] = t["end"]
-    else:
-        blocks.append({"spk": spk, "text": t["text"], "start": t["start"], "end": t["end"]})
+def coalesce(turn_list):
+    out = []
+    for t in turn_list:
+        spk = nice(t[KEY])
+        if out and out[-1]["spk"] == spk:
+            out[-1]["text"] += " " + t["text"]
+            out[-1]["end"] = t["end"]
+        else:
+            out.append({"spk": spk, "text": t["text"],
+                        "start": t["start"], "end": t["end"]})
+    return out
 
-# discover speakers in first-appearance order
+
+blocks = coalesce(turns)
+
+# canonical speaker set (for the summary line only; render_html derives its own
+# per-rendering palette from the blocks it actually renders)
 seen = []
 for b in blocks:
     if b["spk"] not in seen:
         seen.append(b["spk"])
-color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
 
 # txt
 (WORK / "transcript_speakers.txt").write_text(
@@ -91,22 +157,31 @@ color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
     "\n".join(f'{i}\n{fmt_srt(t["start"])} --> {fmt_srt(t["end"])}\n[{nice(t[KEY])}] {t["text"]}\n'
               for i, t in enumerate(turns, 1)))
 
-# html
-rows = "\n".join(
-    f'<div class="turn" id="t{int(b["start"])}"><div class="meta"><span class="spk" style="color:{color[b["spk"]]}">'
-    f'{escape(b["spk"])}</span><a class="ts" href="#t{int(b["start"])}">{fmt_ts(b["start"])[:8]}</a></div>'
-    f'<div class="text" style="border-left:3px solid {color[b["spk"]]}">{linkify(escape(b["text"]))}</div></div>'
-    for b in blocks)
-refs = ""
-if _linked:
-    items = "".join(f'<li><a href="{escape(LINKS[t], quote=True)}">{escape(t)}</a></li>'
-                    for t in sorted(_linked, key=str.lower))
-    refs = f'<div class="refs"><h2>References</h2><ul>{items}</ul></div>'
-legend = " &nbsp;&nbsp; ".join(
-    f'<span><span class="dot" style="background:{color[s]}"></span>{escape(s)}</span>' for s in seen)
-last = fmt_ts(blocks[-1]["end"])[:8] if blocks else "00:00:00"
-mode = "named (LLM attribution)" if named.exists() else "anonymous diarization"
-html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+
+def render_html(blocks_, mode_note, out_name):
+    # speaker set + palette derived from the blocks ACTUALLY rendered, so the
+    # edited rendering (which re-runs drop_orphans on edited text and can expose a
+    # raw SPEAKER_nn absent from the canonical set) never KeyErrors on color[spk].
+    seen_ = []
+    for b in blocks_:
+        if b["spk"] not in seen_:
+            seen_.append(b["spk"])
+    color_ = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen_)}
+    linked = set()
+    rows = "\n".join(
+        f'<div class="turn" id="t{int(b["start"])}"><div class="meta"><span class="spk" style="color:{color_[b["spk"]]}">'
+        f'{escape(b["spk"])}</span><a class="ts" href="#t{int(b["start"])}">{fmt_ts(b["start"])[:8]}</a></div>'
+        f'<div class="text" style="border-left:3px solid {color_[b["spk"]]}">{linkify(escape(b["text"]), linked)}</div></div>'
+        for b in blocks_)
+    refs = ""
+    if linked:
+        items = "".join(f'<li><a href="{escape(LINKS[t], quote=True)}">{escape(t)}</a></li>'
+                        for t in sorted(linked, key=str.lower))
+        refs = f'<div class="refs"><h2>References</h2><ul>{items}</ul></div>'
+    legend = " &nbsp;&nbsp; ".join(
+        f'<span><span class="dot" style="background:{color_[s]}"></span>{escape(s)}</span>' for s in seen_)
+    last = fmt_ts(blocks_[-1]["end"])[:8] if blocks_ else "00:00:00"
+    html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(TITLE)} — Transcript</title>
 <style>
@@ -122,10 +197,56 @@ html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
  .refs h2{{font-size:1rem;margin-bottom:.4rem}} .refs ul{{columns:2;list-style:none;padding:0}} .refs li{{margin-bottom:.2rem}}
 </style></head><body>
 <h1>{escape(TITLE)}</h1>
-<div class="sub">Parakeet-1.1b + pyannote (local, Apple Silicon) · {mode} · ends {last} · {len(seen)} speakers · {len(blocks)} turns</div>
+<div class="sub">Parakeet-1.1b + pyannote (local, Apple Silicon) · {mode_note} · ends {last} · {len(seen_)} speakers · {len(blocks_)} turns</div>
 <div class="legend">{legend}</div>
 {rows}
 {refs}
 </body></html>'''
-(WORK / "transcript.html").write_text(html)
+    (WORK / out_name).write_text(html)
+
+
+mode = "named (LLM attribution)" if named.exists() else "anonymous diarization"
+render_html(blocks, mode, "transcript.html")
+
+if EDITS:
+    import copy
+    from apply_corrections import apply_literal  # ONE mutator for both scopes
+    # Apply edits at the TURN level (by turn index into orig_turns) so a
+    # turn-anchored edit touches ONLY its own utterance — the same evidence-
+    # local guarantee, and the SAME literal+idempotent scanner, as
+    # scope=correction (no divergent edit-vs-correction mutator). An unscoped
+    # edit (turn None) applies everywhere, preserving that manual affordance.
+    edited_turns = copy.deepcopy(orig_turns)
+    n_edits = 0
+    for c in EDITS:
+        flags = re.I if "i" in (c.get("flags") or "") else 0  # tolerate flags: null
+        tn = c.get("turn")
+        try:
+            tn = int(tn) if tn is not None else None  # tolerate "turn": "3"
+        except (ValueError, TypeError):
+            tn = None
+        if tn is not None:
+            targets = [edited_turns[tn]] if 0 <= tn < len(edited_turns) else []
+        else:
+            targets = edited_turns
+        try:
+            for t in targets:
+                t["text"], k = apply_literal(c["pattern"], c["replacement"],
+                                             t["text"], flags=flags,
+                                             first_only=tn is not None)
+                n_edits += k
+        except re.error as e:
+            print(f"  skip edit with bad pattern {c['pattern']!r}: {e}", flush=True)
+            continue
+    eblocks = coalesce(drop_orphans(edited_turns))
+    for b in eblocks:
+        # tidy double spaces edits leave behind
+        b["text"] = re.sub(r"\s{2,}", " ", b["text"]).strip()
+    render_html(eblocks, mode + " · intelligent verbatim (edited)", "transcript_edited.html")
+    print(f"  transcript_edited.html -> {n_edits} edits applied "
+          f"({len(EDITS)} approved edit entries)", flush=True)
+else:
+    # no approved edits → don't leave a stale edited rendering from a prior run
+    (WORK / "transcript_edited.html").unlink(missing_ok=True)
+
 print(f"  transcript.html / .txt / .srt -> {len(blocks)} turns, {len(seen)} speakers: {seen}", flush=True)

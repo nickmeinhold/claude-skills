@@ -22,7 +22,14 @@ bash ~/.claude/skills/transcribe/scripts/run.sh <audio-or-video-file> [speakers.
 
 Outputs land in `~/git/transcribe-<basename>/`: `transcript.html` (open this),
 `transcript_speakers.txt`, `transcript_speakers.srt`, plus the intermediates
-(`audio.json`, `diarization.rttm`, `turns.json`, `turns_named.json`).
+(`audio.json`, `diarization.rttm`, `turns.json`, `turns_named.json`) and the
+repair artifacts (`corrections.json`, `repair_report.md`).
+
+> **Ops notes.** (1) The work dir is named from the audio **basename verbatim —
+> spaces included** (`318 Russell St 7 3.m4a` → `~/git/transcribe-318 Russell St
+> 7 3/`); anything watching the run must use that real path. (2) Recordings over
+> ~1.5 h outlive agent tool timeouts — run **detached** (`nohup … & disown`,
+> log to a file, watch the log), don't trust backgrounded-tool-call semantics.
 
 ### Re-attribute (fix names without re-transcribing)
 
@@ -36,6 +43,8 @@ bash ~/.claude/skills/transcribe/scripts/run.sh --reattribute <workdir> <speaker
 ```
 
 This skips the slow diarize/transcribe steps (~60–90s, not the full pipeline).
+Re-attribution regenerates `turns_named.json`, but approved entries in
+`corrections.json` are automatically re-applied afterwards — hand fixes survive.
 Anchors are the single biggest accuracy lever — strictly better than the first
 pass, which had none to seed from. Use this when a misattribution slips through,
 or to upgrade a profile-only first pass. (Attribution self-heals failed chunks by
@@ -45,6 +54,68 @@ beat profiles for same-gender / low-dialogue speakers.)
 > Work dir defaults to `~/git/...`, NOT `~/Downloads` — the latter is macOS
 > TCC-protected and the auto-updating `claude` binary loses access to it (see
 > memory `reference-downloads-tcc-treadmill`). Override with `TRANSCRIBE_WORK=...`.
+
+### Repair pass & corrections (propose → review → apply)
+
+After attribution, a **propose-only LLM repair pass** hunts what the glossary
+correction structurally cannot see. Its detector classes, each born from a real
+catch (7.3 session, 2026-07-18):
+
+- **proper-noun-garble** — residual unknown names rendered as phonetic English
+- **semantic-absurdity × phonetic neighbor** — "picture requests" → "feature requests"
+- **polarity-flip × pragmatic contradiction** — "It's *not* a prenup, there's an
+  agreement ahead of time" → "It's *like* a prenup…" (a negation followed by the
+  negated thing's own definition; highest stakes — inverts meaning invisibly)
+- **grammar-artifact** — suffix-level ASR artifacts flagged by ungrammaticality,
+  repaired by the phonetically-nearest morpheme change ("borrow checker**s**
+  certainly has" → "borrow checker certainly has"; "Worry about this is" →
+  "Worry**ing** about this is") — never the naive grammar-checker fix
+- **edit** (scope=edit) — intelligent-verbatim suggestions (false starts,
+  dangling conjunctions) that only ever affect `transcript_edited.html`
+
+**Nothing auto-applies.** Findings land in `corrections.json` as
+`status: "proposed"` with a readable `repair_report.md` — and, the primary
+review surface, **`repair_review.html`**: every proposal rendered in its
+turn's context as a diff (struck-out red original, green replacement) with
+per-finding **Apply / Reject** buttons, bulk buttons, expandable `…` context,
+and a live tally. The review loop is ONE command:
+
+```bash
+bash ~/.claude/skills/transcribe/scripts/run.sh --review <workdir> <speakers.json>
+```
+
+This serves the page from a tiny localhost server (stdlib, 127.0.0.1, free
+port) and opens it. Click through the proposals; the final **OK** posts your
+decisions, applies the approved corrections, regenerates the page, rebuilds
+the transcript, and shuts the server down. Undecided proposals stay proposed
+for a later pass. Opened as a bare `file://` (no server), the page falls back
+to an Export button that downloads the decided `corrections.json` for a
+manual `--apply`.
+
+```bash
+# re-run the repair hunt later (e.g. after growing the glossary):
+bash ~/.claude/skills/transcribe/scripts/run.sh --repair <workdir> <speakers.json>
+# apply already-approved corrections without reviewing (no LLM):
+bash ~/.claude/skills/transcribe/scripts/run.sh --apply <workdir> <speakers.json>
+```
+
+The review page is regenerated at every stage that can change the proposal
+set (full run, `--repair`, `--apply`, `--reattribute`, each server-side
+apply), so it always shows exactly the still-undecided proposals.
+
+`corrections.json` is the durable home of every fix (regex `pattern` →
+`replacement`, optional `flags: "i"`, `scope: correction|edit`): approved
+entries are re-applied after every re-attribution, so manual fixes are never
+lost. Add hand corrections here too, not by editing turns directly. Approved
+`scope: edit` entries produce an additional `transcript_edited.html`
+("intelligent verbatim") — the canonical verbatim outputs are never edited.
+
+Why propose-only: the literature measures 3–12% hallucinated words when LLMs
+freely "fix" transcripts, with damage worst on already-accurate text; fail-closed
+review is the established mitigation (RLLM-CF, PMF-CEC). Skip the pass with
+`TRANSCRIBE_SKIP_REPAIR=1`. Findings marked UNKNOWN in the report are the
+glossary growth loop's feed: web-search them, then add resolved spellings to the
+matching roster.
 
 ## speakers.json
 
@@ -113,7 +184,8 @@ every future transcript.
 3. **Transcribe** — `parakeet-tdt-1.1b` with word-level timestamps.
 4. **Fuse + clean** — assign each WORD to its speaker turn by midpoint, split on >0.6s silence gaps, strip fillers (um/uh/…) and immediate word-repeats (`wordmerge.py` + `clean_text.py`).
 5. **Attribute** *(only if speakers.json)* — headless Claude labels each turn by speech pattern + flow, anchored on the ground-truth lines, split-aware, with light ASR fixups (`attribute.py`). Tools/MCP disabled so calls don't hang.
-6. **Build** — `build_outputs.py` → html/txt/srt; auto-discovers however many speakers, stable colour per name.
+6. **Repair + apply** *(only if speakers.json; skip with `TRANSCRIBE_SKIP_REPAIR=1`)* — propose-only LLM hunt for residual garbles / ordinary-word slips / polarity flips / grammar artifacts → `corrections.json` + `repair_report.md` (`repair.py`); then approved corrections are applied (`apply_corrections.py`). See "Repair pass & corrections" above.
+7. **Build** — `build_outputs.py` → html/txt/srt (+ `transcript_edited.html` when approved edits exist); drops orphan-echo duplicate turns (logged); auto-discovers however many speakers, stable colour per name.
 
 ## Keeping it fresh
 
