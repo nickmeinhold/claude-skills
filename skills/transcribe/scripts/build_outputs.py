@@ -210,31 +210,30 @@ render_html(blocks, mode, "transcript.html")
 
 if EDITS:
     import copy
+    from apply_corrections import apply_literal  # ONE mutator for both scopes
     # Apply edits at the TURN level (by turn index into orig_turns) so a
     # turn-anchored edit touches ONLY its own utterance — the same evidence-
-    # local guarantee as scope=correction, instead of the old global re.subn
-    # over coalesced blocks. Literal replacement (lambda) so a backslash in the
-    # proposal is inserted verbatim, never read as a regex backreference. An
-    # unscoped edit (turn is None — a hand-written global edit) still applies
-    # everywhere, preserving that manual affordance.
+    # local guarantee, and the SAME literal+idempotent scanner, as
+    # scope=correction (no divergent edit-vs-correction mutator). An unscoped
+    # edit (turn None) applies everywhere, preserving that manual affordance.
     edited_turns = copy.deepcopy(orig_turns)
     n_edits = 0
     for c in EDITS:
         flags = re.I if "i" in (c.get("flags") or "") else 0  # tolerate flags: null
         tn = c.get("turn")
-        if isinstance(tn, int):
+        try:
+            tn = int(tn) if tn is not None else None  # tolerate "turn": "3"
+        except (ValueError, TypeError):
+            tn = None
+        if tn is not None:
             targets = [edited_turns[tn]] if 0 <= tn < len(edited_turns) else []
-        elif tn is None:
-            targets = edited_turns
         else:
-            targets = []
-        # turn-scoped edit → first match only (matches the review preview);
-        # unscoped edit (turn None) → every occurrence in every turn.
-        count = 1 if isinstance(tn, int) else 0
+            targets = edited_turns
         try:
             for t in targets:
-                t["text"], k = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
-                                       t["text"], count=count, flags=flags)
+                t["text"], k = apply_literal(c["pattern"], c["replacement"],
+                                             t["text"], flags=flags,
+                                             first_only=tn is not None)
                 n_edits += k
         except re.error as e:
             print(f"  skip edit with bad pattern {c['pattern']!r}: {e}", flush=True)
@@ -246,5 +245,8 @@ if EDITS:
     render_html(eblocks, mode + " · intelligent verbatim (edited)", "transcript_edited.html")
     print(f"  transcript_edited.html -> {n_edits} edits applied "
           f"({len(EDITS)} approved edit entries)", flush=True)
+else:
+    # no approved edits → don't leave a stale edited rendering from a prior run
+    (WORK / "transcript_edited.html").unlink(missing_ok=True)
 
 print(f"  transcript.html / .txt / .srt -> {len(blocks)} turns, {len(seen)} speakers: {seen}", flush=True)

@@ -99,6 +99,14 @@ def main():
                 if c.get("status") == "approved"
                 and c.get("scope", "correction") == "correction"
                 and c.get("pattern") and c.get("replacement") is not None]
+    # normalize a hand-written string turn ("41") to int — otherwise the turn
+    # gate (c["turn"] != i) is always True (str != int) and the fix never applies.
+    for c in approved:
+        if c.get("turn") is not None and not isinstance(c["turn"], int):
+            try:
+                c["turn"] = int(c["turn"])
+            except (ValueError, TypeError):
+                c["turn"] = None
     proposed = sum(1 for c in corrections if c.get("status") == "proposed")
     if not approved:
         if proposed:

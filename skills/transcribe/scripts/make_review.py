@@ -59,6 +59,11 @@ def find_context(pattern, flags, turn=None):
     matches (rather than a misleading match from elsewhere)."""
     f = re.I if "i" in (flags or "") else 0
     if turn is not None:
+        try:
+            turn = int(turn)  # tolerate a hand-written "turn": "41" (string)
+        except (ValueError, TypeError):
+            turn = None
+    if turn is not None:
         candidates = [(turn, turns[turn])] if 0 <= turn < len(turns) else []
     else:
         candidates = list(enumerate(turns))
