@@ -6,3 +6,4 @@ coverage/
 *.pem
 .claude/live-qa-config.md
 __pycache__/
+.DS_Store
