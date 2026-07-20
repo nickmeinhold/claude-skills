@@ -13,6 +13,7 @@ until you drop the exported file back into the work dir and run:
 Reads  $TRANSCRIBE_WORK/corrections.json + turns_named.json (or turns.json)
 Writes $TRANSCRIBE_WORK/repair_review.html
 """
+import hashlib
 import json
 import os
 import re
@@ -141,10 +142,15 @@ def js_safe(s):
              .replace(" ", "\\u2029"))
 
 
-corr_json = js_safe(json.dumps({"corrections": corrections}, ensure_ascii=False))
+_raw_corr = json.dumps({"corrections": corrections}, ensure_ascii=False)
+corr_json = js_safe(_raw_corr)
 # JS string literal (not HTML): json.dumps gives a proper quoted/escaped literal;
-# html.escape would NOT (a quote/backslash/newline in WORK breaks the JS).
-key_js = js_safe(json.dumps("repair-review::" + str(WORK)))
+# html.escape would NOT (a quote/backslash/newline in WORK breaks the JS). Bind a
+# fingerprint of corrections.json into the localStorage key so ANY edit to the
+# file (hand reorder/delete/merge) busts stale decisions — array-index decisions
+# must not survive a change to the list they index into.
+_corr_fp = hashlib.sha1(_raw_corr.encode("utf-8")).hexdigest()[:8]
+key_js = js_safe(json.dumps("repair-review::" + str(WORK) + "::" + _corr_fp))
 html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Repair review — {escape(TITLE)}</title>

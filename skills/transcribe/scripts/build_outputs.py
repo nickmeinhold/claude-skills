@@ -105,7 +105,8 @@ if _cpath.exists():
     # fail closed: only an EXPLICIT status=="approved" edit is rendered.
     EDITS = [c for c in _clist
              if c.get("scope") == "edit"
-             and c.get("status") == "approved"]
+             and c.get("status") == "approved"
+             and c.get("pattern") and c.get("replacement") is not None]
 
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed",
            "#0891b2", "#db2777", "#65a30d", "#9333ea", "#0d9488"]

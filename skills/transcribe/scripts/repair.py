@@ -168,18 +168,23 @@ def main():
     existing = []
     if cpath.exists():
         data = json.loads(cpath.read_text())
-        existing = data.get("corrections", data if isinstance(data, list) else [])
-    known = {(c.get("pattern"), c.get("replacement"), c.get("turn"))
+        # tolerant: {"corrections": [...]} or a bare list (isinstance BEFORE .get).
+        existing = (data.get("corrections", []) if isinstance(data, dict)
+                    else data if isinstance(data, list) else [])
+    # dedup key includes scope so an identical-text correction and edit don't
+    # collapse into one entry (they render/apply differently).
+    known = {(c.get("pattern"), c.get("replacement"), c.get("turn"), c.get("scope"))
              for c in existing}
     added = 0
     for f in findings:
-        klass = f.get("class", "?")
+        klass = str(f.get("class", "?")).strip().lower()
         # scope is derived from class, not trusted from the model: a CLASS edit
         # ALWAYS gets scope=edit (so a readability change can never masquerade as
-        # a correction and get burned into the canonical verbatim). Any other
-        # scope value collapses to "correction"; the set is closed to
-        # {correction, edit}.
-        scope = "edit" if (klass == "edit" or f.get("scope") == "edit") \
+        # a correction and get burned into the canonical verbatim). Case-folded so
+        # "Edit"/"EDIT"/" edit " don't fail open. Any other value -> "correction";
+        # the set is closed to {correction, edit}.
+        scope = "edit" if (klass == "edit"
+                           or str(f.get("scope", "")).strip().lower() == "edit") \
             else "correction"
         # "turn" anchors the fix to the turn the EVIDENCE came from: the
         # applier only touches that turn, so a short verbatim like "the list"
@@ -189,11 +194,12 @@ def main():
                  "turn": f["i"],
                  "scope": scope,
                  "status": "proposed",
-                 "class": klass,
+                 "class": f.get("class", "?"),
                  "note": f.get("evidence", "")}
-        if (entry["pattern"], entry["replacement"], entry["turn"]) not in known:
+        key = (entry["pattern"], entry["replacement"], entry["turn"], entry["scope"])
+        if key not in known:
             existing.append(entry)
-            known.add((entry["pattern"], entry["replacement"], entry["turn"]))
+            known.add(key)
             added += 1
     cpath.write_text(json.dumps({"corrections": existing}, indent=1,
                                 ensure_ascii=False))

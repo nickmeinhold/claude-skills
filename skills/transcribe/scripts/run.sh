@@ -67,6 +67,7 @@ if [ "${1:-}" = "--review" ]; then
   WORK="${2:?usage: run.sh --review <workdir> <speakers.json>}"
   [ -f "$WORK/turns_named.json" ] || [ -f "$WORK/turns.json" ] || { echo "no turns in $WORK" >&2; exit 1; }
   CONFIG="${3:-}"
+  [ -n "$CONFIG" ] && [ ! -f "$CONFIG" ] && { echo "no such config: $CONFIG" >&2; exit 1; }
   export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
   "$PARAKEET_PY" "$DIR/make_review.py"
@@ -77,7 +78,9 @@ fi
 # Use after reviewing repair_report.md and flipping proposals to approved.
 if [ "${1:-}" = "--apply" ]; then
   WORK="${2:?usage: run.sh --apply <workdir> [speakers.json]}"
+  [ -f "$WORK/turns_named.json" ] || [ -f "$WORK/turns.json" ] || { echo "no turns in $WORK" >&2; exit 1; }
   CONFIG="${3:-}"
+  [ -n "$CONFIG" ] && [ ! -f "$CONFIG" ] && { echo "no such config: $CONFIG" >&2; exit 1; }
   export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"
   "$PARAKEET_PY" "$DIR/apply_corrections.py"

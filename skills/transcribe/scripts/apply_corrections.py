@@ -58,7 +58,8 @@ def main():
     # implicit go — this is a propose-only safety pipeline.
     approved = [c for c in corrections
                 if c.get("status") == "approved"
-                and c.get("scope", "correction") == "correction"]
+                and c.get("scope", "correction") == "correction"
+                and c.get("pattern") and c.get("replacement") is not None]
     proposed = sum(1 for c in corrections if c.get("status") == "proposed")
     if not approved:
         if proposed:

@@ -101,7 +101,11 @@ class Handler(SimpleHTTPRequestHandler):
                     cpath.write_text(snap_c)
                 if snap_t is not None:
                     tpath.write_text(snap_t)
+                # regenerate ALL derived artifacts from the restored inputs — the
+                # review page AND the transcript outputs (build_outputs may have
+                # written stale .html/.txt/.srt before failing). Rewind all rails.
                 run_stage("make_review.py")
+                run_stage("build_outputs.py")
                 if snap_c:
                     rb = json.loads(snap_c)
                     corrections = (rb.get("corrections", []) if isinstance(rb, dict)
