@@ -1,0 +1,24 @@
+{
+  "_note": "Reusable roster for Sawasdee Cellars calls — Nick (founder) + a rotating cast of AU wine PRODUCERS (one per call) and Thai-side / advisor contacts. The producer changes per call, so producers are NOT fixed speakers here; the detected speaker count catches the extra voice and you name them per-recording (add a {name, profile, anchor} in the per-call speakers.json copied from this roster). Standing cast: Nick always; Robin (AU co-founder) and Sai (Thai-side) may appear. GLOSSARY GROWTH LOOP: whenever a producer call surfaces a new garbled term (a winemaker's name, a varietal, a wine name, a trade term), append the CORRECT spelling here the same session — call #N+1 inherits every catch. Born 2026-07-20 from the Werkstatt/Bridget call, where whole-track loudnorm dropped the quiet phone-line speaker until dynaudnorm was added to the pipeline conditioning step.",
+  "title": "Sawasdee Cellars producer / market call",
+  "context": "A phone or in-person conversation for Sawasdee Cellars, an Australia-to-Thailand boutique-wine export venture run through Enspyr Pty Ltd. Nick Meinhold (founder) talks with an Australian wine producer about supplying wine ex-winery for consolidation into a reefer container to Thailand and placement in a catalogue for the Thai distributor IWS — or with an advisor / Thai-side contact about market strategy, logistics, or the deal model. Topics: wine ranges, styles suited to the Thai heat (light, aromatic, chillable), volumes and pallets, ex-winery / FOB pricing, WET-free export invoicing, cold-chain reefer freight, samples.",
+  "num_speakers": 2,
+  "speakers": [
+    {"name": "Nick", "profile": "Founder of Sawasdee Cellars (Enspyr Pty Ltd). Drives the pitch: Thai export, the IWS distributor, buy-ex-winery / consolidate / reefer-freight model. Asks about range, volume, pallets, price, availability, samples. Warm, enthusiastic, Australian. Grew up in the Yarra Valley."}
+  ],
+  "glossary": [
+    "Sawasdee", "Sawasdee Cellars", "Enspyr", "IWS", "Thailand", "Bangkok",
+    "WET", "FOB", "reefer", "farang", "négociant", "pet-nat", "Kabinett",
+    "feinherb", "Sekt", "Alsace", "Halliday",
+    "Konpira Maru", "Werkstatt", "Bridget Mac", "Moorak", "First Point",
+    "Blood Moon", "Defialy", "e'Stellar", "e'Stellar Estate", "Fin Wines",
+    "Unico Zelo", "Brendan Carter", "Mandala", "Beyond the Glass",
+    "Ciarán Hudson", "Cron", "Elia Lom", "Tracado", "Robin", "Sai", "Martin Siebert",
+    "Jordan Hein", "Micah Hewitt", "Angus Hean",
+    "Riesling", "Gewürztraminer", "Pinot Gris", "Pinot Noir", "Chardonnay",
+    "Savagnin", "Nero d'Avola", "Schioppettino", "Falanghina", "Fiano", "Greco",
+    "Cinsault", "Nebbiolo", "Syrah", "Grenache", "Malvasia",
+    "Mount Gambier", "King Valley", "Alpine Valley", "Yarra Valley",
+    "Dixons Creek", "McLaren Vale", "Heathcote", "Pyrenees"
+  ]
+}

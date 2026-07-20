@@ -136,8 +136,21 @@ export TRANSCRIBE_NUM_SPEAKERS="$NUM"
 [ "${TRANSCRIBE_SKIP_UPDATE_CHECK:-}" = "1" ] || bash "$DIR/check_updates.sh" || true
 
 echo "[1/6] conditioning audio -> $WORK/audio.wav"
+# highpass kills rumble; dynaudnorm evens PER-FRAME dynamics so a quiet remote
+# speaker (phone-call recordings: the other party comes through the line quiet +
+# band-limited) is lifted before ASR — m=30 is a max-gain CEILING (only engages on
+# frames ~30x below target, i.e. a genuinely quiet speaker; a no-op on balanced
+# in-room audio); loudnorm then sets the final integrated loudness for the ASR.
+# Without dynaudnorm, whole-track loudnorm alone drops the quiet speaker's speech
+# entirely (Werkstatt call 2026-07-20: Bridget's volume answer was recovered only
+# after adding this). Skip with TRANSCRIBE_NO_DYNAUDNORM=1 for pristine studio audio.
+if [ "${TRANSCRIBE_NO_DYNAUDNORM:-}" = "1" ]; then
+  COND_AF="highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11"
+else
+  COND_AF="highpass=f=70,dynaudnorm=f=150:g=15:p=0.9:m=30,loudnorm=I=-16:TP=-1.5:LRA=11"
+fi
 ffmpeg -y -loglevel error -i "$AUDIO" \
-  -af "highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11" \
+  -af "$COND_AF" \
   -ar 16000 -ac 1 -c:a pcm_s16le "$WORK/audio.wav"
 
 echo "[2/6] diarizing (num_speakers=${NUM:-auto})"
