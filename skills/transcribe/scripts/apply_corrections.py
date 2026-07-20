@@ -40,25 +40,43 @@ from pathlib import Path
 WORK = Path(os.environ["TRANSCRIBE_WORK"])
 
 
-def make_repl(r):
-    """Literal + IDEMPOTENT replacement function for re.subn. Inserts r verbatim
-    (no regex backreferences). Idempotent: if this match already lies INSIDE an
-    existing copy of r anywhere in the string, the matched text is left untouched
-    — so re-running apply on already-corrected text can't re-expand a
-    self-matching replacement, at ANY offset: "Worry"->"Worrying" (prefix),
-    "cat"->"the cat" (suffix), "bar"->"foobar" (internal). An empty r (deletion)
-    always applies and is naturally idempotent (the matched text is removed)."""
-    def _repl(m):
+def apply_literal(pattern, r, text, flags=0, first_only=False):
+    """Replace matches of `pattern` with the LITERAL string `r` (no regex
+    backreferences — a backslash/\\1 in r is inserted verbatim, never a backref).
+
+    IDEMPOTENT: a match already lying inside an existing copy of `r` anywhere in
+    `text` is SKIPPED, so re-applying can't re-expand a self-matching replacement
+    at any offset ("Worry"->"Worrying" prefix, "cat"->"the cat" suffix,
+    "bar"->"foobar" internal). Crucially a skip does NOT consume the substitution
+    budget (unlike re.subn+count=1, where a skipped match still counted): the
+    scanner keeps going to the next real match. first_only stops after the first
+    REAL mutation (turn-scoped corrections); otherwise every real match is
+    replaced (unscoped/global). Empty r (deletion) always applies. Returns
+    (new_text, n_real_mutations)."""
+    def inside_existing(a, b):
         if not r:
-            return r
-        s, a, b = m.string, m.start(), m.end()
-        i = s.find(r)
+            return False
+        i = text.find(r)
         while i != -1:
             if i <= a and b <= i + len(r):
-                return m.group(0)  # match already inside an applied replacement
-            i = s.find(r, i + 1)
-        return r
-    return _repl
+                return True
+            i = text.find(r, i + 1)
+        return False
+    out, last, n = [], 0, 0
+    for m in re.finditer(pattern, text, flags=flags):
+        a, b = m.start(), m.end()
+        if a < last:                      # overlaps a prior replacement — skip
+            continue
+        if inside_existing(a, b):
+            continue
+        out.append(text[last:a])
+        out.append(r)
+        last = b
+        n += 1
+        if first_only:
+            break
+    out.append(text[last:])
+    return "".join(out), n
 
 
 def load_corrections():
@@ -101,18 +119,18 @@ def main():
             # turn their evidence came from; unscoped ones apply globally
             if c.get("turn") is not None and c["turn"] != i:
                 continue
-            flags = re.I if "i" in c.get("flags", "") else 0
-            # turn-scoped corrections replace only the FIRST match in the turn,
-            # matching the single occurrence the review card previews (find_context
-            # uses re.search); unscoped hand corrections (glossary fixes) still
-            # replace every occurrence globally (count=0).
-            count = 1 if c.get("turn") is not None else 0
-            # literal + idempotent replacement (see make_repl): backrefs are never
-            # interpreted, and an already-applied replacement is left untouched so
-            # repeated apply passes don't re-expand self-matching text.
+            # `c.get("flags") or ""` (NOT default-arg): a hand entry may carry
+            # "flags": null, and "i" in None would TypeError outside the guard.
+            flags = re.I if "i" in (c.get("flags") or "") else 0
+            # turn-scoped corrections replace only the first REAL match in the turn
+            # (matching the single occurrence the review card previews); unscoped
+            # hand/glossary corrections replace every occurrence. apply_literal is
+            # literal + idempotent and never lets a skipped self-match steal the
+            # one turn-scoped substitution.
             try:
-                txt, n = re.subn(c["pattern"], make_repl(c["replacement"]),
-                                 txt, count=count, flags=flags)
+                txt, n = apply_literal(c["pattern"], c["replacement"], txt,
+                                       flags=flags,
+                                       first_only=c.get("turn") is not None)
             except re.error as e:
                 # a bad hand-written PATTERN skips itself, doesn't nuke the batch
                 print(f"  skip correction with bad pattern {c['pattern']!r}: {e}",

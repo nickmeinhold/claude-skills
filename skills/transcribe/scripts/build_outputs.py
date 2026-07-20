@@ -220,7 +220,7 @@ if EDITS:
     edited_turns = copy.deepcopy(orig_turns)
     n_edits = 0
     for c in EDITS:
-        flags = re.I if "i" in c.get("flags", "") else 0
+        flags = re.I if "i" in (c.get("flags") or "") else 0  # tolerate flags: null
         tn = c.get("turn")
         if isinstance(tn, int):
             targets = [edited_turns[tn]] if 0 <= tn < len(edited_turns) else []

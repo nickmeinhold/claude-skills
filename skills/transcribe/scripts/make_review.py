@@ -101,7 +101,7 @@ for idx, c in proposed:
             # backslash/\1 in the proposal is shown literally, not as a backref).
             replacement = re.sub(c["pattern"], lambda _m, r=c["replacement"]: r,
                                  matched,
-                                 flags=re.I if "i" in c.get("flags", "") else 0)
+                                 flags=re.I if "i" in (c.get("flags") or "") else 0)
         except re.error:
             replacement = c["replacement"]
         before_nb = neighbour_html(ti, "before")
