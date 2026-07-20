@@ -141,12 +141,12 @@ def coalesce(turn_list):
 
 blocks = coalesce(turns)
 
-# discover speakers in first-appearance order
+# canonical speaker set (for the summary line only; render_html derives its own
+# per-rendering palette from the blocks it actually renders)
 seen = []
 for b in blocks:
     if b["spk"] not in seen:
         seen.append(b["spk"])
-color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
 
 # txt
 (WORK / "transcript_speakers.txt").write_text(
@@ -159,11 +159,19 @@ color = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen)}
 
 
 def render_html(blocks_, mode_note, out_name):
+    # speaker set + palette derived from the blocks ACTUALLY rendered, so the
+    # edited rendering (which re-runs drop_orphans on edited text and can expose a
+    # raw SPEAKER_nn absent from the canonical set) never KeyErrors on color[spk].
+    seen_ = []
+    for b in blocks_:
+        if b["spk"] not in seen_:
+            seen_.append(b["spk"])
+    color_ = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(seen_)}
     linked = set()
     rows = "\n".join(
-        f'<div class="turn" id="t{int(b["start"])}"><div class="meta"><span class="spk" style="color:{color[b["spk"]]}">'
+        f'<div class="turn" id="t{int(b["start"])}"><div class="meta"><span class="spk" style="color:{color_[b["spk"]]}">'
         f'{escape(b["spk"])}</span><a class="ts" href="#t{int(b["start"])}">{fmt_ts(b["start"])[:8]}</a></div>'
-        f'<div class="text" style="border-left:3px solid {color[b["spk"]]}">{linkify(escape(b["text"]), linked)}</div></div>'
+        f'<div class="text" style="border-left:3px solid {color_[b["spk"]]}">{linkify(escape(b["text"]), linked)}</div></div>'
         for b in blocks_)
     refs = ""
     if linked:
@@ -171,7 +179,7 @@ def render_html(blocks_, mode_note, out_name):
                         for t in sorted(linked, key=str.lower))
         refs = f'<div class="refs"><h2>References</h2><ul>{items}</ul></div>'
     legend = " &nbsp;&nbsp; ".join(
-        f'<span><span class="dot" style="background:{color[s]}"></span>{escape(s)}</span>' for s in seen)
+        f'<span><span class="dot" style="background:{color_[s]}"></span>{escape(s)}</span>' for s in seen_)
     last = fmt_ts(blocks_[-1]["end"])[:8] if blocks_ else "00:00:00"
     html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -189,7 +197,7 @@ def render_html(blocks_, mode_note, out_name):
  .refs h2{{font-size:1rem;margin-bottom:.4rem}} .refs ul{{columns:2;list-style:none;padding:0}} .refs li{{margin-bottom:.2rem}}
 </style></head><body>
 <h1>{escape(TITLE)}</h1>
-<div class="sub">Parakeet-1.1b + pyannote (local, Apple Silicon) · {mode_note} · ends {last} · {len(seen)} speakers · {len(blocks_)} turns</div>
+<div class="sub">Parakeet-1.1b + pyannote (local, Apple Silicon) · {mode_note} · ends {last} · {len(seen_)} speakers · {len(blocks_)} turns</div>
 <div class="legend">{legend}</div>
 {rows}
 {refs}

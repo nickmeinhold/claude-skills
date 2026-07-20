@@ -6,10 +6,12 @@ Serves the work dir over localhost and gives repair_review.html two endpoints:
   POST /apply  {"decisions": {"<idx>": "approved"|"rejected"}}
       -> flips statuses in corrections.json, runs apply_corrections.py,
          regenerates the review page, rebuilds outputs; responds with a
-         summary. Transactional: if any stage fails, both corrections.json and
-         the turns file are rolled back to their pre-apply snapshot so no
-         half-applied state survives. The page POSTs its full decision map once
-         and then /finish — it does not reload mid-session.
+         summary. On any stage failure both corrections.json and the turns file
+         are rolled back to their pre-apply snapshot and the page + outputs are
+         regenerated from that restored (known-good) state — the inputs are
+         transactional; the derived output files are rebuilt best-effort, not
+         atomically snapshotted. The page POSTs its full decision map once and
+         then /finish — it does not reload mid-session.
   POST /finish
       -> responds, then shuts the server down.
 
