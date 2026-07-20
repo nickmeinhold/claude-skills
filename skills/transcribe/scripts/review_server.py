@@ -98,8 +98,14 @@ class Handler(SimpleHTTPRequestHandler):
                         and corrections[i].get("status") == "proposed":
                     corrections[i]["status"] = verdict
                     decided += 1
-            cpath.write_text(json.dumps({"corrections": corrections}, indent=1,
-                                        ensure_ascii=False))
+            # preserve any top-level metadata (schema version, provenance) — only
+            # the corrections member is rewritten; a bare-list file is wrapped.
+            if isinstance(data, dict):
+                data["corrections"] = corrections
+                out = data
+            else:
+                out = {"corrections": corrections}
+            cpath.write_text(json.dumps(out, indent=1, ensure_ascii=False))
             ok = (run_stage("apply_corrections.py")
                   and run_stage("make_review.py")
                   and run_stage("build_outputs.py"))

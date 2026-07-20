@@ -176,13 +176,18 @@ def main():
     # merge into corrections.json as proposed entries (never touch approved)
     cpath = WORK / "corrections.json"
     existing = []
+    orig = {}
     if cpath.exists():
         data = json.loads(cpath.read_text())
         # tolerant: {"corrections": [...]} or a bare list (isinstance BEFORE .get).
         existing = (data.get("corrections", []) if isinstance(data, dict)
                     else data if isinstance(data, list) else [])
+        orig = data if isinstance(data, dict) else {}
     # dedup key includes scope so an identical-text correction and edit don't
-    # collapse into one entry (they render/apply differently).
+    # collapse into one entry (they render/apply differently). BY DESIGN it spans
+    # ALL statuses including rejected: re-running --repair will NOT re-surface a
+    # finding the human already rejected (respect the veto — don't re-nag). To
+    # reconsider a rejection, delete its row from corrections.json.
     known = {(c.get("pattern"), c.get("replacement"), c.get("turn"), c.get("scope"))
              for c in existing}
     added = 0
@@ -203,8 +208,10 @@ def main():
             existing.append(entry)
             known.add(key)
             added += 1
-    cpath.write_text(json.dumps({"corrections": existing}, indent=1,
-                                ensure_ascii=False))
+    # preserve any top-level metadata; only rewrite the corrections member
+    out = dict(orig)
+    out["corrections"] = existing
+    cpath.write_text(json.dumps(out, indent=1, ensure_ascii=False))
 
     # human-readable report
     lines = [f"# Repair report — {len(findings)} findings "
