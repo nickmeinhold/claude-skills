@@ -173,15 +173,23 @@ def main():
              for c in existing}
     added = 0
     for f in findings:
+        klass = f.get("class", "?")
+        # scope is derived from class, not trusted from the model: a CLASS edit
+        # ALWAYS gets scope=edit (so a readability change can never masquerade as
+        # a correction and get burned into the canonical verbatim). Any other
+        # scope value collapses to "correction"; the set is closed to
+        # {correction, edit}.
+        scope = "edit" if (klass == "edit" or f.get("scope") == "edit") \
+            else "correction"
         # "turn" anchors the fix to the turn the EVIDENCE came from: the
         # applier only touches that turn, so a short verbatim like "the list"
         # can never rewrite innocent occurrences elsewhere in the transcript.
         entry = {"pattern": re.escape(f["verbatim"]),
                  "replacement": f["proposed"],
                  "turn": f["i"],
-                 "scope": f.get("scope", "correction"),
+                 "scope": scope,
                  "status": "proposed",
-                 "class": f.get("class", "?"),
+                 "class": klass,
                  "note": f.get("evidence", "")}
         if (entry["pattern"], entry["replacement"], entry["turn"]) not in known:
             existing.append(entry)

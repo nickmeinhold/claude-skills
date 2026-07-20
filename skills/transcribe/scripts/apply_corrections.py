@@ -4,6 +4,9 @@
 The corrections file ($TRANSCRIBE_WORK/corrections.json) is the durable home of
 every transcript fix, so hand corrections and approved repair-pass proposals
 SURVIVE any --reattribute (which regenerates turns_named.json from raw turns).
+The SoT is asymmetric: it governs FUTURE (re)application — removing an approved
+entry stops it re-applying on the next --reattribute, but does NOT un-bake text
+already written into the current turns_named.json until that re-derive runs.
 Convention:
 
 {
@@ -42,7 +45,10 @@ def load_corrections():
     if not p.exists():
         return []
     data = json.loads(p.read_text())
-    return data.get("corrections", data if isinstance(data, list) else [])
+    # tolerant: {"corrections": [...]} or a bare list. The isinstance check must
+    # precede .get — a bare list has no .get, so a default-arg guard never fires.
+    return (data.get("corrections", []) if isinstance(data, dict)
+            else data if isinstance(data, list) else [])
 
 
 def main():
@@ -74,11 +80,22 @@ def main():
             if c.get("turn") is not None and c["turn"] != i:
                 continue
             flags = re.I if "i" in c.get("flags", "") else 0
+            # turn-scoped corrections replace only the FIRST match in the turn,
+            # matching the single occurrence the review card previews (find_context
+            # uses re.search); unscoped hand corrections (glossary fixes) still
+            # replace every occurrence globally (count=0).
+            count = 1 if c.get("turn") is not None else 0
             # literal replacement (lambda): a backslash or \1 in an LLM-proposed
             # replacement is inserted verbatim, never interpreted as a regex
             # backreference (which would raise re.error or silently mangle text).
-            txt, n = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
-                             txt, flags=flags)
+            try:
+                txt, n = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
+                                 txt, count=count, flags=flags)
+            except re.error as e:
+                # a bad hand-written PATTERN skips itself, doesn't nuke the batch
+                print(f"  skip correction with bad pattern {c['pattern']!r}: {e}",
+                      flush=True)
+                continue
             if n:
                 counts[c["pattern"]] = counts.get(c["pattern"], 0) + n
         t["text"] = txt

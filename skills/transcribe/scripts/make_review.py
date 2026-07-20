@@ -24,7 +24,9 @@ TITLE = os.environ.get("TRANSCRIBE_TITLE", "Transcript")
 
 cpath = WORK / "corrections.json"
 data = json.loads(cpath.read_text()) if cpath.exists() else {"corrections": []}
-corrections = data.get("corrections", [])
+# tolerant load: corrections.json may be {"corrections": [...]} or a bare list.
+corrections = (data.get("corrections", []) if isinstance(data, dict)
+               else data if isinstance(data, list) else [])
 proposed = [(i, c) for i, c in enumerate(corrections)
             if c.get("status") == "proposed"]
 
@@ -54,7 +56,10 @@ def find_context(pattern, flags, turn=None):
     else:
         candidates = list(enumerate(turns))
     for ti, t in candidates:
-        m = re.search(pattern, t.get("text", ""), flags=f)
+        try:
+            m = re.search(pattern, t.get("text", ""), flags=f)
+        except re.error:
+            return None  # invalid regex in a proposal must not crash the page
         if m:
             txt = t["text"]
             a, b = m.start(), m.end()
@@ -84,7 +89,11 @@ for idx, c in proposed:
         ti, ts, spk, before, matched, after = ctx
         # what the replacement renders to, with backrefs resolved
         try:
-            replacement = re.sub(c["pattern"], c["replacement"], matched,
+            # literal replacement — MUST match apply_corrections.py so the diff
+            # the reviewer approves is byte-identical to what gets written (a
+            # backslash/\1 in the proposal is shown literally, not as a backref).
+            replacement = re.sub(c["pattern"], lambda _m, r=c["replacement"]: r,
+                                 matched,
                                  flags=re.I if "i" in c.get("flags", "") else 0)
         except re.error:
             replacement = c["replacement"]

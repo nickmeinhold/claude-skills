@@ -6,8 +6,10 @@ Serves the work dir over localhost and gives repair_review.html two endpoints:
   POST /apply  {"decisions": {"<idx>": "approved"|"rejected"}}
       -> flips statuses in corrections.json, runs apply_corrections.py,
          regenerates the review page, rebuilds outputs; responds with a
-         summary. The browser then reloads the (regenerated) page, which
-         shows only the still-undecided proposals.
+         summary. Transactional: if any stage fails, both corrections.json and
+         the turns file are rolled back to their pre-apply snapshot so no
+         half-applied state survives. The page POSTs its full decision map once
+         and then /finish — it does not reload mid-session.
   POST /finish
       -> responds, then shuts the server down.
 
@@ -50,19 +52,32 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    MAX_BODY = 4 << 20  # 4 MiB — a decisions map is tiny; refuse floods
+
     def do_POST(self):
-        # fail closed: a malformed Content-Length or body returns 400 rather
-        # than crashing the single-threaded server and losing the session.
+        # fail closed: a malformed/oversized Content-Length or body returns an
+        # error rather than crashing the single-threaded server.
         try:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > self.MAX_BODY:
+                self._json(413, {"ok": False, "error": "body too large"})
+                return
             payload = json.loads(self.rfile.read(n) or b"{}")
         except (ValueError, json.JSONDecodeError):
             self._json(400, {"ok": False, "error": "malformed request"})
             return
         if self.path == "/apply":
             cpath = WORK / "corrections.json"
-            data = json.loads(cpath.read_text()) if cpath.exists() else {"corrections": []}
-            corrections = data.get("corrections", [])
+            tpath = WORK / "turns_named.json"
+            if not tpath.exists():
+                tpath = WORK / "turns.json"
+            # snapshot BOTH durable files so a failed apply/rebuild rolls back
+            # cleanly (no half-applied turns, no orphaned status flips).
+            snap_c = cpath.read_text() if cpath.exists() else None
+            snap_t = tpath.read_text() if tpath.exists() else None
+            data = json.loads(snap_c) if snap_c else {"corrections": []}
+            corrections = (data.get("corrections", []) if isinstance(data, dict)
+                           else data if isinstance(data, list) else [])
             decided = 0
             for idx, verdict in (payload.get("decisions") or {}).items():
                 try:
@@ -78,9 +93,25 @@ class Handler(SimpleHTTPRequestHandler):
             ok = (run_stage("apply_corrections.py")
                   and run_stage("make_review.py")
                   and run_stage("build_outputs.py"))
+            if not ok:
+                # transactional rollback: restore both files, regenerate the
+                # page from the restored (all-proposed) state so the UI never
+                # hides a proposal the outputs don't reflect.
+                if snap_c is not None:
+                    cpath.write_text(snap_c)
+                if snap_t is not None:
+                    tpath.write_text(snap_t)
+                run_stage("make_review.py")
+                if snap_c:
+                    rb = json.loads(snap_c)
+                    corrections = (rb.get("corrections", []) if isinstance(rb, dict)
+                                   else rb if isinstance(rb, list) else [])
+                else:
+                    corrections = []
             remaining = sum(1 for c in corrections if c.get("status") == "proposed")
             self._json(200 if ok else 500,
-                       {"ok": ok, "decided": decided, "remaining": remaining})
+                       {"ok": ok, "decided": decided if ok else 0,
+                        "remaining": remaining})
         elif self.path == "/finish":
             self._json(200, {"ok": True})
             # shut down after the response is flushed

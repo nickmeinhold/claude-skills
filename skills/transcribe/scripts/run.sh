@@ -65,6 +65,7 @@ fi
 # reviewer clicks the final OK (or ^C).
 if [ "${1:-}" = "--review" ]; then
   WORK="${2:?usage: run.sh --review <workdir> <speakers.json>}"
+  [ -f "$WORK/turns_named.json" ] || [ -f "$WORK/turns.json" ] || { echo "no turns in $WORK" >&2; exit 1; }
   CONFIG="${3:-}"
   export TRANSCRIBE_WORK="$WORK" TRANSCRIBE_CONFIG="$CONFIG"
   export TRANSCRIBE_TITLE="${TRANSCRIBE_TITLE:-$([ -n "$CONFIG" ] && "$PARAKEET_PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title") or "")' "$CONFIG" || echo "")}"

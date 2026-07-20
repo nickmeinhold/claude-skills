@@ -99,8 +99,11 @@ EDITS = []
 _cpath = WORK / "corrections.json"
 if _cpath.exists():
     _cdata = json.loads(_cpath.read_text())
+    # tolerant load: corrections.json may be {"corrections": [...]} or a bare list.
+    _clist = (_cdata.get("corrections", []) if isinstance(_cdata, dict)
+              else _cdata if isinstance(_cdata, list) else [])
     # fail closed: only an EXPLICIT status=="approved" edit is rendered.
-    EDITS = [c for c in _cdata.get("corrections", [])
+    EDITS = [c for c in _clist
              if c.get("scope") == "edit"
              and c.get("status") == "approved"]
 
@@ -216,10 +219,17 @@ if EDITS:
             targets = edited_turns
         else:
             targets = []
-        for t in targets:
-            t["text"], k = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
-                                   t["text"], flags=flags)
-            n_edits += k
+        # turn-scoped edit → first match only (matches the review preview);
+        # unscoped edit (turn None) → every occurrence in every turn.
+        count = 1 if isinstance(tn, int) else 0
+        try:
+            for t in targets:
+                t["text"], k = re.subn(c["pattern"], lambda _m, r=c["replacement"]: r,
+                                       t["text"], count=count, flags=flags)
+                n_edits += k
+        except re.error as e:
+            print(f"  skip edit with bad pattern {c['pattern']!r}: {e}", flush=True)
+            continue
     eblocks = coalesce(drop_orphans(edited_turns))
     for b in eblocks:
         # tidy double spaces edits leave behind
