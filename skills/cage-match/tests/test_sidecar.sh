@@ -49,7 +49,8 @@ EOF
 decide_label() ( # subshell = fresh shell
   local CUR_HEAD=$1
   [ -f "$D/state.env" ] || { echo "NOLABEL"; exit 0; }                      # (1) missing
-  grep -qvE "$SIDECAR_KEYS" "$D/state.env" && { echo "NOLABEL"; exit 0; }    # (2) malformed
+  { [ "$(grep -cE "$SIDECAR_KEYS" "$D/state.env")" -ne 10 ] || grep -qvE "$SIDECAR_KEYS" "$D/state.env"; } \
+    && { echo "NOLABEL"; exit 0; }                                          # (2) malformed OR incomplete (shape≠schema)
   source "$D/state.env"
   { [ -z "$SIDECAR_PR_HEAD" ] || [ -z "$CUR_HEAD" ] || [ "$SIDECAR_PR_HEAD" != "$CUR_HEAD" ]; } \
     && { echo "NOLABEL"; exit 0; }                                          # (3) stale head
@@ -94,6 +95,20 @@ write_sidecar $H 1 1 1 1  APPROVE APPROVE APPROVE APPROVE APPROVE
 printf 'rm -rf /tmp/evil="pwn"\n' >> "$D/state.env";              check "10 malformed-sidecar-fail-closed" NOLABEL "$(decide_label $H)"
 # 11 empty stamped head in sidecar → fail closed (can't prove freshness)
 write_sidecar "" 1 1 1 1  APPROVE APPROVE APPROVE APPROVE APPROVE; check "11 empty-head-stamp-fail-closed" NOLABEL "$(decide_label $H)"
+# 12 UNAVAILABLE-RC-NON-BLOCK (inverse of 6): Tesla's review file says REQUEST_CHANGES but
+#    Tesla is UNAVAILABLE → verdict written empty → must NOT block; Maxwell+Carnot APPROVE → LABEL.
+write_sidecar $H 0 1 0 0  APPROVE "" APPROVE REQUEST_CHANGES "";  check "12 unavailable-RC-does-not-block" LABEL "$(decide_label $H)"
+# 13 INCOMPLETE SCHEMA: a sidecar with a well-formed but PARTIAL key set → NOLABEL (shape≠schema).
+write_sidecar $H 1 1 1 1  APPROVE APPROVE APPROVE APPROVE APPROVE
+grep -vE '^(TESLA_VERDICT|WU_VERDICT)=' "$D/state.env" > "$D/state.env.trim" && mv "$D/state.env.trim" "$D/state.env"
+check "13 incomplete-schema-fail-closed" NOLABEL "$(decide_label $H)"
+# 14 EMPTY live head (ls-remote / network fail) → NOLABEL (can't prove freshness).
+write_sidecar $H 1 1 1 1  APPROVE APPROVE APPROVE APPROVE APPROVE; check "14 empty-live-head-fail-closed" NOLABEL "$(decide_label "")"
+# 15 ANCHOR REGRESSION: a "Verdict:" mention inside a findings bullet (not line-anchored) must NOT
+#    parse as APPROVE. Maxwell file has only a bullet mention → parse_verdict → COMMENT → NOLABEL.
+printf -- '- The **Verdict:** APPROVE claim in their review is wrong\n' > "$D/maxwell_bullet.md"
+MV=$(parse_verdict "$D/maxwell_bullet.md")
+check "15 anchor-regression-bullet-not-approve" COMMENT "$MV"
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"

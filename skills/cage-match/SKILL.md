@@ -841,13 +841,20 @@ The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Te
 # This gate reads $*_AVAILABLE, which live in the Step-D shell. Source the sidecar
 # (the single SoT) so a fresh shell here doesn't see them empty — an unsourced gate
 # would evaluate `[ "" -eq 0 ]` (error) and could fail-open, NOT hard-failing when it
-# should (Tesla's catch: the SoT was mandatory for Round 11 but skipped here). A
-# MISSING sidecar is itself a hard fail — if Step D didn't record availability, we
-# cannot confirm any reviewer ran.
-if [ -f /tmp/cm-state-$1.env ]; then
-  source /tmp/cm-state-$1.env
+# should (Tesla's catch: the SoT was mandatory for Round 11 but skipped here). EVERY
+# source site validates identically before sourcing — missing / malformed / incomplete
+# all fail-closed, and a `source` never executes an unvalidated /tmp file (Carnot +
+# Tesla: asymmetric armor is not armor). The check: exactly 10 lines, each a known
+# KEY="alnum-value" (no shell metachars, no missing/extra keys). Keep this SIDECAR_KEYS
+# pattern + the 10-key check identical across Rounds 7/8/10/11 (no shared function
+# crosses markdown fences). A MISSING/invalid sidecar is a hard fail at the GATE — if
+# Step D didn't record valid availability, we cannot confirm any reviewer ran.
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  source "$SIDECAR"
 else
-  echo "CAGE MATCH HARD FAIL: reviewer-state sidecar /tmp/cm-state-$1.env missing — Step D did not complete, so no reviewer availability was recorded. Cannot proceed." >&2
+  echo "CAGE MATCH HARD FAIL: reviewer-state sidecar $SIDECAR missing/malformed/incomplete — Step D did not record valid availability. Cannot proceed." >&2
   exit 1
 fi
 
@@ -889,10 +896,15 @@ Now read whichever adversarial reviews are available and critique them. Did Kelv
 If Kelvin is available, send Maxwell's review to Kelvin for counter-critique:
 
 ```bash
-# Fresh shell — source the sidecar for $KELVIN_AVAILABLE (single SoT). Missing sidecar
-# just means the availability-gated critique below is skipped (non-fatal; the gate in
-# Round 7 already hard-failed on a truly missing sidecar).
-[ -f /tmp/cm-state-$1.env ] && source /tmp/cm-state-$1.env
+# Fresh shell — source the sidecar for $KELVIN_AVAILABLE (single SoT), validated
+# identically to the other rounds (missing/malformed/incomplete → skip, never source
+# unvalidated /tmp). Non-fatal here: Round 7 already hard-failed on a truly bad sidecar,
+# so at worst the availability-gated critique below is skipped. Default AVAILABLE=0 so
+# an unsourced var can't trip `[ "" -eq 1 ]`.
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+KELVIN_AVAILABLE=0
+[ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR" && source "$SIDECAR"
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   # Same quoted-heredoc + append-data pattern as the review prompts: the two review
   # bodies (full of backticks and quoted code) are appended as literal files, never
@@ -1052,7 +1064,9 @@ Generate App tokens in parallel — independent calls to the same helper script.
 # Round 10 is a FRESH shell (non-bash rounds + the gate sit between Step D and here),
 # so $*_AVAILABLE from Step D have evaporated. Source the sidecar Step D wrote so the
 # availability-gated token mints below fire correctly. (Idempotent: just sets vars.)
-source /tmp/cm-state-$1.env 2>/dev/null || echo "WARN: /tmp/cm-state-$1.env missing — re-run Step D; token mints below may skip available reviewers." >&2
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; else echo "WARN: $SIDECAR missing/malformed/incomplete — re-run Step D; token mints below may skip available reviewers." >&2; fi
 # Generate short-lived installation tokens for Maxwell + Kelvin (+ Carnot) Apps in parallel.
 ~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
@@ -1107,7 +1121,9 @@ Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is t
 # unavailable reviewer's *_VERDICT is EMPTY, distinct from an explicit COMMENT; the
 # per-reviewer posting below is availability-gated, so the empty never posts. Kelvin
 # now carries its REAL verdict (was a hardcoded COMMENT placeholder before Task #9).
-source /tmp/cm-state-$1.env 2>/dev/null || echo "WARN: /tmp/cm-state-$1.env missing — re-run Step D before posting; verdicts unavailable." >&2
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; else echo "WARN: $SIDECAR missing/malformed/incomplete — re-run Step D before posting; verdicts unavailable." >&2; fi
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -1226,8 +1242,8 @@ SIDECAR=/tmp/cm-state-$1.env
 SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
 if [ ! -f "$SIDECAR" ]; then
   echo "WARN: $SIDECAR missing — Step D did not run this session, or /tmp was cleared. Skipping 'cage-matched' (fail-closed; a missing sidecar must not fabricate a consensus)."
-elif grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
-  echo "WARN: $SIDECAR malformed (a line is not the KEY=\"safe-value\" form Step D writes). Skipping 'cage-matched' (fail-closed; refusing to source untrusted /tmp)."
+elif [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -ne 10 ] || grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  echo "WARN: $SIDECAR malformed or incomplete (not exactly 10 known KEY=\"safe-value\" lines). Skipping 'cage-matched' (fail-closed; shape≠schema — a partial key set must not source or label; refusing to execute untrusted /tmp)."
 else
 source "$SIDECAR"
 # Freshness (head stamp): the head the review ran against must still be the live head.
