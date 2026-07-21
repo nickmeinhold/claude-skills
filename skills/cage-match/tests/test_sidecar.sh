@@ -110,6 +110,20 @@ printf -- '- The **Verdict:** APPROVE claim in their review is wrong\n' > "$D/ma
 MV=$(parse_verdict "$D/maxwell_bullet.md")
 check "15 anchor-regression-bullet-not-approve" COMMENT "$MV"
 
+# 16 DRIFT GUARD (Tesla): the SIDECAR_KEYS validation pattern is duplicated at every
+#    source site in SKILL.md (no shared function crosses markdown fences). A silent
+#    drift between copies would let one round validate differently than another. Assert
+#    all copies are byte-identical and that there are the expected 5 (Rounds 7/8/10x2/11).
+SKILL="$(dirname "$0")/../SKILL.md"
+if [ -f "$SKILL" ]; then
+  N_COPIES=$(grep -cE "^SIDECAR_KEYS='" "$SKILL")
+  N_DISTINCT=$(grep -oE "SIDECAR_KEYS='[^']*'" "$SKILL" | sort -u | wc -l | tr -d ' ')
+  check "16 sidecar-keys-copies-count" 5 "$N_COPIES"
+  check "16 sidecar-keys-all-identical(distinct=1)" 1 "$N_DISTINCT"
+else
+  echo "  SKIP: 16 drift-guard (SKILL.md not found at $SKILL)"
+fi
+
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
 rm -rf "$D"
