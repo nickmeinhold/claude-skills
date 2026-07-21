@@ -460,6 +460,23 @@ WU_FALLBACK_MODEL="${WU_FALLBACK_MODEL-kimi-code/kimi-for-coding}"
 # exhausted a 5-hour quota window on 2026-07-18 with three "tiny" probes. The
 # review needs none of it — the diff is already in the prompt file.
 WU_SCRATCH=$(mktemp -d)
+# Truncate Wu's output files HERE (before the subshell), so a prior-round file is
+# annihilated at launch — matching Kelvin/Tesla's `>`-at-spawn by construction.
+# (Tesla's catch: Wu's own `>` sits on the inner kimi line INSIDE the subshell, so
+# without this a prior /tmp/wu-review-$1.md survives until that line runs — the
+# "truncates at launch" claim in the STALE-VERDICT DEFENSE note would otherwise
+# overclaim for Wu, and an early reader of the file would grade last round.)
+: > /tmp/wu-review-$1.md
+: > /tmp/wu-err-$1.log
+# Plans-dir provenance snapshot (M — non-clock): ~/.kimi/plans/ is a GLOBAL dir a
+# concurrent peer OR a prior run also writes to, and the path grepped from kimi's
+# free-form stdout is NOT proof this run wrote it (it could be path-shaped noise or
+# an old path kimi mentions). Snapshot the existing plans files BEFORE launch; the
+# harvest below accepts the named file ONLY if it is absent from this snapshot,
+# i.e. newly created this run. This is provenance without the clock — immune to
+# both the equal-tick `-nt` fragility and the foreign/stale-file risk that removing
+# `-nt` outright (round 2) reopened (Carnot + Tesla's round-3 catch).
+ls -1 "$HOME"/.kimi/plans/*.md 2>/dev/null | sort > /tmp/wu-plans-snapshot-$1.txt
 (
   # Transient "LLM not set" retry: under CONCURRENT kimi use (another session or
   # a parallel cage-match holding the CLI's credentials lock), a fully logged-in
@@ -589,13 +606,21 @@ fi
 # reviewer is wrongly demoted — grading the clock, not the write. The structural
 # fix removes the coupling instead of guarding it: make a prior-round file
 # UNREPRESENTABLE at launch, so a non-empty output is necessarily THIS round's.
-#   - Kelvin / Tesla / Wu redirect stdout with `>` (see their launch lines),
+#   - Kelvin / Tesla redirect stdout with `>` at spawn (see their launch lines),
 #     which TRUNCATES the review file at launch — prior bytes are gone before the
 #     CLI writes a thing. Stale content is impossible; no freshness check needed.
+#   - Wu's own `>` sits INSIDE its backgrounded subshell (on the inner kimi line),
+#     so it truncates late; Wu is therefore truncated EXPLICITLY (`: > file`) just
+#     before the subshell is spawned, matching Kelvin/Tesla at-launch by
+#     construction (Tesla's catch — otherwise the "at launch" claim overclaimed).
 #   - Carnot is the one exception: `--output-last-message` does NOT truncate — codex
 #     writes the JSON only on success, leaving a prior file in place if it emits
 #     nothing. So its outputs are `rm -f`'d immediately before the launch (Step B),
 #     making the absence-vs-presence test (`-s`) the whole stale guard.
+#   - Wu HARVEST repopulation (K3 summarize-to-stdout quirk) is the one path that
+#     writes wu-review from OUTSIDE this contract, from the global ~/.kimi/plans
+#     dir. It is provenance-gated by a pre-launch snapshot (harvest only a file
+#     NEWLY CREATED this run) — so "non-empty ⇒ this round" still holds there too.
 # COUPLING (Wu's catch — name it so a refactor can't silently break it): this
 # guarantee rests on `>`-truncation (K/T/W) and rm-before-launch (Carnot). A
 # future change that stops truncating, or drops the rm, reopens the stale class.
@@ -654,19 +679,24 @@ wu_ok() {
 # is a GLOBAL dir shared across ALL kimi sessions on this machine (a concurrent
 # peer session writes here too — proven during the 2026-07-18 forensics), so
 # `ls -t | head -1` can grab an UNRELATED review (namespace-collision class,
-# [[feedback_session_local_id_as_global_key]]). Instead parse the EXACT path kimi
-# printed to its own stdout ("...saved to `/Users/.../.kimi/plans/<name>.md`") —
-# and that stdout is THIS run's wu-review.md (`>`-truncated at launch), so the path
-# it names is the file THIS run wrote, immune to concurrent peers. That path IS the
-# structural provenance guarantee — no mtime check needed. (An earlier revision
-# added `[ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]` as belt-and-braces, but
-# that reintroduced the exact strict-`-nt` equal-tick fragility this PR removed from
-# the *_ok gates — Carnot/Tesla/Wu all flagged it. Dropped for consistency: the
-# path-from-this-run's-stdout is a stronger guarantee than the clock ever was.)
+# [[feedback_session_local_id_as_global_key]]). Provenance is a TWO-part structural
+# check, no clock involved:
+#   1. The path must come from THIS run's stdout (wu-review.md, truncated at launch
+#      above), narrowing to a file kimi named this run.
+#   2. That path must be NEWLY CREATED this run — absent from the pre-launch
+#      snapshot (/tmp/wu-plans-snapshot-$1.txt taken before the subshell). This is
+#      the guarantee (1) alone does NOT give: kimi's free-form stdout can name an
+#      OLD or FOREIGN plans path (path-shaped noise, a peer's file, a mentioned
+#      prior path), and (1) would copy it. Round 2 removed the old `-nt` check to
+#      escape its equal-tick fragility but over-corrected — dropping provenance
+#      entirely reopened the stale/foreign class (Carnot + Tesla, round 3). The
+#      snapshot restores provenance WITHOUT the clock: newness is set membership,
+#      immune to same-tick ties AND to foreign writers.
 if ! wu_ok $1 \
    && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null; then
   WU_PLANS_FILE=$(grep -oE '/[^ `"]*/\.kimi/plans/[^ `"]*\.md' /tmp/wu-review-$1.md 2>/dev/null | head -1)
-  if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ]; then
+  if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ] \
+     && ! grep -qxF "$WU_PLANS_FILE" /tmp/wu-plans-snapshot-$1.txt 2>/dev/null; then
     # Prefer the harvested body's OWN anchored verdict; only synthesize a header
     # from the stdout summary's verdict if the plans file lacks the anchored line.
     if grep -qE '^\*\*Verdict:\*\*' "$WU_PLANS_FILE"; then
@@ -684,7 +714,7 @@ if ! wu_ok $1 \
     fi
     echo "harvested Wu review body from $WU_PLANS_FILE (K3 summarized to stdout)" >> /tmp/wu-err-$1.log
   else
-    echo "Wu harvest skipped: no ~/.kimi/plans path named in this run's stdout (or the named file is missing) — nothing to recover" >> /tmp/wu-err-$1.log
+    echo "Wu harvest skipped: no ~/.kimi/plans path named in this run's stdout, the named file is missing, OR it pre-existed this run's snapshot (foreign/stale — not newly created) — nothing to recover" >> /tmp/wu-err-$1.log
   fi
 fi
 
@@ -1067,6 +1097,15 @@ if [ -z "$MAXWELL_TOKEN" ]; then
   echo "WARN: could not mint MAXWELL_TOKEN — skipping 'cage-matched' labeling (best-effort; cage match itself is unaffected)."
 else
 
+# KNOWN BUG — Task #9 (do not trust this label logic until fixed): the per-reviewer
+# re-parse below is gated on $KELVIN_AVAILABLE / $CARNOT_AVAILABLE / $TESLA_AVAILABLE
+# / $WU_AVAILABLE, which are set in the Step-D shell and DO NOT persist to this fresh
+# shell. So they read empty here, every verdict stays unset, ADVERSARIAL_APPROVE
+# never reaches 1, and the `cage-matched` label never applies even on clean consensus
+# (Carnot + Tesla, PR #122 round 3). The correct fix is to persist availability+verdicts
+# to a sidecar in Step D and `source` it here — deferred to Task #9 to keep PR #122
+# focused on the four review-integrity checks. The re-parse below is left as-is (the
+# closure/label path is advisory until #9 lands).
 # Verdicts:
 #  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
 #    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
