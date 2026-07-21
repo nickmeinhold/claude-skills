@@ -6,7 +6,12 @@ repetition / fillers and normalises ASR garbles to an optional PROJECT glossary,
 while preserving meaning and each speaker's voice. Never summarises or invents.
 
 Operates in the JSON pipeline so `build` stays the single renderer:
-  Reads  $TRANSCRIBE_WORK/turns_named.json (named) or turns.json (anonymous)
+  Reads  the corrected transcript $TRANSCRIBE_WORK/turns_named.json (derived by
+         apply_corrections) if present, else the pristine attributed base
+         turns_attributed.json, else raw turns.json — the same content precedence
+         every reader uses. named vs anonymous is inferred from the data (a
+         "speaker" key on the turns), not the filename, so this stage needs no
+         separate mode signal.
   Writes $TRANSCRIBE_WORK/turns_clean.json  (coalesced blocks, cleaned text)
 
 Glossary + context are read from $TRANSCRIBE_CONFIG (speakers.json), optional keys
@@ -59,7 +64,11 @@ No prose, no markdown fences."""
 def coalesce(turns):
     """Merge consecutive same-speaker turns (same logic build uses) so the LLM
     sees connected prose with cross-turn context — better than per-fragment."""
-    key = "speaker" if turns and "speaker" in turns[0] else "cluster"
+    # `all`, not `any`: KEY=speaker only when every turn carries one, so the
+    # cluster fallback (every turn always has a "cluster") is crash-proof — same
+    # rule as build_outputs.py. See its comment for why `any` here would KeyError.
+    key = "speaker" if turns and all(isinstance(t, dict) and "speaker" in t
+                                     for t in turns) else "cluster"
     blocks = []
     for t in turns:
         if blocks and blocks[-1][key] == t[key]:
@@ -107,8 +116,14 @@ def edit_chunk(args):
 
 
 def main():
+    # Same content precedence as build_outputs.py so both readers resolve to the
+    # identical source: corrected transcript -> pristine attributed base (the
+    # post-attribute/pre-apply half-state) -> raw turns.
     named = WORK / "turns_named.json"
-    src = named if named.exists() else WORK / "turns.json"
+    attributed = WORK / "turns_attributed.json"
+    src = (named if named.exists()
+           else attributed if attributed.exists()
+           else WORK / "turns.json")
     turns = json.loads(src.read_text())
     blocks, key = coalesce(turns)
     print(f"  {len(turns)} turns -> {len(blocks)} blocks; cleaning"

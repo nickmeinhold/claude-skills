@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Assemble final deliverables: transcript.html / .txt / .srt.
 
-Reads turns_named.json if present (named speakers), else turns.json (anonymous
-clusters rendered as "Speaker 0/1/..."). Drops orphan-echo duplicate turns,
+Reads the corrected transcript turns_named.json (apply_corrections derives it
+every run) if present, else the pristine attributed base turns_attributed.json,
+else raw turns.json. Named vs anonymous is inferred from the DATA (a "speaker"
+key on each turn) — the same rule clean.py uses — so the two renderers never
+disagree about the mode. Anonymous clusters render as "Speaker 0/1/...".
+Drops orphan-echo duplicate turns,
 coalesces consecutive same-speaker turns, auto-discovers however many speakers
 in first-appearance order, assigns a stable colour per speaker.
 
@@ -47,10 +51,28 @@ def linkify(escaped_text, linked):
     return escaped_text
 
 
+# Content precedence: the corrected transcript (apply_corrections writes
+# turns_named.json every run) -> the pristine attributed base (attribution ran
+# but apply hasn't, e.g. a hand-run in that half-state) -> raw turns.json.
+# Falling through to turns_attributed.json (which carries speaker keys) rather
+# than raw turns.json keeps the rendered content consistent with the mode
+# inferred below — otherwise a post-attribute/pre-apply render would read
+# cluster-keyed raw turns while KEY said "speaker" and KeyError.
 named = WORK / "turns_named.json"
-src = named if named.exists() else WORK / "turns.json"
+attributed = WORK / "turns_attributed.json"
+src = (named if named.exists()
+       else attributed if attributed.exists()
+       else WORK / "turns.json")
 turns = json.loads(src.read_text())
-KEY = "speaker" if named.exists() else "cluster"
+# Mode from the DATA, not a filename — the identical rule clean.py uses, so the
+# two renderers can never disagree about named-vs-anonymous. Render KEY=speaker
+# only when EVERY turn carries a speaker (attribute stamps all turns or none):
+# `all`, not `any`, because every turn always has a "cluster", so falling to
+# cluster is crash-proof — whereas `any` + one stray speaker turn would KeyError
+# on the cluster-only siblings at t[KEY]. (resolve_base's legacy DETECTION uses
+# `any` on purpose: a different question — refuse if ANY attribution exists.)
+KEY = "speaker" if turns and all(isinstance(t, dict) and "speaker" in t
+                                 for t in turns) else "cluster"
 
 
 def is_orphan_echo(t, prev):

@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Apply per-recording corrections to the attributed turns.
+"""Derive the corrected transcript from a PRISTINE base + approved corrections.
+
+apply_corrections is a PURE FUNCTION: it reads an immutable base
+(turns_attributed.json in named mode, else raw turns.json in anonymous mode),
+applies EVERY approved correction to that clean base, and writes a FRESH
+turns_named.json every run. It never mutates its own input. Consequences:
+
+  * Re-applying is idempotent BY CONSTRUCTION — each run starts from the same
+    clean base, so a correction can't re-fire on already-corrected text. No
+    idempotency guard, no count-budget/skip interaction. (This dissolves the
+    whole bug class the old in-place `make_repl`/self-match guard defended.)
+  * --reattribute regenerates a clean base (attribute.py rewrites
+    turns_attributed.json) and re-derives turns_named.json cleanly.
+  * Removing an approved entry actually un-bakes it on the next run — the SoT is
+    now symmetric, because the output is rebuilt from scratch, not accumulated.
 
 The corrections file ($TRANSCRIBE_WORK/corrections.json) is the durable home of
 every transcript fix, so hand corrections and approved repair-pass proposals
-SURVIVE any --reattribute (which regenerates turns_named.json from raw turns).
-The SoT is asymmetric: it governs FUTURE (re)application — removing an approved
-entry stops it re-applying on the next --reattribute, but does NOT un-bake text
-already written into the current turns_named.json until that re-derive runs.
-Convention:
+SURVIVE any --reattribute. Convention:
 
 {
   "corrections": [
@@ -26,10 +36,11 @@ Convention:
 Patterns are Python regexes matched against each turn's text. Replacements are
 inserted LITERALLY (regex backreferences like \1 are NOT interpreted), so an
 LLM-proposed replacement containing a backslash can't crash or mangle. Applied
-in file order; idempotent when a replacement doesn't re-match its own output.
+in file order.
 
-Reads  $TRANSCRIBE_WORK/corrections.json (absent -> no-op)
-Edits  $TRANSCRIBE_WORK/turns_named.json (or turns.json if no attribution ran)
+Reads  $TRANSCRIBE_WORK/turns_attributed.json (named base) or turns.json (anon)
+       + $TRANSCRIBE_WORK/corrections.json (absent -> a plain copy of the base)
+Writes $TRANSCRIBE_WORK/turns_named.json (FRESH each run — never mutated in place)
 """
 import json
 import os
@@ -44,30 +55,30 @@ def apply_literal(pattern, r, text, flags=0, first_only=False):
     """Replace matches of `pattern` with the LITERAL string `r` (no regex
     backreferences — a backslash/\\1 in r is inserted verbatim, never a backref).
 
-    IDEMPOTENT: a match already lying inside an existing copy of `r` anywhere in
-    `text` is SKIPPED, so re-applying can't re-expand a self-matching replacement
-    at any offset ("Worry"->"Worrying" prefix, "cat"->"the cat" suffix,
-    "bar"->"foobar" internal). Crucially a skip does NOT consume the substitution
-    budget (unlike re.subn+count=1, where a skipped match still counted): the
-    scanner keeps going to the next real match. first_only stops after the first
-    REAL mutation (turn-scoped corrections); otherwise every real match is
-    replaced (unscoped/global). Empty r (deletion) always applies. Returns
-    (new_text, n_real_mutations)."""
-    def inside_existing(a, b):
-        if not r:
-            return False
-        i = text.find(r)
-        while i != -1:
-            if i <= a and b <= i + len(r):
-                return True
-            i = text.find(r, i + 1)
-        return False
+    FAITHFUL, single-pass application: `re.finditer` walks the INPUT text once,
+    so a replacement never re-matches ITS OWN output. This is what makes re-apply
+    idempotent by construction (each run starts from the same pristine base).
+
+    Deliberate behavioral choice, stated honestly: this does NOT skip a match
+    that lies inside an existing copy of `r` in the base. So an expansion whose
+    replacement is already present around the match DOES expand on a single pass
+    — e.g. pattern `cat` / replacement `the cat` on base `the cat sat` yields
+    `the the cat sat`. The old in-place code skipped that (via an `inside_existing`
+    guard), which produced the documented false-NEGATIVE (a legitimate first fix
+    silently no-op'd forever). We chose faithful application over silent-skip:
+    the result is visible in review, deterministic, and idempotent across re-runs.
+    An over-broad correction is fixed by tightening the correction, not by a
+    scanner guard that reintroduces the silent-skip class.
+
+    `first_only` stops after the first match (turn-scoped corrections, matching
+    the single occurrence the review card previews); otherwise every match is
+    replaced (unscoped/global). The `a < last` guard skips a match that overlaps
+    a prior replacement WITHIN this call. Empty r (deletion) applies normally.
+    Returns (new_text, n_mutations)."""
     out, last, n = [], 0, 0
     for m in re.finditer(pattern, text, flags=flags):
         a, b = m.start(), m.end()
         if a < last:                      # overlaps a prior replacement — skip
-            continue
-        if inside_existing(a, b):
             continue
         out.append(text[last:a])
         out.append(r)
@@ -90,6 +101,42 @@ def load_corrections():
             else data if isinstance(data, list) else [])
 
 
+def resolve_base():
+    """Return the pristine base Path to derive turns_named.json from.
+
+    Precedence: turns_attributed.json (named mode) -> turns.json (anonymous).
+    turns_attributed.json's existence IS the named-mode signal (attribute.py
+    writes it iff attribution ran). Returns None to signal a LEGACY workdir
+    (written before base-derivation) whose attribution lives only in an existing
+    turns_named.json — falling back to raw turns.json would silently drop it, so
+    the caller refuses and asks for a --reattribute migration instead."""
+    attributed = WORK / "turns_attributed.json"
+    if attributed.exists():
+        return attributed
+    # No attributed base. Fresh anonymous run -> raw turns.json. But guard the
+    # legacy case: a pre-refactor turns_named.json that carries real speaker
+    # names is the ONLY copy of that attribution.
+    named = WORK / "turns_named.json"
+    if named.exists():
+        # No pristine attributed base, but a turns_named.json exists. Deriving
+        # anonymously OVERWRITES it, so fail CLOSED unless we can POSITIVELY
+        # confirm it is a clean anonymous artifact — a JSON list with NO speaker
+        # keys. Anything we can't confirm safe (unreadable JSON, an unexpected
+        # shape, or ANY turn carrying a speaker) might be the only copy of a
+        # legacy workdir's attribution, so refuse and demand --reattribute rather
+        # than silently replace it with anonymous output.
+        try:
+            existing = json.loads(named.read_text())
+        except json.JSONDecodeError:
+            return None                       # unreadable -> refuse
+        if not isinstance(existing, list):
+            return None                       # unexpected shape -> refuse
+        if any(isinstance(t, dict) and "speaker" in t for t in existing):
+            return None                       # carries attribution -> refuse
+        # confirmed: a clean anonymous list, nothing attributed to lose
+    return WORK / "turns.json"
+
+
 def main():
     corrections = load_corrections()
     # fail closed: only entries with an EXPLICIT status=="approved" are applied.
@@ -107,17 +154,41 @@ def main():
                 c["turn"] = int(c["turn"])
             except (ValueError, TypeError):
                 c["turn"] = None
+    # Corrections apply IN FILE ORDER, each against the text left by the prior one
+    # (a later entry legitimately transforms an earlier one's output). The one
+    # case that makes ambiguous is an EXACT DUPLICATE: two identical approved
+    # entries both expanding the same span compound (`cat->the cat` twice ->
+    # `the the cat`). Drop exact duplicates (same pattern/replacement/flags/scope/
+    # turn), preserving first occurrence — fixing the data, not re-adding a
+    # scanner self-match guard (which base-derivation deliberately deleted).
+    seen, deduped = set(), []
+    for c in approved:
+        key = (c["pattern"], c["replacement"], c.get("flags") or "",
+               c.get("scope", "correction"), c.get("turn"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    approved = deduped
     proposed = sum(1 for c in corrections if c.get("status") == "proposed")
-    if not approved:
-        if proposed:
-            print(f"  corrections.json: 0 approved to apply "
-                  f"({proposed} proposed awaiting review)", flush=True)
-        return
 
+    base = resolve_base()
+    if base is None:
+        print("  no turns_attributed.json, and turns_named.json is attributed, "
+              "unreadable, or malformed — refusing to overwrite it with an "
+              "anonymous derivation (its attribution may be irrecoverable). "
+              "Regenerate a clean base first:\n"
+              "    run.sh --reattribute <workdir> <speakers.json>", flush=True)
+        return 1
+    if not base.exists():
+        print(f"  no base transcript in {WORK} (expected turns_attributed.json "
+              "or turns.json)", flush=True)
+        return 1
+
+    # Derive FRESH from the pristine base every run — never read turns_named.json
+    # (the output) as input. This is what makes re-apply idempotent.
+    turns = json.loads(base.read_text())
     target = WORK / "turns_named.json"
-    if not target.exists():
-        target = WORK / "turns.json"
-    turns = json.loads(target.read_text())
 
     counts = {}
     for i, t in enumerate(turns):
@@ -130,11 +201,9 @@ def main():
             # `c.get("flags") or ""` (NOT default-arg): a hand entry may carry
             # "flags": null, and "i" in None would TypeError outside the guard.
             flags = re.I if "i" in (c.get("flags") or "") else 0
-            # turn-scoped corrections replace only the first REAL match in the turn
+            # turn-scoped corrections replace only the first match in the turn
             # (matching the single occurrence the review card previews); unscoped
-            # hand/glossary corrections replace every occurrence. apply_literal is
-            # literal + idempotent and never lets a skipped self-match steal the
-            # one turn-scoped substitution.
+            # hand/glossary corrections replace every occurrence.
             try:
                 txt, n = apply_literal(c["pattern"], c["replacement"], txt,
                                        flags=flags,
@@ -148,15 +217,25 @@ def main():
                 counts[c["pattern"]] = counts.get(c["pattern"], 0) + n
         t["text"] = txt
 
+    # ALWAYS write the derived output — even with 0 approved corrections it is
+    # the base copied through, and it is the ONLY file downstream reads as the
+    # corrected transcript (attribute.py now writes turns_attributed.json, not
+    # this file), so a named run with no corrections still needs it present.
     target.write_text(json.dumps(turns, indent=1, ensure_ascii=False))
+
+    if not approved:
+        note = (f" ({proposed} proposed awaiting review)" if proposed else "")
+        print(f"  corrections: 0 approved to apply{note} "
+              f"-> {target.name} (base: {base.name})", flush=True)
+        return
     print(f"  corrections: {sum(counts.values())} replacements "
           f"({len(counts)}/{len(approved)} approved patterns matched"
           + (f"; {proposed} proposed awaiting review" if proposed else "")
-          + f") -> {target.name}", flush=True)
+          + f") -> {target.name} (base: {base.name})", flush=True)
     unmatched = [c["pattern"] for c in approved if c["pattern"] not in counts]
     if unmatched:
-        print(f"  corrections with no match (already applied, or stale?): "
-              f"{unmatched}", flush=True)
+        print(f"  corrections with no match (stale pattern, or turn re-indexed "
+              f"by --reattribute?): {unmatched}", flush=True)
 
 
 if __name__ == "__main__":
