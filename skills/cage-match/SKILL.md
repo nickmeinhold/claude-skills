@@ -31,6 +31,8 @@ Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
 
 **Why not `gh pr diff`?** It serves GitHub's *server-side* diff, which lags a push by seconds. Run it in the same breath as `git push` — e.g. on a re-review after addressing findings — and it returns the **pre-push** diff, so all three reviewers grade stale code and can `REQUEST_CHANGES` over "fixes absent from the diff" that are actually present. The fix: fetch the PR head ref and diff the exact `headRefOid` locally — no propagation dependency, always current with the pushed HEAD.
 
+**Why `--unified=9999` (full-file context)?** A default `-U3` diff shows each change with three lines of surrounding context, so every line of a touched file that is more than three lines from a change is **outside the reviewer's window**. A diff-only reviewer cannot tell "this line does not exist" from "this line exists but isn't shown" — so it flags present-but-unshown code as *absent* ("`sys.exit(main())` not wired", "handler never called"). PR #121 hit this exactly: Carnot AND Tesla both flagged an unchanged, present `sys.exit(main())` as missing across all four rounds — two model families converging on the same wrong answer, which reads as corroboration but is a shared instrument blind spot. `--unified=9999` expands the context to the entire file for every touched file, so there is no "outside the window" line left to hallucinate as missing — the blind spot is *dissolved*, not guarded. It only expands files that already appear in the diff (untouched files stay absent), and the `+`/`-` markers still show exactly what changed, so the reviewer's focus is unchanged — only their context is complete. Cost: a larger prompt; a size guard below warns if the full-context diff balloons past the reviewers' comfortable budget.
+
 ```bash
 gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files,isCrossRepository > /tmp/pr-$1-info.json
 PR_BASE=$(jq -r .baseRefName   /tmp/pr-$1-info.json)
@@ -76,12 +78,18 @@ else
   git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
 fi
 if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
-  git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
+  # --unified=9999: full-file context for every touched file, so no present line
+  # falls outside the reviewer's window and gets hallucinated as "absent" (the
+  # diff-window blind spot — see the note above). Untouched files are still
+  # excluded; only files that already appear in the diff are expanded.
+  git diff --unified=9999 "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
 else
   # Fallback (head commit still not fetchable — rare): degrade to GitHub's
   # server-side diff and SAY SO — this path shares the API's propagation timing,
-  # so on a re-review it can serve a diff that lags a just-pushed fix.
-  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix. Check the diff line count below against your expectation." >&2
+  # so on a re-review it can serve a diff that lags a just-pushed fix. NOTE: this
+  # path loses full-file context (gh pr diff serves a default-context diff), so
+  # the diff-window absence-claim guard in Round 9.1 matters most here.
+  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix AND loses full-file context. Check the diff line count below against your expectation." >&2
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
@@ -89,6 +97,15 @@ fi
 # previous round despite known changes means the diff is stale — re-fetch before
 # trusting any verdict built on it.
 echo "diff line count: $(wc -l < /tmp/pr-$1-diff.txt)"
+
+# Size guard: full-file context can balloon a diff that touches a large file.
+# Carnot's medium-reasoning setting was tuned against ~70KB; well past that, an
+# adversary can trip its tool-exploration loop and fail to emit a verdict. Warn
+# (don't hard-fail) so the operator can decide whether to trim scope or proceed.
+DIFF_BYTES=$(wc -c < /tmp/pr-$1-diff.txt)
+if [ "$DIFF_BYTES" -gt 200000 ]; then
+  echo "WARN: full-context diff is ${DIFF_BYTES} bytes (>200KB). This can trip Carnot's exploration loop into producing no verdict, and inflates every reviewer's prompt. Consider whether a large/generated file is being expanded unnecessarily; the review still runs, but watch for reviewer no-shows at the gate." >&2
+fi
 cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
@@ -542,9 +559,21 @@ fi
 
 # Validate that each output file actually contains a review (non-trivial size + verdict marker).
 # An empty file or one without "Verdict:" indicates the reviewer errored or hit a capacity limit.
+#
+# STALE-VERDICT CANARY (`-nt`): each review file must be NEWER than the prompt
+# that produced it. A review older than its prompt is a PRIOR ROUND'S output that
+# this round's run failed to overwrite — grading it means grading deleted code
+# (PR #120: a re-run left a prior-round file whose verdict cited symbols the diff
+# no longer contained). The prompt is rewritten (`cat >`) at the top of every
+# round, so `review -nt prompt` is true only when THIS round actually produced
+# the review. Carnot is the classic culprit: `--output-last-message` leaves the
+# previous JSON in place if codex emits nothing, so the check is most load-bearing
+# there. The content-level backstop (a verdict citing a symbol absent from the
+# current diff) lives in Round 9.1.
 kelvin_ok() {
   [ "$KELVIN_RC" -eq 0 ] \
     && [ -s /tmp/kelvin-review-$1.md ] \
+    && [ /tmp/kelvin-review-$1.md -nt /tmp/kelvin-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/kelvin-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/kelvin-review-$1.md
 }
@@ -556,6 +585,7 @@ kelvin_ok() {
 carnot_ok() {
   [ "$CARNOT_RC" -eq 0 ] \
     && [ -s /tmp/carnot-output-$1.json ] \
+    && [ /tmp/carnot-output-$1.json -nt /tmp/carnot-prompt-$1.txt ] \
     && jq -e '.verdict | IN("APPROVE", "REQUEST_CHANGES", "COMMENT")' \
          /tmp/carnot-output-$1.json >/dev/null 2>&1 \
     && [ -s /tmp/carnot-review-$1.md ]
@@ -565,6 +595,7 @@ carnot_ok() {
 tesla_ok() {
   [ "$TESLA_RC" -eq 0 ] \
     && [ -s /tmp/tesla-review-$1.md ] \
+    && [ /tmp/tesla-review-$1.md -nt /tmp/tesla-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/tesla-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/tesla-review-$1.md
 }
@@ -580,6 +611,7 @@ tesla_ok() {
 wu_ok() {
   [ "$WU_RC" -eq 0 ] \
     && [ -s /tmp/wu-review-$1.md ] \
+    && [ /tmp/wu-review-$1.md -nt /tmp/wu-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/wu-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md
 }
@@ -721,6 +753,35 @@ Based on all available reviews and critiques, synthesize a final assessment:
 2. **Disputed items** - Where reviewers disagree (needs human judgment)
 3. **Unique catches** - Issues only one reviewer found (investigate further)
 
+**Consensus is not corroboration for an absence-claim.** The high-confidence
+weighting in item 1 assumes reviewers fail *independently*. For one finding class
+that assumption breaks: a claim that something is **missing** ("X not wired",
+"never called", "not imported", "no test covers Y") is a shared diff-window blind
+spot — every diff-only reviewer that can't see a line reports it absent *the same
+way*, so two families agreeing is one instrument's error counted twice, not two
+witnesses. Round 1's `--unified=9999` should prevent this, but weight absence-
+claims by the guard below regardless of how many reviewers raised them.
+
+## Round 9.1: Before counting a finding as real — the absence-claim & stale-symbol guard
+
+Two content-level canaries, applied to every finding before it's counted real
+(the executable `-nt` mtime gate in the `*_ok()` functions catches the mechanical
+case; these catch what survives it):
+
+- **Absence-claim guard.** Any finding asserting something is missing/absent/
+  unwired/never-called: **open the actual file and confirm it's truly absent**
+  before acting. If the code is present, the finding is a **false positive —
+  reject it with the file:line proof**, even if 2+ reviewers agree (see the
+  consensus note above). Do not churn the PR to satisfy a hallucinated absence.
+  PR #121: Carnot AND Tesla flagged a present, unchanged `sys.exit(main())` as
+  "not wired" all four rounds — a file read refutes it in seconds.
+- **Stale-symbol canary.** If a verdict cites a symbol, function, or identifier
+  that does **not** appear anywhere in the current diff/touched files, the review
+  was graded against STALE output (a prior round's file — Carnot's
+  `--output-last-message` JSON is the classic culprit). Treat that verdict as
+  unavailable and re-run the reviewer; do not fold a finding about deleted code
+  into the ledger.
+
 ## Round 9.5: Disposition — fix inline, don't defer
 
 Act on the findings before merging; don't just catalogue them. For each finding
@@ -736,6 +797,69 @@ A merged PR must not leave a trail of 5-minute fixes wearing task labels — tha
 converts review into backlog and pushes a context-switch onto the human. (Blocking
 `REQUEST_CHANGES` findings must reach consensus regardless — that's the strict merge
 gate above; this step is about the non-blocking remainder.)
+
+## Round 9.7: Closure bar — one clean confirming round
+
+This is the rule for **when the cage match is done** — when you may apply the
+`cage-matched` label (Round 11) and merge.
+
+**Closure is NOT "the real-bug rate is trending down."** A decaying count
+(3→4→2→1) is a curve-fit over noisy small-N data, and a single real finding in
+the *last* round falsifies it after the fact. PR #121 merged one round early on
+exactly this mistake: round 4 still surfaced a real fail-open (`resolve_base` on a
+corrupt base), so the "asymptote" reasoning was wrong by its own evidence.
+
+**"Zero findings, full stop" is also wrong** — unreachable against asymptotic
+adversaries (Carnot/Tesla will `REQUEST_CHANGES` indefinitely on prose/theoretical
+grounds). A single known false positive (a diff-window artifact per Round 9.1)
+guarantees a non-clean verdict every round, so a literal-zero bar never merges.
+
+The correct, falsifiable bar adjusts for both:
+
+> **Closure = one full round in which every new finding verifies as NON-real** —
+> false-positive (rejected with file-read proof), already-covered (existing test),
+> or deferred-with-reason (a named, accepted follow-up task). **Zero findings that
+> SURVIVE verification as real.**
+
+**Executable per-round ledger.** After each round, classify EVERY new finding —
+no finding leaves the round unclassified:
+
+| Finding | Reviewer(s) | Real? | Disposition |
+|---|---|---|---|
+| … | … | yes / no | fixed & pushed · rejected (file:line proof) · deferred (#task) |
+
+- If the `Real?` column contains **any** `yes` → the round was **not clean**. Fix
+  each real finding, push, and run **one more round** to confirm the fix
+  introduced no new real finding.
+- Only when a full round's ledger is **all `no`** is the PR closed by the bar.
+- The count of findings is irrelevant; only whether any *survives verification as
+  real*. Ten rejected false positives in a round is a clean round.
+
+**Re-review neutrality (no-steering).** A re-review after fixes MUST use the same
+neutral prompt as round 1 — persona + PR info + freshly re-fetched full-context
+diff, and **nothing else**. Never add leading framing ("the author fixed X,
+please confirm", "Nick asked you to look again", "this should be an APPROVE
+now"). A verdict produced from a steered prompt is not independent evidence: mark
+it **non-independent** — it cannot count toward the merge gate or the closure
+ledger. Independence is the orchestrator's *own* duty — a verdict you routed
+toward a desired outcome invalidates itself the instant you notice, before any
+human has to point it out. (The prompt files are rebuilt identically each round
+by the Round 2-6 blocks, so neutrality is the default; this rule forbids *adding*
+to them on a re-run.)
+
+**Readiness vs appetite at the decision.** When the ledger is clean, split the
+decision and own your half:
+
+- **Merge-readiness** — "is the code safe/correct?" — is *your* engineering call.
+  You have read every finding and every rejection-with-proof; you have strictly
+  more evidence than Nick here. **State it as an owned verdict**: "this round is
+  clean, zero real survivors — it's merge-ready, my call."
+- **Merge-appetite** — "ship now, or one more polishing round?" — is Nick's
+  product/timing call. **Ask only this.**
+
+Bundling both into "should I merge?" launders your engineering judgment through
+his push — if he says yes it reads as "Nick decided it was safe" when really you
+decided that and outsourced only the timing.
 
 ## Round 10: Post Reviews to GitHub (parallel)
 
@@ -880,6 +1004,13 @@ wait
 ## Round 11: Auto-apply the `cage-matched` label on consensus APPROVE
 
 A downstream merge gate (live on `nickmeinhold/the-dreaming-repo`, being mirrored to `flux-shadow`) refuses to auto-merge a sensitive PR unless it carries the `cage-matched` label. Apply that label automatically when the cage match reaches a clean consensus, so the label means exactly "a cage match approved this" rather than "a human remembered to click".
+
+**Precondition — the closure bar (Round 9.7) must be met.** This automated rule
+only reads the *latest* verdicts; it cannot see whether the last round was
+clean. Do not run Round 11 until the Round 9.7 ledger shows a full round with
+**zero findings surviving as real**. Consensus APPROVE verdicts on a round that
+still fixed a real bug is exactly the one-round-early merge PR #121 warned about
+— the verdicts are necessary but not sufficient; the clean ledger is the rest.
 
 **Consensus rule:** label iff **Maxwell = APPROVE** AND (**Kelvin = APPROVE** OR **Carnot = APPROVE**). If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the two adversarial reviewers to APPROVE alongside Maxwell.
 
