@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Assemble final deliverables: transcript.html / .txt / .srt.
 
-Reads turns_named.json if present (named speakers), else turns.json (anonymous
-clusters rendered as "Speaker 0/1/..."). Drops orphan-echo duplicate turns,
+Reads the corrected transcript turns_named.json (apply_corrections derives it
+every run) if present, else raw turns.json. Named vs anonymous is a SEPARATE
+question — decided by whether turns_attributed.json exists (attribution ran),
+not by which content file is present, since anonymous runs derive
+turns_named.json too. Anonymous clusters render as "Speaker 0/1/...".
+Drops orphan-echo duplicate turns,
 coalesces consecutive same-speaker turns, auto-discovers however many speakers
 in first-appearance order, assigns a stable colour per speaker.
 
@@ -47,10 +51,16 @@ def linkify(escaped_text, linked):
     return escaped_text
 
 
+# Content vs mode are two separate questions with two separate signals:
+#   * WHICH file holds the corrected transcript -> turns_named.json (apply_
+#     corrections writes it every run), else raw turns.json if apply never ran.
+#   * NAMED vs anonymous -> did attribution run? turns_attributed.json exists iff
+#     it did. (Anonymous runs derive turns_named.json too, so its existence no
+#     longer distinguishes the modes — hence the separate base-file signal.)
 named = WORK / "turns_named.json"
 src = named if named.exists() else WORK / "turns.json"
 turns = json.loads(src.read_text())
-KEY = "speaker" if named.exists() else "cluster"
+KEY = "speaker" if (WORK / "turns_attributed.json").exists() else "cluster"
 
 
 def is_orphan_echo(t, prev):

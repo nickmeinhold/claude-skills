@@ -6,7 +6,10 @@ repetition / fillers and normalises ASR garbles to an optional PROJECT glossary,
 while preserving meaning and each speaker's voice. Never summarises or invents.
 
 Operates in the JSON pipeline so `build` stays the single renderer:
-  Reads  $TRANSCRIBE_WORK/turns_named.json (named) or turns.json (anonymous)
+  Reads  the corrected transcript $TRANSCRIBE_WORK/turns_named.json (derived by
+         apply_corrections) if present, else raw turns.json. named vs anonymous
+         is inferred from the data (a "speaker" key on each turn), not the
+         filename, so this stage needs no separate mode signal.
   Writes $TRANSCRIBE_WORK/turns_clean.json  (coalesced blocks, cleaned text)
 
 Glossary + context are read from $TRANSCRIBE_CONFIG (speakers.json), optional keys

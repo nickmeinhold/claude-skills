@@ -10,7 +10,12 @@ Calls run in PARALLEL with tools/MCP disabled -- otherwise each headless call pa
 the full session-startup tax (MCP server dial-out) and can hang past any timeout.
 
 Reads  $TRANSCRIBE_WORK/turns.json + $TRANSCRIBE_CONFIG
-Writes $TRANSCRIBE_WORK/turns_named.json
+Writes $TRANSCRIBE_WORK/turns_attributed.json — the pristine ATTRIBUTED BASE.
+       This file is never mutated after it is written; apply_corrections.py
+       reads it and derives turns_named.json (base + approved corrections) fresh
+       each run, so re-applying corrections is idempotent BY CONSTRUCTION and a
+       --reattribute regenerates a clean base. Its existence is also the signal
+       for "named mode" (vs anonymous diarization clusters) downstream.
 """
 import json
 import os
@@ -176,7 +181,7 @@ def main():
                                  "text": o.get("text") or t["text"],
                                  "orig": t["text"]})
 
-    (WORK / "turns_named.json").write_text(json.dumps(assigned, indent=1, ensure_ascii=False))
+    (WORK / "turns_attributed.json").write_text(json.dumps(assigned, indent=1, ensure_ascii=False))
     from collections import Counter
     unl = sum(1 for t in assigned if t["speaker"] not in NAMES)
     print(f"  {len(assigned)} turns labelled "

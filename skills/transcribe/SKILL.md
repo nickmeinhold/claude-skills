@@ -22,8 +22,10 @@ bash ~/.claude/skills/transcribe/scripts/run.sh <audio-or-video-file> [speakers.
 
 Outputs land in `~/git/transcribe-<basename>/`: `transcript.html` (open this),
 `transcript_speakers.txt`, `transcript_speakers.srt`, plus the intermediates
-(`audio.json`, `diarization.rttm`, `turns.json`, `turns_named.json`) and the
-repair artifacts (`corrections.json`, `repair_report.md`).
+(`audio.json`, `diarization.rttm`, `turns.json`, `turns_attributed.json` — the
+pristine attributed base, `turns_named.json` — the corrected transcript derived
+fresh from that base + approved corrections) and the repair artifacts
+(`corrections.json`, `repair_report.md`).
 
 > **Ops notes.** (1) The work dir is named from the audio **basename verbatim —
 > spaces included** (`318 Russell St 7 3.m4a` → `~/git/transcribe-318 Russell St
@@ -43,8 +45,10 @@ bash ~/.claude/skills/transcribe/scripts/run.sh --reattribute <workdir> <speaker
 ```
 
 This skips the slow diarize/transcribe steps (~60–90s, not the full pipeline).
-Re-attribution regenerates `turns_named.json`, but approved entries in
-`corrections.json` are automatically re-applied afterwards — hand fixes survive.
+Re-attribution regenerates the pristine base (`turns_attributed.json`) and
+re-derives `turns_named.json` from it + approved `corrections.json` entries — so
+hand fixes survive and re-applying is idempotent by construction (each run starts
+from a clean base, never accumulates onto already-corrected text).
 Anchors are the single biggest accuracy lever — strictly better than the first
 pass, which had none to seed from. Use this when a misattribution slips through,
 or to upgrade a profile-only first pass. (Attribution self-heals failed chunks by
