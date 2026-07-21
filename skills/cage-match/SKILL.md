@@ -236,6 +236,16 @@ KELVIN_FORMAT_EOF
 # model instead of stalling on the "trusted folders" gate.
 env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "$(cat /tmp/kelvin-prompt-$1.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
 KELVIN_PID=$!
+else
+  # Probe found no Pro model → Kelvin does NOT launch, so its `>`-truncation never
+  # runs and a PRIOR ROUND'S /tmp/kelvin-review-$1.md would survive on disk. The
+  # same-shell path is safe (KELVIN_RC=99 → kelvin_ok false), but a file-based
+  # reader (Round 11, a partial re-run) would grade last round. Annihilate it here
+  # so "Kelvin didn't run this round" ≡ empty bytes — the same at-launch contract
+  # the STALE-VERDICT DEFENSE note claims for the skip arm too (Tesla's catch:
+  # asymmetric annihilation — four launch arms killed prior bytes, Kelvin's skip
+  # arm didn't).
+  : > /tmp/kelvin-review-$1.md
 fi
 ```
 
@@ -609,6 +619,9 @@ fi
 #   - Kelvin / Tesla redirect stdout with `>` at spawn (see their launch lines),
 #     which TRUNCATES the review file at launch — prior bytes are gone before the
 #     CLI writes a thing. Stale content is impossible; no freshness check needed.
+#     (Kelvin's PROBE-SKIP arm doesn't spawn, so it can't truncate — its `else`
+#     branch `: >`-annihilates the file instead, so the skip arm honors the same
+#     contract as the launch arm (Tesla's catch: asymmetric annihilation).)
 #   - Wu's own `>` sits INSIDE its backgrounded subshell (on the inner kimi line),
 #     so it truncates late; Wu is therefore truncated EXPLICITLY (`: > file`) just
 #     before the subshell is spawned, matching Kelvin/Tesla at-launch by
@@ -619,8 +632,12 @@ fi
 #     making the absence-vs-presence test (`-s`) the whole stale guard.
 #   - Wu HARVEST repopulation (K3 summarize-to-stdout quirk) is the one path that
 #     writes wu-review from OUTSIDE this contract, from the global ~/.kimi/plans
-#     dir. It is provenance-gated by a pre-launch snapshot (harvest only a file
-#     NEWLY CREATED this run) — so "non-empty ⇒ this round" still holds there too.
+#     dir — so "non-empty ⇒ this round" does NOT strictly hold there. It is a
+#     BEST-EFFORT recovery gated by a pre-launch snapshot (harvest only a
+#     post-snapshot path named in this run's stdout, fail-closed if the snapshot is
+#     missing); a concurrent-kimi mis-harvest is the accepted residual (Task #8),
+#     bounded because Wu is one of five and the gate fails safe far more than it
+#     mis-harvests. See the harvest block for the honest-scope note.
 # COUPLING (Wu's catch — name it so a refactor can't silently break it): this
 # guarantee rests on `>`-truncation (K/T/W) and rm-before-launch (Carnot). A
 # future change that stops truncating, or drops the rm, reopens the stale class.
@@ -679,24 +696,36 @@ wu_ok() {
 # is a GLOBAL dir shared across ALL kimi sessions on this machine (a concurrent
 # peer session writes here too — proven during the 2026-07-18 forensics), so
 # `ls -t | head -1` can grab an UNRELATED review (namespace-collision class,
-# [[feedback_session_local_id_as_global_key]]). Provenance is a TWO-part structural
-# check, no clock involved:
+# [[feedback_session_local_id_as_global_key]]). This harvest is BEST-EFFORT RECOVERY
+# of a K3 quirk, NOT a trust-critical path — so its check is a TWO-part heuristic,
+# no clock involved, honestly scoped:
 #   1. The path must come from THIS run's stdout (wu-review.md, truncated at launch
 #      above), narrowing to a file kimi named this run.
-#   2. That path must be NEWLY CREATED this run — absent from the pre-launch
-#      snapshot (/tmp/wu-plans-snapshot-$1.txt taken before the subshell). This is
-#      the guarantee (1) alone does NOT give: kimi's free-form stdout can name an
-#      OLD or FOREIGN plans path (path-shaped noise, a peer's file, a mentioned
-#      prior path), and (1) would copy it. Round 2 removed the old `-nt` check to
-#      escape its equal-tick fragility but over-corrected — dropping provenance
-#      entirely reopened the stale/foreign class (Carnot + Tesla, round 3). The
-#      snapshot restores provenance WITHOUT the clock: newness is set membership,
-#      immune to same-tick ties AND to foreign writers.
+#   2. That path must be absent from the pre-launch snapshot of ~/.kimi/plans
+#      (/tmp/wu-plans-snapshot-$1.txt) — i.e. it appeared AFTER launch. This rejects
+#      the common stale/foreign case (a path kimi merely *mentions* that already
+#      existed) that (1) alone would copy.
+# PROVEN SCOPE (not more): this establishes "named in this run's stdout AND created
+# after this run's snapshot" — it does NOT prove THIS subshell was the writer. A
+# concurrent kimi (peer session / parallel cage-match) that mints a new plans path
+# post-snapshot, if this run's stdout also names it, would still be harvested — the
+# same concurrency class filed as Task #8. That residual is acceptable here because
+# a mis-harvested Wu is one of five reviewers on a rare recovery path, and the gate
+# fails safe (Wu degrades to unavailable) far more often than it mis-harvests. Round
+# 2 dropped the old `-nt` check to escape its equal-tick fragility but over-corrected
+# (removed provenance entirely, Carnot+Tesla round 3); this restores a right-sized,
+# clock-free heuristic without claiming a write-side seal it can't deliver.
 if ! wu_ok $1 \
    && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null; then
   WU_PLANS_FILE=$(grep -oE '/[^ `"]*/\.kimi/plans/[^ `"]*\.md' /tmp/wu-review-$1.md 2>/dev/null | head -1)
+  # Fail CLOSED: the snapshot file MUST exist for the newness test to mean anything.
+  # `! grep -qxF X missing_file` is TRUE (grep errors → non-zero → negated), which
+  # would let harvest proceed with NO provenance if /tmp/wu-plans-snapshot-$1.txt
+  # were absent (partial re-entry, wiped /tmp). Require the snapshot present first
+  # (Tesla's catch: a provenance check must fail closed, not open).
   if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ] \
-     && ! grep -qxF "$WU_PLANS_FILE" /tmp/wu-plans-snapshot-$1.txt 2>/dev/null; then
+     && [ -f /tmp/wu-plans-snapshot-$1.txt ] \
+     && ! grep -qxF "$WU_PLANS_FILE" /tmp/wu-plans-snapshot-$1.txt; then
     # Prefer the harvested body's OWN anchored verdict; only synthesize a header
     # from the stdout summary's verdict if the plans file lacks the anchored line.
     if grep -qE '^\*\*Verdict:\*\*' "$WU_PLANS_FILE"; then
