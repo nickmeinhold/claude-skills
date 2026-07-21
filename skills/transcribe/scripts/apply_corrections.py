@@ -118,18 +118,22 @@ def resolve_base():
     # names is the ONLY copy of that attribution.
     named = WORK / "turns_named.json"
     if named.exists():
+        # No pristine attributed base, but a turns_named.json exists. Deriving
+        # anonymously OVERWRITES it, so fail CLOSED unless we can POSITIVELY
+        # confirm it is a clean anonymous artifact — a JSON list with NO speaker
+        # keys. Anything we can't confirm safe (unreadable JSON, an unexpected
+        # shape, or ANY turn carrying a speaker) might be the only copy of a
+        # legacy workdir's attribution, so refuse and demand --reattribute rather
+        # than silently replace it with anonymous output.
         try:
             existing = json.loads(named.read_text())
         except json.JSONDecodeError:
-            existing = None
-        # Scan ALL turns, not just existing[0]: a real attributed file has a
-        # "speaker" on every turn (attribute.py always sets one), but this
-        # tolerates a malformed/empty first turn whose attribution lives further
-        # down. isinstance guards a non-list JSON (a bare object would raise on
-        # [0], which the narrow except above would NOT catch) and non-dict turns.
-        if isinstance(existing, list) and any(
-                isinstance(t, dict) and "speaker" in t for t in existing):
-            return None  # legacy named workdir -> caller refuses
+            return None                       # unreadable -> refuse
+        if not isinstance(existing, list):
+            return None                       # unexpected shape -> refuse
+        if any(isinstance(t, dict) and "speaker" in t for t in existing):
+            return None                       # carries attribution -> refuse
+        # confirmed: a clean anonymous list, nothing attributed to lose
     return WORK / "turns.json"
 
 
@@ -170,10 +174,11 @@ def main():
 
     base = resolve_base()
     if base is None:
-        print("  turns_attributed.json missing but turns_named.json is already "
-              "attributed — this is a legacy workdir. Regenerate a clean base "
-              "first:\n    run.sh --reattribute <workdir> <speakers.json>",
-              flush=True)
+        print("  no turns_attributed.json, and turns_named.json is attributed, "
+              "unreadable, or malformed — refusing to overwrite it with an "
+              "anonymous derivation (its attribution may be irrecoverable). "
+              "Regenerate a clean base first:\n"
+              "    run.sh --reattribute <workdir> <speakers.json>", flush=True)
         return 1
     if not base.exists():
         print(f"  no base transcript in {WORK} (expected turns_attributed.json "
