@@ -93,6 +93,17 @@ else
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
+# Freshness seal for the Round 10/11 reviewer-state sidecar (Task #9). The sidecar
+# carries availability+verdicts across fresh shells — but a PRESENT file is not a
+# FRESH file (the same presence≠freshness class the stale-review-file defenses kill
+# at launch). Two guards, set up here where PR_HEAD is known and valid:
+#   1. UNLINK any stale sidecar from a prior run of THIS PR, so a fresh cage-match
+#      always starts clean and a partial re-entry to Round 11 can't read old state.
+#   2. RECORD this run's reviewed head, so Step D can stamp it into the sidecar and
+#      Round 11 can fail closed if the live head has since moved (stale verdicts).
+rm -f /tmp/cm-state-$1.env
+printf '%s' "$PR_HEAD" > /tmp/cm-head-$1
+
 # Diff line count — INFORMATIONAL ONLY. (An earlier revision read an identical
 # round-over-round count as a stale-diff canary. Wu's catch: that invariant held
 # under `-U3` where the count tracks the HUNKS, but under `--unified=9999` the
@@ -757,6 +768,64 @@ tesla_ok  $1 && TESLA_AVAILABLE=1
 wu_ok     $1 && WU_AVAILABLE=1
 
 echo "Reviewer availability: Kelvin=$KELVIN_AVAILABLE Carnot=$CARNOT_AVAILABLE Tesla=$TESLA_AVAILABLE Wu=$WU_AVAILABLE"
+
+# ---- Sidecar: persist availability + verdicts for the downstream rounds ----
+# Availability and verdicts are validly computable ONLY here: the RC guards and the
+# truncation/rm/snapshot staleness defenses have run, so each *_ok reflects THIS
+# round. But Round 10 (posting) and Round 11 (labeling) each run in a FRESH shell —
+# non-bash rounds (8 critique, 9 synthesis) and a gate sit between, so Step-D shell
+# vars ($*_AVAILABLE, $*_VERDICT) evaporate before they're read. Re-deriving there is
+# also stale-unsafe (a reviewer that didn't run this round can leave a prior file with
+# no RC signal to reject it). So compute ONCE here and write a sourceable sidecar; the
+# downstream rounds `source` it. Values are a closed enum / 0-1 — safe to source.
+parse_verdict() {  # $1 = review file; echoes APPROVE|REQUEST_CHANGES|COMMENT (COMMENT if none found)
+  local v
+  # LINE-ANCHORED (^\*\*Verdict:\*\*), matching wu_ok's availability check — an
+  # unanchored grep would let a findings-bullet mention or a prompt-format echo mint
+  # a false APPROVE, or let a real REQUEST_CHANGES in a drifted format fall through to
+  # COMMENT and drop out of the hold check (Carnot + Tesla's catch). Availability already
+  # requires this exact anchored line, so an available reviewer's verdict always parses.
+  v=$(grep -ioE "^\*\*Verdict:\*\*[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" "$1" 2>/dev/null \
+      | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+  case "$v" in APPROVE|REQUEST_CHANGES|COMMENT) echo "$v";; *) echo "COMMENT";; esac
+}
+# Maxwell's verdict feeds the Round-11 label decision (Maxwell always POSTS as COMMENT).
+MAXWELL_VERDICT=$(parse_verdict /tmp/maxwell-review-$1.md)
+# Each adversary's verdict ONLY when available — an unavailable reviewer stays EMPTY,
+# distinct from an explicit COMMENT (a distinction the gate + label logic rely on).
+KELVIN_VERDICT=""; [ "$KELVIN_AVAILABLE" -eq 1 ] && KELVIN_VERDICT=$(parse_verdict /tmp/kelvin-review-$1.md)
+CARNOT_VERDICT=""  # Carnot's verdict is the structured JSON (source of truth), not free text.
+if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
+  CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
+  case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
+fi
+TESLA_VERDICT=""; [ "$TESLA_AVAILABLE" -eq 1 ] && TESLA_VERDICT=$(parse_verdict /tmp/tesla-review-$1.md)
+WU_VERDICT="";    [ "$WU_AVAILABLE"    -eq 1 ] && WU_VERDICT=$(parse_verdict /tmp/wu-review-$1.md)
+
+# Stamp THIS run's reviewed head into the sidecar (recorded by Round 1). Round 11
+# re-derives the live head and fail-closes on a mismatch — so a stale sidecar (prior
+# run, or the branch moved since review) can never mint a label for code no longer
+# under review. Presence is not freshness; the head stamp is the freshness proof.
+SIDECAR_PR_HEAD=$(cat /tmp/cm-head-$1 2>/dev/null)
+# Atomic write to a PRIVATE temp name (mktemp, not a predictable .tmp) then mv, so
+# two concurrent Step-D writers on the same PR can't interleave into one file
+# (Carnot's catch — the fixed .tmp path was itself a shared-name race). mv on the
+# same filesystem is atomic; the loser's mv just overwrites with equivalent state.
+SIDECAR_TMP=$(mktemp "/tmp/cm-state-$1.env.XXXXXX")
+cat > "$SIDECAR_TMP" <<EOF_STATE
+SIDECAR_PR_HEAD="$SIDECAR_PR_HEAD"
+KELVIN_AVAILABLE="$KELVIN_AVAILABLE"
+CARNOT_AVAILABLE="$CARNOT_AVAILABLE"
+TESLA_AVAILABLE="$TESLA_AVAILABLE"
+WU_AVAILABLE="$WU_AVAILABLE"
+MAXWELL_VERDICT="$MAXWELL_VERDICT"
+KELVIN_VERDICT="$KELVIN_VERDICT"
+CARNOT_VERDICT="$CARNOT_VERDICT"
+TESLA_VERDICT="$TESLA_VERDICT"
+WU_VERDICT="$WU_VERDICT"
+EOF_STATE
+mv "$SIDECAR_TMP" /tmp/cm-state-$1.env
+echo "Wrote reviewer state sidecar /tmp/cm-state-$1.env (head $SIDECAR_PR_HEAD; sourced by Rounds 7/8/10/11)."
 ```
 
 ## Round 7: Strict Merge Gate
@@ -769,6 +838,26 @@ The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Te
 | Maxwell ✓ + Kelvin ✗ + Carnot ✗ + Tesla ✗ + Wu ✗ | **HARD FAIL** — surface error, do NOT proceed to Round 10 (post + merge) |
 
 ```bash
+# This gate reads $*_AVAILABLE, which live in the Step-D shell. Source the sidecar
+# (the single SoT) so a fresh shell here doesn't see them empty — an unsourced gate
+# would evaluate `[ "" -eq 0 ]` (error) and could fail-open, NOT hard-failing when it
+# should (Tesla's catch: the SoT was mandatory for Round 11 but skipped here). EVERY
+# source site validates identically before sourcing — missing / malformed / incomplete
+# all fail-closed, and a `source` never executes an unvalidated /tmp file (Carnot +
+# Tesla: asymmetric armor is not armor). The check: exactly 10 lines, each a known
+# KEY="alnum-value" (no shell metachars, no missing/extra keys). Keep this SIDECAR_KEYS
+# pattern + the 10-key check identical across Rounds 7/8/10/11 (no shared function
+# crosses markdown fences). A MISSING/invalid sidecar is a hard fail at the GATE — if
+# Step D didn't record valid availability, we cannot confirm any reviewer ran.
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  source "$SIDECAR"
+else
+  echo "CAGE MATCH HARD FAIL: reviewer-state sidecar $SIDECAR missing/malformed/incomplete — Step D did not record valid availability. Cannot proceed." >&2
+  exit 1
+fi
+
 if [ "$KELVIN_AVAILABLE" -eq 0 ] && [ "$CARNOT_AVAILABLE" -eq 0 ] && [ "$TESLA_AVAILABLE" -eq 0 ] && [ "$WU_AVAILABLE" -eq 0 ]; then
   echo ""
   echo "============================================================"
@@ -807,6 +896,15 @@ Now read whichever adversarial reviews are available and critique them. Did Kelv
 If Kelvin is available, send Maxwell's review to Kelvin for counter-critique:
 
 ```bash
+# Fresh shell — source the sidecar for $KELVIN_AVAILABLE (single SoT), validated
+# identically to the other rounds (missing/malformed/incomplete → skip, never source
+# unvalidated /tmp). Non-fatal here: Round 7 already hard-failed on a truly bad sidecar,
+# so at worst the availability-gated critique below is skipped. Default AVAILABLE=0 so
+# an unsourced var can't trip `[ "" -eq 1 ]`.
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+KELVIN_AVAILABLE=0
+[ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR" && source "$SIDECAR"
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   # Same quoted-heredoc + append-data pattern as the review prompts: the two review
   # bodies (full of backticks and quoted code) are appended as literal files, never
@@ -963,6 +1061,12 @@ decided that and outsourced only the timing.
 Generate App tokens in parallel — independent calls to the same helper script. Carnot now has its own GitHub App (CarnotCodeCarver), so when `CARNOT_APP_ID` is configured its review posts as a **formal PR review** carrying its verdict (so an adversarial APPROVE actually satisfies branch protection). If the Carnot App env is absent (older setup), it falls back to a plain `gh pr comment` labelled `## CarnotCodeCarver's Review`.
 
 ```bash
+# Round 10 is a FRESH shell (non-bash rounds + the gate sit between Step D and here),
+# so $*_AVAILABLE from Step D have evaporated. Source the sidecar Step D wrote so the
+# availability-gated token mints below fire correctly. (Idempotent: just sets vars.)
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; else echo "WARN: $SIDECAR missing/malformed/incomplete — re-run Step D; token mints below may skip available reviewers." >&2; fi
 # Generate short-lived installation tokens for Maxwell + Kelvin (+ Carnot) Apps in parallel.
 ~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" > /tmp/maxwell-token-$1 &
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
@@ -1011,23 +1115,15 @@ fi
 Post all available reviews in parallel. Maxwell as COMMENT (always; Maxwell is the PR author from `/ship` and can't approve its own PRs). Kelvin and Carnot each as a **formal review** carrying their verdict (App token), so an adversarial APPROVE counts toward the merge gate. Kelvin and Carnot each fall back to a plain comment if the App is not configured or the token mint failed:
 
 ```bash
-KELVIN_VERDICT="COMMENT"  # Set based on Kelvin's verdict: APPROVE, REQUEST_CHANGES, or COMMENT
-# Carnot's verdict is the source of truth in its structured JSON.
-CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
-case "$CARNOT_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) CARNOT_VERDICT="COMMENT" ;; esac
-# Tesla's and Wu's verdicts are parsed from their free-text reviews (the **Verdict:** line).
-# Parse ONLY when available — an unavailable reviewer must stay distinct from an explicit
-# COMMENT (Carnot's conflation catch); posting below is availability-gated anyway.
-TESLA_VERDICT=""
-if [ "$TESLA_AVAILABLE" -eq 1 ]; then
-  TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-  case "$TESLA_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) TESLA_VERDICT="COMMENT" ;; esac
-fi
-WU_VERDICT=""
-if [ "$WU_AVAILABLE" -eq 1 ]; then
-  WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-  case "$WU_VERDICT" in APPROVE|REQUEST_CHANGES|COMMENT) ;; *) WU_VERDICT="COMMENT" ;; esac
-fi
+# Availability + every reviewer's verdict come from the Step-D sidecar (single source
+# of truth, computed where the RC/staleness guards were valid). This is a fresh shell,
+# so re-source it here too (idempotent with the token block above if same shell). An
+# unavailable reviewer's *_VERDICT is EMPTY, distinct from an explicit COMMENT; the
+# per-reviewer posting below is availability-gated, so the empty never posts. Kelvin
+# now carries its REAL verdict (was a hardcoded COMMENT placeholder before Task #9).
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; else echo "WARN: $SIDECAR missing/malformed/incomplete — re-run Step D before posting; verdicts unavailable." >&2; fi
 
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
   -f body="$(cat /tmp/maxwell-review-$1.md)" \
@@ -1115,10 +1211,10 @@ The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action i
 
 ```bash
 # Re-mint Maxwell's token: this round runs in a fresh shell, so Round-10
-# variables (including MAXWELL_TOKEN) don't persist — same reason the verdicts
-# below are re-derived from files. Prefer the Round-10 token file (still valid
-# within its 1-hour TTL), then fall back to minting a fresh one (needs the App
-# creds from .env in this shell).
+# variables (including MAXWELL_TOKEN) don't persist — same reason availability +
+# verdicts are sourced from the Step-D sidecar below. Prefer the Round-10 token file
+# (still valid within its 1-hour TTL), then fall back to minting a fresh one (needs
+# the App creds from .env in this shell).
 source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(cat /tmp/maxwell-token-$1 2>/dev/null)}
 MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null)}
@@ -1126,43 +1222,35 @@ if [ -z "$MAXWELL_TOKEN" ]; then
   echo "WARN: could not mint MAXWELL_TOKEN — skipping 'cage-matched' labeling (best-effort; cage match itself is unaffected)."
 else
 
-# KNOWN BUG — Task #9 (do not trust this label logic until fixed): the per-reviewer
-# re-parse below is gated on $KELVIN_AVAILABLE / $CARNOT_AVAILABLE / $TESLA_AVAILABLE
-# / $WU_AVAILABLE, which are set in the Step-D shell and DO NOT persist to this fresh
-# shell. So they read empty here, every verdict stays unset, ADVERSARIAL_APPROVE
-# never reaches 1, and the `cage-matched` label never applies even on clean consensus
-# (Carnot + Tesla, PR #122 round 3). The correct fix is to persist availability+verdicts
-# to a sidecar in Step D and `source` it here — deferred to Task #9 to keep PR #122
-# focused on the four review-integrity checks. The re-parse below is left as-is (the
-# closure/label path is advisory until #9 lands).
-# Verdicts:
-#  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
-#    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
-#  - Every adversary's verdict is RE-DERIVED FROM ITS FILE here: this round runs
-#    in a fresh shell, so Round-10 variables (KELVIN_VERDICT included) don't
-#    persist. Carnot reads its structured JSON; Kelvin/Tesla/Wu re-parse the
-#    **Verdict:** line. (Carnot's catch: a stale `already set above` comment let
-#    KELVIN_VERDICT silently reach the gate empty, dropping a valid Kelvin APPROVE.)
-MAXWELL_VERDICT="COMMENT"   # Set from Maxwell's review verdict above.
-
-CARNOT_VERDICT=""
-if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
-  CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
-fi
-# Re-parse Kelvin's, Tesla's, and Wu's verdicts from their review files (this runs in a
-# fresh shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
-KELVIN_VERDICT=""
-if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
-  KELVIN_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/kelvin-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-fi
-TESLA_VERDICT=""
-if [ "$TESLA_AVAILABLE" -eq 1 ]; then
-  TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-fi
-WU_VERDICT=""
-if [ "$WU_AVAILABLE" -eq 1 ]; then
-  WU_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/wu-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
-fi
+# Availability + every verdict (Maxwell included) come from the Step-D sidecar — the
+# single place they were validly computed (RC guards + staleness defenses had run).
+# This fresh shell can't re-derive them safely (Step-D vars gone; re-parsing files is
+# stale-unsafe for a reviewer that didn't run this round), so `source` the sidecar.
+# This is the Task #9 fix: before it, MAXWELL_VERDICT was a hardcoded "COMMENT" (so
+# the APPROVE check below could never pass) and the adversary re-parse was gated on
+# non-persistent $*_AVAILABLE (so the label never applied). Now every input is live.
+# Fail CLOSED at three gates before trusting the sidecar — a merge-gating label must
+# never be minted from absent, corrupt, or STALE reviewer state:
+#   (1) MISSING  → Step D didn't run this session / /tmp cleared.
+#   (2) MALFORMED → any line isn't a known KEY="safe-value" (value = alnum/underscore
+#       only, no shell metachars). Validating BEFORE `source` refuses to execute an
+#       injected/hand-edited /tmp file (Carnot + Tesla: the reader never enforced the
+#       closed-enum invariant the write side assumes; `source` executes whatever's there).
+#   (3) STALE    → the sidecar's stamped head != the LIVE head (prior run, or the branch
+#       moved since review). Its verdicts don't describe the current code, so withhold.
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+if [ ! -f "$SIDECAR" ]; then
+  echo "WARN: $SIDECAR missing — Step D did not run this session, or /tmp was cleared. Skipping 'cage-matched' (fail-closed; a missing sidecar must not fabricate a consensus)."
+elif [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -ne 10 ] || grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  echo "WARN: $SIDECAR malformed or incomplete (not exactly 10 known KEY=\"safe-value\" lines). Skipping 'cage-matched' (fail-closed; shape≠schema — a partial key set must not source or label; refusing to execute untrusted /tmp)."
+else
+source "$SIDECAR"
+# Freshness (head stamp): the head the review ran against must still be the live head.
+CUR_HEAD=$(git ls-remote origin "refs/heads/$(jq -r .headRefName /tmp/pr-$1-info.json 2>/dev/null)" 2>/dev/null | head -1 | awk '{print $1}')
+if [ -z "$SIDECAR_PR_HEAD" ] || [ -z "$CUR_HEAD" ] || [ "$SIDECAR_PR_HEAD" != "$CUR_HEAD" ]; then
+  echo "WARN: sidecar head ($SIDECAR_PR_HEAD) != live head ($CUR_HEAD) — stale or moved reviewer state. Skipping 'cage-matched' (fail-closed)."
+else
 
 # Any REQUEST_CHANGES from any reviewer is a hard block on the label.
 ANY_REQUEST_CHANGES=0
@@ -1196,6 +1284,9 @@ if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
 else
   echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT) — NOT applying 'cage-matched' label."
 fi
+
+fi  # end head-freshness guard (Task #9 round 2)
+fi  # end sidecar missing/malformed/present guard (Task #9)
 
 fi  # end empty-MAXWELL_TOKEN guard
 ```
