@@ -31,7 +31,7 @@ Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
 
 **Why not `gh pr diff`?** It serves GitHub's *server-side* diff, which lags a push by seconds. Run it in the same breath as `git push` — e.g. on a re-review after addressing findings — and it returns the **pre-push** diff, so all three reviewers grade stale code and can `REQUEST_CHANGES` over "fixes absent from the diff" that are actually present. The fix: fetch the PR head ref and diff the exact `headRefOid` locally — no propagation dependency, always current with the pushed HEAD.
 
-**Why `--unified=9999` (full-file context)?** A default `-U3` diff shows each change with three lines of surrounding context, so every line of a touched file that is more than three lines from a change is **outside the reviewer's window**. A diff-only reviewer cannot tell "this line does not exist" from "this line exists but isn't shown" — so it flags present-but-unshown code as *absent* ("`sys.exit(main())` not wired", "handler never called"). PR #121 hit this exactly: Carnot AND Tesla both flagged an unchanged, present `sys.exit(main())` as missing across all four rounds — two model families converging on the same wrong answer, which reads as corroboration but is a shared instrument blind spot. `--unified=9999` expands the context to the entire file for every touched file, so there is no "outside the window" line left to hallucinate as missing — the blind spot is *dissolved*, not guarded. It only expands files that already appear in the diff (untouched files stay absent), and the `+`/`-` markers still show exactly what changed, so the reviewer's focus is unchanged — only their context is complete. Cost: a larger prompt; a size guard below warns if the full-context diff balloons past the reviewers' comfortable budget.
+**Why `--unified=9999` (full-file context)?** A default `-U3` diff shows each change with three lines of surrounding context, so every line of a touched file that is more than three lines from a change is **outside the reviewer's window**. A diff-only reviewer cannot tell "this line does not exist" from "this line exists but isn't shown" — so it flags present-but-unshown code as *absent* ("`sys.exit(main())` not wired", "handler never called"). PR #121 hit this exactly: Carnot AND Tesla both flagged an unchanged, present `sys.exit(main())` as missing across all four rounds — two model families converging on the same wrong answer, which reads as corroboration but is a shared instrument blind spot. `--unified=9999` expands the context to **up to 9999 lines around each change** — which is the *entire* file for any normal source file (the SKILL.md files here are ~1000 lines; 9999 covers them whole), so for the files this skill actually reviews there is no "outside the window" line left to hallucinate as missing. Honest scope (Tesla + Wu's catch): this **shrinks** the blind spot to files with code more than 9999 lines from a change — a >~10k-line touched file (generated blobs, vendored bundles) can still hide distant lines, and those are exactly the population the size guard below admits exists. So the blind spot is *dissolved for normal files, not universally* — Round 9.1's absence-claim guard stays load-bearing for the rare oversized-file case, not merely belt-and-braces. It only expands files that already appear in the diff (untouched files stay absent), and the `+`/`-` markers still show exactly what changed, so the reviewer's focus is unchanged — only their context is (near-)complete. Cost: a larger prompt; a size guard below warns if the full-context diff balloons past the reviewers' comfortable budget.
 
 ```bash
 gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files,isCrossRepository > /tmp/pr-$1-info.json
@@ -93,18 +93,30 @@ else
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
-# Conservation check: on a RE-review after edits, an identical line count to the
-# previous round despite known changes means the diff is stale — re-fetch before
-# trusting any verdict built on it.
+# Diff line count — INFORMATIONAL ONLY. (An earlier revision read an identical
+# round-over-round count as a stale-diff canary. Wu's catch: that invariant held
+# under `-U3` where the count tracks the HUNKS, but under `--unified=9999` the
+# count is ≈ Σ(touched-file lengths) — a function of the file SET, nearly
+# insensitive to the change set. An in-place one-line fix keeps the count constant,
+# so the heuristic would false-flag a fresh diff as stale AND miss a genuinely
+# stale one. The real stale-diff guard is upstream and structural: Round 1 anchors
+# PR_HEAD on `git ls-remote` (the actual current remote ref) and diffs against that
+# exact commit, so the diff is always current with the pushed HEAD — the stale-diff
+# class the old canary chased can't occur. This line is left as a sanity readout.)
 echo "diff line count: $(wc -l < /tmp/pr-$1-diff.txt)"
 
 # Size guard: full-file context can balloon a diff that touches a large file.
-# Carnot's medium-reasoning setting was tuned against ~70KB; well past that, an
-# adversary can trip its tool-exploration loop and fail to emit a verdict. Warn
-# (don't hard-fail) so the operator can decide whether to trim scope or proceed.
+# Carnot's medium-reasoning setting was tuned/validated at ~70KB (this skill's own
+# base-derivation PRs ran ~74KB with all reviewers landing). Past that the
+# exploration-loop-no-verdict risk starts, so the threshold is aligned to the
+# EVIDENCE, not a round number well above it (Wu's catch: a 150KB diff must not
+# sail under a 200KB guard while sitting in the named risk zone). Two tiers, both
+# warn-only — never hard-fail, so the operator decides whether to trim or proceed.
 DIFF_BYTES=$(wc -c < /tmp/pr-$1-diff.txt)
 if [ "$DIFF_BYTES" -gt 200000 ]; then
-  echo "WARN: full-context diff is ${DIFF_BYTES} bytes (>200KB). This can trip Carnot's exploration loop into producing no verdict, and inflates every reviewer's prompt. Consider whether a large/generated file is being expanded unnecessarily; the review still runs, but watch for reviewer no-shows at the gate." >&2
+  echo "WARN: full-context diff is ${DIFF_BYTES} bytes (>200KB) — WELL past Carnot's ~70KB validated point. High risk of Carnot exploration-looping into no verdict; expect possible reviewer no-shows at the gate. Consider whether a large/generated file is being expanded unnecessarily." >&2
+elif [ "$DIFF_BYTES" -gt 100000 ]; then
+  echo "NOTE: full-context diff is ${DIFF_BYTES} bytes (>100KB) — past Carnot's ~70KB validated point and entering the risk zone. Review should still complete; watch for a Carnot no-show at the gate." >&2
 fi
 cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
@@ -298,6 +310,13 @@ cat /tmp/pr-$1-diff.txt >> /tmp/carnot-prompt-$1.txt
 # path in this command (schema, prompt, outputs) is ABSOLUTE, so the workdir
 # change is safe; keep it that way when editing.
 CARNOT_SCRATCH=$(mktemp -d)
+# Stale-verdict kill (Carnot only): unlike Kelvin/Tesla/Wu, whose `>` redirects
+# truncate their review files at launch, codex writes --output-last-message ONLY
+# on success — a prior-round JSON survives if it emits nothing, and would then be
+# graded as this round's. rm both outputs here so a non-empty file downstream is
+# necessarily THIS round's; `carnot_ok`'s `-s` check is then the whole stale guard
+# (no mtime canary — see the "STALE-VERDICT DEFENSE" note by the *_ok functions).
+rm -f /tmp/carnot-output-$1.json /tmp/carnot-review-$1.json /tmp/carnot-review-$1.md
 DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec -C "$CARNOT_SCRATCH" --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 < /tmp/carnot-prompt-$1.txt &
 CARNOT_PID=$!
 ```
@@ -560,20 +579,31 @@ fi
 # Validate that each output file actually contains a review (non-trivial size + verdict marker).
 # An empty file or one without "Verdict:" indicates the reviewer errored or hit a capacity limit.
 #
-# STALE-VERDICT CANARY (`-nt`): each review file must be NEWER than the prompt
-# that produced it. A review older than its prompt is a PRIOR ROUND'S output that
-# this round's run failed to overwrite — grading it means grading deleted code
+# STALE-VERDICT DEFENSE — kill the class at the source, don't grade the clock.
+# A stale verdict is a PRIOR ROUND'S output file graded as if it were this round's
 # (PR #120: a re-run left a prior-round file whose verdict cited symbols the diff
-# no longer contained). The prompt is rewritten (`cat >`) at the top of every
-# round, so `review -nt prompt` is true only when THIS round actually produced
-# the review. Carnot is the classic culprit: `--output-last-message` leaves the
-# previous JSON in place if codex emits nothing, so the check is most load-bearing
-# there. The content-level backstop (a verdict citing a symbol absent from the
-# current diff) lives in Round 9.1.
+# no longer contained). An earlier revision guarded this with an mtime canary
+# (`review -nt prompt`), but three cross-family reviewers (Carnot, Tesla, Wu)
+# converged on its flaw: `[ A -nt B ]` is STRICTLY newer, so a review written in
+# the same filesystem-timestamp tick as the prompt fails the check and a LIVE
+# reviewer is wrongly demoted — grading the clock, not the write. The structural
+# fix removes the coupling instead of guarding it: make a prior-round file
+# UNREPRESENTABLE at launch, so a non-empty output is necessarily THIS round's.
+#   - Kelvin / Tesla / Wu redirect stdout with `>` (see their launch lines),
+#     which TRUNCATES the review file at launch — prior bytes are gone before the
+#     CLI writes a thing. Stale content is impossible; no freshness check needed.
+#   - Carnot is the one exception: `--output-last-message` does NOT truncate — codex
+#     writes the JSON only on success, leaving a prior file in place if it emits
+#     nothing. So its outputs are `rm -f`'d immediately before the launch (Step B),
+#     making the absence-vs-presence test (`-s`) the whole stale guard.
+# COUPLING (Wu's catch — name it so a refactor can't silently break it): this
+# guarantee rests on `>`-truncation (K/T/W) and rm-before-launch (Carnot). A
+# future change that stops truncating, or drops the rm, reopens the stale class.
+# The content-level backstop (a verdict citing a symbol absent from the current
+# diff) lives in Round 9.1.
 kelvin_ok() {
   [ "$KELVIN_RC" -eq 0 ] \
     && [ -s /tmp/kelvin-review-$1.md ] \
-    && [ /tmp/kelvin-review-$1.md -nt /tmp/kelvin-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/kelvin-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/kelvin-review-$1.md
 }
@@ -581,11 +611,11 @@ kelvin_ok() {
 # rather than the rendered markdown, so a botched jq filter doesn't
 # silently demote a good review to "unavailable". The JSON must parse
 # AND have a non-empty verdict matching one of the schema's enum
-# values.
+# values. Its outputs are rm-before-launch (Step B), so `-s` alone
+# rejects a stale prior-round file — no mtime check.
 carnot_ok() {
   [ "$CARNOT_RC" -eq 0 ] \
     && [ -s /tmp/carnot-output-$1.json ] \
-    && [ /tmp/carnot-output-$1.json -nt /tmp/carnot-prompt-$1.txt ] \
     && jq -e '.verdict | IN("APPROVE", "REQUEST_CHANGES", "COMMENT")' \
          /tmp/carnot-output-$1.json >/dev/null 2>&1 \
     && [ -s /tmp/carnot-review-$1.md ]
@@ -595,7 +625,6 @@ carnot_ok() {
 tesla_ok() {
   [ "$TESLA_RC" -eq 0 ] \
     && [ -s /tmp/tesla-review-$1.md ] \
-    && [ /tmp/tesla-review-$1.md -nt /tmp/tesla-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/tesla-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/tesla-review-$1.md
 }
@@ -611,7 +640,6 @@ tesla_ok() {
 wu_ok() {
   [ "$WU_RC" -eq 0 ] \
     && [ -s /tmp/wu-review-$1.md ] \
-    && [ /tmp/wu-review-$1.md -nt /tmp/wu-prompt-$1.txt ] \
     && [ "$(wc -c < /tmp/wu-review-$1.md)" -gt 200 ] \
     && grep -qE '^\*\*Verdict:\*\*' /tmp/wu-review-$1.md
 }
