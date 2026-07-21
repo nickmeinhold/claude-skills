@@ -31,6 +31,8 @@ Fetch PR details, then take the diff from **local git** — not `gh pr diff`.
 
 **Why not `gh pr diff`?** It serves GitHub's *server-side* diff, which lags a push by seconds. Run it in the same breath as `git push` — e.g. on a re-review after addressing findings — and it returns the **pre-push** diff, so all three reviewers grade stale code and can `REQUEST_CHANGES` over "fixes absent from the diff" that are actually present. The fix: fetch the PR head ref and diff the exact `headRefOid` locally — no propagation dependency, always current with the pushed HEAD.
 
+**Why `--unified=9999` (full-file context)?** A default `-U3` diff shows each change with three lines of surrounding context, so every line of a touched file that is more than three lines from a change is **outside the reviewer's window**. A diff-only reviewer cannot tell "this line does not exist" from "this line exists but isn't shown" — so it flags present-but-unshown code as *absent* ("`sys.exit(main())` not wired", "handler never called"). PR #121 hit this exactly: Carnot AND Tesla both flagged an unchanged, present `sys.exit(main())` as missing across all four rounds — two model families converging on the same wrong answer, which reads as corroboration but is a shared instrument blind spot. `--unified=9999` expands the context to **up to 9999 lines around each change** — which is the *entire* file for any normal source file (the SKILL.md files here are ~1000 lines; 9999 covers them whole), so for the files this skill actually reviews there is no "outside the window" line left to hallucinate as missing. Honest scope (Tesla + Wu's catch): this **shrinks** the blind spot to files with code more than 9999 lines from a change — a >~10k-line touched file (generated blobs, vendored bundles) can still hide distant lines, and those are exactly the population the size guard below admits exists. So the blind spot is *dissolved for normal files, not universally* — Round 9.1's absence-claim guard stays load-bearing for the rare oversized-file case, not merely belt-and-braces. It only expands files that already appear in the diff (untouched files stay absent), and the `+`/`-` markers still show exactly what changed, so the reviewer's focus is unchanged — only their context is (near-)complete. Cost: a larger prompt; a size guard below warns if the full-context diff balloons past the reviewers' comfortable budget.
+
 ```bash
 gh pr view $1 --json title,body,author,baseRefName,headRefName,headRefOid,files,isCrossRepository > /tmp/pr-$1-info.json
 PR_BASE=$(jq -r .baseRefName   /tmp/pr-$1-info.json)
@@ -76,19 +78,46 @@ else
   git fetch -q origin "$PR_BASE" "pull/$1/head" 2>/dev/null
 fi
 if git cat-file -e "${PR_HEAD}^{commit}" 2>/dev/null; then
-  git diff "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
+  # --unified=9999: full-file context for every touched file, so no present line
+  # falls outside the reviewer's window and gets hallucinated as "absent" (the
+  # diff-window blind spot — see the note above). Untouched files are still
+  # excluded; only files that already appear in the diff are expanded.
+  git diff --unified=9999 "origin/${PR_BASE}...${PR_HEAD}" > /tmp/pr-$1-diff.txt
 else
   # Fallback (head commit still not fetchable — rare): degrade to GitHub's
   # server-side diff and SAY SO — this path shares the API's propagation timing,
-  # so on a re-review it can serve a diff that lags a just-pushed fix.
-  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix. Check the diff line count below against your expectation." >&2
+  # so on a re-review it can serve a diff that lags a just-pushed fix. NOTE: this
+  # path loses full-file context (gh pr diff serves a default-context diff), so
+  # the diff-window absence-claim guard in Round 9.1 matters most here.
+  echo "WARN: head commit $PR_HEAD not fetchable — falling back to server-side gh pr diff, which can lag a just-pushed fix AND loses full-file context. Check the diff line count below against your expectation." >&2
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
-# Conservation check: on a RE-review after edits, an identical line count to the
-# previous round despite known changes means the diff is stale — re-fetch before
-# trusting any verdict built on it.
+# Diff line count — INFORMATIONAL ONLY. (An earlier revision read an identical
+# round-over-round count as a stale-diff canary. Wu's catch: that invariant held
+# under `-U3` where the count tracks the HUNKS, but under `--unified=9999` the
+# count is ≈ Σ(touched-file lengths) — a function of the file SET, nearly
+# insensitive to the change set. An in-place one-line fix keeps the count constant,
+# so the heuristic would false-flag a fresh diff as stale AND miss a genuinely
+# stale one. The real stale-diff guard is upstream and structural: Round 1 anchors
+# PR_HEAD on `git ls-remote` (the actual current remote ref) and diffs against that
+# exact commit, so the diff is always current with the pushed HEAD — the stale-diff
+# class the old canary chased can't occur. This line is left as a sanity readout.)
 echo "diff line count: $(wc -l < /tmp/pr-$1-diff.txt)"
+
+# Size guard: full-file context can balloon a diff that touches a large file.
+# Carnot's medium-reasoning setting was tuned/validated at ~70KB (this skill's own
+# base-derivation PRs ran ~74KB with all reviewers landing). Past that the
+# exploration-loop-no-verdict risk starts, so the threshold is aligned to the
+# EVIDENCE, not a round number well above it (Wu's catch: a 150KB diff must not
+# sail under a 200KB guard while sitting in the named risk zone). Two tiers, both
+# warn-only — never hard-fail, so the operator decides whether to trim or proceed.
+DIFF_BYTES=$(wc -c < /tmp/pr-$1-diff.txt)
+if [ "$DIFF_BYTES" -gt 200000 ]; then
+  echo "WARN: full-context diff is ${DIFF_BYTES} bytes (>200KB) — WELL past Carnot's ~70KB validated point. High risk of Carnot exploration-looping into no verdict; expect possible reviewer no-shows at the gate. Consider whether a large/generated file is being expanded unnecessarily." >&2
+elif [ "$DIFF_BYTES" -gt 100000 ]; then
+  echo "NOTE: full-context diff is ${DIFF_BYTES} bytes (>100KB) — past Carnot's ~70KB validated point and entering the risk zone. Review should still complete; watch for a Carnot no-show at the gate." >&2
+fi
 cat /tmp/pr-$1-info.json
 cat /tmp/pr-$1-diff.txt
 ```
@@ -207,6 +236,16 @@ KELVIN_FORMAT_EOF
 # model instead of stalling on the "trusted folders" gate.
 env GEMINI_CLI_TRUST_WORKSPACE=true gemini --model "$KELVIN_MODEL" "$(cat /tmp/kelvin-prompt-$1.txt)" --output-format text 2>&1 | grep -v "Loaded cached credentials" > /tmp/kelvin-review-$1.md &
 KELVIN_PID=$!
+else
+  # Probe found no Pro model → Kelvin does NOT launch, so its `>`-truncation never
+  # runs and a PRIOR ROUND'S /tmp/kelvin-review-$1.md would survive on disk. The
+  # same-shell path is safe (KELVIN_RC=99 → kelvin_ok false), but a file-based
+  # reader (Round 11, a partial re-run) would grade last round. Annihilate it here
+  # so "Kelvin didn't run this round" ≡ empty bytes — the same at-launch contract
+  # the STALE-VERDICT DEFENSE note claims for the skip arm too (Tesla's catch:
+  # asymmetric annihilation — four launch arms killed prior bytes, Kelvin's skip
+  # arm didn't).
+  : > /tmp/kelvin-review-$1.md
 fi
 ```
 
@@ -281,6 +320,13 @@ cat /tmp/pr-$1-diff.txt >> /tmp/carnot-prompt-$1.txt
 # path in this command (schema, prompt, outputs) is ABSOLUTE, so the workdir
 # change is safe; keep it that way when editing.
 CARNOT_SCRATCH=$(mktemp -d)
+# Stale-verdict kill (Carnot only): unlike Kelvin/Tesla/Wu, whose `>` redirects
+# truncate their review files at launch, codex writes --output-last-message ONLY
+# on success — a prior-round JSON survives if it emits nothing, and would then be
+# graded as this round's. rm both outputs here so a non-empty file downstream is
+# necessarily THIS round's; `carnot_ok`'s `-s` check is then the whole stale guard
+# (no mtime canary — see the "STALE-VERDICT DEFENSE" note by the *_ok functions).
+rm -f /tmp/carnot-output-$1.json /tmp/carnot-review-$1.json /tmp/carnot-review-$1.md
 DART_DISABLE_ANALYTICS=1 NO_UPDATE_NOTIFIER=1 codex exec -C "$CARNOT_SCRATCH" --sandbox read-only --skip-git-repo-check -c model_reasoning_effort=medium --output-schema /tmp/carnot-schema-$1.json --output-last-message /tmp/carnot-output-$1.json - > /tmp/carnot-stdout-$1.log 2>&1 < /tmp/carnot-prompt-$1.txt &
 CARNOT_PID=$!
 ```
@@ -424,6 +470,23 @@ WU_FALLBACK_MODEL="${WU_FALLBACK_MODEL-kimi-code/kimi-for-coding}"
 # exhausted a 5-hour quota window on 2026-07-18 with three "tiny" probes. The
 # review needs none of it — the diff is already in the prompt file.
 WU_SCRATCH=$(mktemp -d)
+# Truncate Wu's output files HERE (before the subshell), so a prior-round file is
+# annihilated at launch — matching Kelvin/Tesla's `>`-at-spawn by construction.
+# (Tesla's catch: Wu's own `>` sits on the inner kimi line INSIDE the subshell, so
+# without this a prior /tmp/wu-review-$1.md survives until that line runs — the
+# "truncates at launch" claim in the STALE-VERDICT DEFENSE note would otherwise
+# overclaim for Wu, and an early reader of the file would grade last round.)
+: > /tmp/wu-review-$1.md
+: > /tmp/wu-err-$1.log
+# Plans-dir provenance snapshot (M — non-clock): ~/.kimi/plans/ is a GLOBAL dir a
+# concurrent peer OR a prior run also writes to, and the path grepped from kimi's
+# free-form stdout is NOT proof this run wrote it (it could be path-shaped noise or
+# an old path kimi mentions). Snapshot the existing plans files BEFORE launch; the
+# harvest below accepts the named file ONLY if it is absent from this snapshot,
+# i.e. newly created this run. This is provenance without the clock — immune to
+# both the equal-tick `-nt` fragility and the foreign/stale-file risk that removing
+# `-nt` outright (round 2) reopened (Carnot + Tesla's round-3 catch).
+ls -1 "$HOME"/.kimi/plans/*.md 2>/dev/null | sort > /tmp/wu-plans-snapshot-$1.txt
 (
   # Transient "LLM not set" retry: under CONCURRENT kimi use (another session or
   # a parallel cage-match holding the CLI's credentials lock), a fully logged-in
@@ -542,6 +605,48 @@ fi
 
 # Validate that each output file actually contains a review (non-trivial size + verdict marker).
 # An empty file or one without "Verdict:" indicates the reviewer errored or hit a capacity limit.
+#
+# STALE-VERDICT DEFENSE — kill the class at the source, don't grade the clock.
+# A stale verdict is a PRIOR ROUND'S output file graded as if it were this round's
+# (PR #120: a re-run left a prior-round file whose verdict cited symbols the diff
+# no longer contained). An earlier revision guarded this with an mtime canary
+# (`review -nt prompt`), but three cross-family reviewers (Carnot, Tesla, Wu)
+# converged on its flaw: `[ A -nt B ]` is STRICTLY newer, so a review written in
+# the same filesystem-timestamp tick as the prompt fails the check and a LIVE
+# reviewer is wrongly demoted — grading the clock, not the write. The structural
+# fix removes the coupling instead of guarding it: make a prior-round file
+# UNREPRESENTABLE at launch, so a non-empty output is necessarily THIS round's.
+#   - Kelvin / Tesla redirect stdout with `>` at spawn (see their launch lines),
+#     which TRUNCATES the review file at launch — prior bytes are gone before the
+#     CLI writes a thing. Stale content is impossible; no freshness check needed.
+#     (Kelvin's PROBE-SKIP arm doesn't spawn, so it can't truncate — its `else`
+#     branch `: >`-annihilates the file instead, so the skip arm honors the same
+#     contract as the launch arm (Tesla's catch: asymmetric annihilation).)
+#   - Wu's own `>` sits INSIDE its backgrounded subshell (on the inner kimi line),
+#     so it truncates late; Wu is therefore truncated EXPLICITLY (`: > file`) just
+#     before the subshell is spawned, matching Kelvin/Tesla at-launch by
+#     construction (Tesla's catch — otherwise the "at launch" claim overclaimed).
+#   - Carnot is the one exception: `--output-last-message` does NOT truncate — codex
+#     writes the JSON only on success, leaving a prior file in place if it emits
+#     nothing. So its outputs are `rm -f`'d immediately before the launch (Step B),
+#     making the absence-vs-presence test (`-s`) the whole stale guard.
+#   - Wu HARVEST repopulation (K3 summarize-to-stdout quirk) is the one path that
+#     writes wu-review from OUTSIDE this contract, from the global ~/.kimi/plans
+#     dir — so "non-empty ⇒ this round" does NOT strictly hold there. It is a
+#     BEST-EFFORT recovery gated by a pre-launch snapshot (harvest only a
+#     post-snapshot path named in this run's stdout, fail-closed if the snapshot is
+#     missing); a concurrent-kimi mis-harvest is the accepted residual (Task #8),
+#     bounded because Wu is one of five and the gate fails safe far more than it
+#     mis-harvests. See the harvest block for the honest-scope note.
+# COUPLING (Wu's catch — name it so a refactor can't silently break it): this
+# guarantee rests on `>`-truncation (K/T/W) and rm-before-launch (Carnot). A
+# future change that stops truncating, or drops the rm, reopens the stale class.
+# (Maxwell's own review is agent-overwritten in-process, not truncated/rm'd — a
+# re-run that fails to rewrite /tmp/maxwell-review-$1.md would grade the last
+# Maxwell; Maxwell isn't one of the availability-gated adversaries, but the
+# orchestrator should always author a fresh Maxwell review each round.)
+# The content-level backstop (a verdict citing a symbol absent from the current
+# diff) lives in Round 9.1.
 kelvin_ok() {
   [ "$KELVIN_RC" -eq 0 ] \
     && [ -s /tmp/kelvin-review-$1.md ] \
@@ -552,7 +657,8 @@ kelvin_ok() {
 # rather than the rendered markdown, so a botched jq filter doesn't
 # silently demote a good review to "unavailable". The JSON must parse
 # AND have a non-empty verdict matching one of the schema's enum
-# values.
+# values. Its outputs are rm-before-launch (Step B), so `-s` alone
+# rejects a stale prior-round file — no mtime check.
 carnot_ok() {
   [ "$CARNOT_RC" -eq 0 ] \
     && [ -s /tmp/carnot-output-$1.json ] \
@@ -590,15 +696,36 @@ wu_ok() {
 # is a GLOBAL dir shared across ALL kimi sessions on this machine (a concurrent
 # peer session writes here too — proven during the 2026-07-18 forensics), so
 # `ls -t | head -1` can grab an UNRELATED review (namespace-collision class,
-# [[feedback_session_local_id_as_global_key]]). Instead parse the EXACT path kimi
-# printed to its own stdout ("...saved to `/Users/.../.kimi/plans/<name>.md`") —
-# that names the file THIS run wrote, immune to concurrent peers. The mtime check
-# vs the run prompt stays as belt-and-braces defense-in-depth.
+# [[feedback_session_local_id_as_global_key]]). This harvest is BEST-EFFORT RECOVERY
+# of a K3 quirk, NOT a trust-critical path — so its check is a TWO-part heuristic,
+# no clock involved, honestly scoped:
+#   1. The path must come from THIS run's stdout (wu-review.md, truncated at launch
+#      above), narrowing to a file kimi named this run.
+#   2. That path must be absent from the pre-launch snapshot of ~/.kimi/plans
+#      (/tmp/wu-plans-snapshot-$1.txt) — i.e. it appeared AFTER launch. This rejects
+#      the common stale/foreign case (a path kimi merely *mentions* that already
+#      existed) that (1) alone would copy.
+# PROVEN SCOPE (not more): this establishes "named in this run's stdout AND created
+# after this run's snapshot" — it does NOT prove THIS subshell was the writer. A
+# concurrent kimi (peer session / parallel cage-match) that mints a new plans path
+# post-snapshot, if this run's stdout also names it, would still be harvested — the
+# same concurrency class filed as Task #8. That residual is acceptable here because
+# a mis-harvested Wu is one of five reviewers on a rare recovery path, and the gate
+# fails safe (Wu degrades to unavailable) far more often than it mis-harvests. Round
+# 2 dropped the old `-nt` check to escape its equal-tick fragility but over-corrected
+# (removed provenance entirely, Carnot+Tesla round 3); this restores a right-sized,
+# clock-free heuristic without claiming a write-side seal it can't deliver.
 if ! wu_ok $1 \
    && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null; then
   WU_PLANS_FILE=$(grep -oE '/[^ `"]*/\.kimi/plans/[^ `"]*\.md' /tmp/wu-review-$1.md 2>/dev/null | head -1)
+  # Fail CLOSED: the snapshot file MUST exist for the newness test to mean anything.
+  # `! grep -qxF X missing_file` is TRUE (grep errors → non-zero → negated), which
+  # would let harvest proceed with NO provenance if /tmp/wu-plans-snapshot-$1.txt
+  # were absent (partial re-entry, wiped /tmp). Require the snapshot present first
+  # (Tesla's catch: a provenance check must fail closed, not open).
   if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ] \
-     && [ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]; then
+     && [ -f /tmp/wu-plans-snapshot-$1.txt ] \
+     && ! grep -qxF "$WU_PLANS_FILE" /tmp/wu-plans-snapshot-$1.txt; then
     # Prefer the harvested body's OWN anchored verdict; only synthesize a header
     # from the stdout summary's verdict if the plans file lacks the anchored line.
     if grep -qE '^\*\*Verdict:\*\*' "$WU_PLANS_FILE"; then
@@ -616,7 +743,7 @@ if ! wu_ok $1 \
     fi
     echo "harvested Wu review body from $WU_PLANS_FILE (K3 summarized to stdout)" >> /tmp/wu-err-$1.log
   else
-    echo "Wu harvest skipped: no valid ~/.kimi/plans path named in stdout newer than this run's prompt (stale/foreign-file canary)" >> /tmp/wu-err-$1.log
+    echo "Wu harvest skipped: no ~/.kimi/plans path named in this run's stdout, the named file is missing, OR it pre-existed this run's snapshot (foreign/stale — not newly created) — nothing to recover" >> /tmp/wu-err-$1.log
   fi
 fi
 
@@ -721,6 +848,37 @@ Based on all available reviews and critiques, synthesize a final assessment:
 2. **Disputed items** - Where reviewers disagree (needs human judgment)
 3. **Unique catches** - Issues only one reviewer found (investigate further)
 
+**Consensus is not corroboration for an absence-claim.** The high-confidence
+weighting in item 1 assumes reviewers fail *independently*. For one finding class
+that assumption breaks: a claim that something is **missing** ("X not wired",
+"never called", "not imported", "no test covers Y") is a shared diff-window blind
+spot — every diff-only reviewer that can't see a line reports it absent *the same
+way*, so two families agreeing is one instrument's error counted twice, not two
+witnesses. Round 1's `--unified=9999` should prevent this, but weight absence-
+claims by the guard below regardless of how many reviewers raised them.
+
+## Round 9.1: Before counting a finding as real — the absence-claim & stale-symbol guard
+
+Two content-level canaries, applied to every finding before it's counted real
+(the structural stale-defense in the `*_ok()` functions — `>`-truncation for
+Kelvin/Tesla/Wu, `rm`-before-launch for Carnot, see the STALE-VERDICT DEFENSE
+note — makes a prior-round file unrepresentable at the mechanical level; these
+catch what survives it at the content level):
+
+- **Absence-claim guard.** Any finding asserting something is missing/absent/
+  unwired/never-called: **open the actual file and confirm it's truly absent**
+  before acting. If the code is present, the finding is a **false positive —
+  reject it with the file:line proof**, even if 2+ reviewers agree (see the
+  consensus note above). Do not churn the PR to satisfy a hallucinated absence.
+  PR #121: Carnot AND Tesla flagged a present, unchanged `sys.exit(main())` as
+  "not wired" all four rounds — a file read refutes it in seconds.
+- **Stale-symbol canary.** If a verdict cites a symbol, function, or identifier
+  that does **not** appear anywhere in the current diff/touched files, the review
+  was graded against STALE output (a prior round's file — Carnot's
+  `--output-last-message` JSON is the classic culprit). Treat that verdict as
+  unavailable and re-run the reviewer; do not fold a finding about deleted code
+  into the ledger.
+
 ## Round 9.5: Disposition — fix inline, don't defer
 
 Act on the findings before merging; don't just catalogue them. For each finding
@@ -736,6 +894,69 @@ A merged PR must not leave a trail of 5-minute fixes wearing task labels — tha
 converts review into backlog and pushes a context-switch onto the human. (Blocking
 `REQUEST_CHANGES` findings must reach consensus regardless — that's the strict merge
 gate above; this step is about the non-blocking remainder.)
+
+## Round 9.7: Closure bar — one clean confirming round
+
+This is the rule for **when the cage match is done** — when you may apply the
+`cage-matched` label (Round 11) and merge.
+
+**Closure is NOT "the real-bug rate is trending down."** A decaying count
+(3→4→2→1) is a curve-fit over noisy small-N data, and a single real finding in
+the *last* round falsifies it after the fact. PR #121 merged one round early on
+exactly this mistake: round 4 still surfaced a real fail-open (`resolve_base` on a
+corrupt base), so the "asymptote" reasoning was wrong by its own evidence.
+
+**"Zero findings, full stop" is also wrong** — unreachable against asymptotic
+adversaries (Carnot/Tesla will `REQUEST_CHANGES` indefinitely on prose/theoretical
+grounds). A single known false positive (a diff-window artifact per Round 9.1)
+guarantees a non-clean verdict every round, so a literal-zero bar never merges.
+
+The correct, falsifiable bar adjusts for both:
+
+> **Closure = one full round in which every new finding verifies as NON-real** —
+> false-positive (rejected with file-read proof), already-covered (existing test),
+> or deferred-with-reason (a named, accepted follow-up task). **Zero findings that
+> SURVIVE verification as real.**
+
+**Executable per-round ledger.** After each round, classify EVERY new finding —
+no finding leaves the round unclassified:
+
+| Finding | Reviewer(s) | Real? | Disposition |
+|---|---|---|---|
+| … | … | yes / no | fixed & pushed · rejected (file:line proof) · deferred (#task) |
+
+- If the `Real?` column contains **any** `yes` → the round was **not clean**. Fix
+  each real finding, push, and run **one more round** to confirm the fix
+  introduced no new real finding.
+- Only when a full round's ledger is **all `no`** is the PR closed by the bar.
+- The count of findings is irrelevant; only whether any *survives verification as
+  real*. Ten rejected false positives in a round is a clean round.
+
+**Re-review neutrality (no-steering).** A re-review after fixes MUST use the same
+neutral prompt as round 1 — persona + PR info + freshly re-fetched full-context
+diff, and **nothing else**. Never add leading framing ("the author fixed X,
+please confirm", "Nick asked you to look again", "this should be an APPROVE
+now"). A verdict produced from a steered prompt is not independent evidence: mark
+it **non-independent** — it cannot count toward the merge gate or the closure
+ledger. Independence is the orchestrator's *own* duty — a verdict you routed
+toward a desired outcome invalidates itself the instant you notice, before any
+human has to point it out. (The prompt files are rebuilt identically each round
+by the Round 2-6 blocks, so neutrality is the default; this rule forbids *adding*
+to them on a re-run.)
+
+**Readiness vs appetite at the decision.** When the ledger is clean, split the
+decision and own your half:
+
+- **Merge-readiness** — "is the code safe/correct?" — is *your* engineering call.
+  You have read every finding and every rejection-with-proof; you have strictly
+  more evidence than Nick here. **State it as an owned verdict**: "this round is
+  clean, zero real survivors — it's merge-ready, my call."
+- **Merge-appetite** — "ship now, or one more polishing round?" — is Nick's
+  product/timing call. **Ask only this.**
+
+Bundling both into "should I merge?" launders your engineering judgment through
+his push — if he says yes it reads as "Nick decided it was safe" when really you
+decided that and outsourced only the timing.
 
 ## Round 10: Post Reviews to GitHub (parallel)
 
@@ -881,7 +1102,14 @@ wait
 
 A downstream merge gate (live on `nickmeinhold/the-dreaming-repo`, being mirrored to `flux-shadow`) refuses to auto-merge a sensitive PR unless it carries the `cage-matched` label. Apply that label automatically when the cage match reaches a clean consensus, so the label means exactly "a cage match approved this" rather than "a human remembered to click".
 
-**Consensus rule:** label iff **Maxwell = APPROVE** AND (**Kelvin = APPROVE** OR **Carnot = APPROVE**). If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the two adversarial reviewers to APPROVE alongside Maxwell.
+**Precondition — the closure bar (Round 9.7) must be met.** This automated rule
+only reads the *latest* verdicts; it cannot see whether the last round was
+clean. Do not run Round 11 until the Round 9.7 ledger shows a full round with
+**zero findings surviving as real**. Consensus APPROVE verdicts on a round that
+still fixed a real bug is exactly the one-round-early merge PR #121 warned about
+— the verdicts are necessary but not sufficient; the clean ledger is the rest.
+
+**Consensus rule:** label iff **Maxwell = APPROVE** AND **at least one of (Kelvin, Carnot, Tesla, Wu) = APPROVE**. If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the four adversarial reviewers to APPROVE alongside Maxwell. (The code below counts all four adversaries; this prose matches it — Carnot's catch that an earlier "Kelvin or Carnot" phrasing was split-brained against the four-reviewer `ADVERSARIAL_APPROVE` logic.)
 
 The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action is attributable to the cage-match identity. Labeling is best-effort: the label may not exist on every repo, so we create-if-missing and tolerate any residual error rather than failing the whole cage match.
 
@@ -898,19 +1126,35 @@ if [ -z "$MAXWELL_TOKEN" ]; then
   echo "WARN: could not mint MAXWELL_TOKEN — skipping 'cage-matched' labeling (best-effort; cage match itself is unaffected)."
 else
 
+# KNOWN BUG — Task #9 (do not trust this label logic until fixed): the per-reviewer
+# re-parse below is gated on $KELVIN_AVAILABLE / $CARNOT_AVAILABLE / $TESLA_AVAILABLE
+# / $WU_AVAILABLE, which are set in the Step-D shell and DO NOT persist to this fresh
+# shell. So they read empty here, every verdict stays unset, ADVERSARIAL_APPROVE
+# never reaches 1, and the `cage-matched` label never applies even on clean consensus
+# (Carnot + Tesla, PR #122 round 3). The correct fix is to persist availability+verdicts
+# to a sidecar in Step D and `source` it here — deferred to Task #9 to keep PR #122
+# focused on the four review-integrity checks. The re-parse below is left as-is (the
+# closure/label path is advisory until #9 lands).
 # Verdicts:
 #  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
 #    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
-#  - KELVIN_VERDICT: already set above for the review post.
-#  - Carnot's verdict comes from the structured JSON (source of truth).
+#  - Every adversary's verdict is RE-DERIVED FROM ITS FILE here: this round runs
+#    in a fresh shell, so Round-10 variables (KELVIN_VERDICT included) don't
+#    persist. Carnot reads its structured JSON; Kelvin/Tesla/Wu re-parse the
+#    **Verdict:** line. (Carnot's catch: a stale `already set above` comment let
+#    KELVIN_VERDICT silently reach the gate empty, dropping a valid Kelvin APPROVE.)
 MAXWELL_VERDICT="COMMENT"   # Set from Maxwell's review verdict above.
 
 CARNOT_VERDICT=""
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 fi
-# Re-parse Tesla's and Wu's verdicts from their review files (this runs in a fresh
-# shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
+# Re-parse Kelvin's, Tesla's, and Wu's verdicts from their review files (this runs in a
+# fresh shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
+KELVIN_VERDICT=""
+if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
+  KELVIN_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/kelvin-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+fi
 TESLA_VERDICT=""
 if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
