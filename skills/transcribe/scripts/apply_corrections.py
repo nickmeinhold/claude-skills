@@ -55,14 +55,26 @@ def apply_literal(pattern, r, text, flags=0, first_only=False):
     """Replace matches of `pattern` with the LITERAL string `r` (no regex
     backreferences — a backslash/\\1 in r is inserted verbatim, never a backref).
 
-    Applied to a PRISTINE base in a single pass, so a replacement can't re-match
-    its own output (that only happened under the old in-place re-application; a
-    pure derivation never feeds output back as input). `first_only` stops after
-    the first match (turn-scoped corrections, matching the single occurrence the
-    review card previews); otherwise every match is replaced (unscoped/global).
-    The `a < last` guard skips a match that overlaps a prior replacement WITHIN
-    this call (two matches of the same pattern that share offsets). Empty r
-    (deletion) applies normally. Returns (new_text, n_mutations)."""
+    FAITHFUL, single-pass application: `re.finditer` walks the INPUT text once,
+    so a replacement never re-matches ITS OWN output. This is what makes re-apply
+    idempotent by construction (each run starts from the same pristine base).
+
+    Deliberate behavioral choice, stated honestly: this does NOT skip a match
+    that lies inside an existing copy of `r` in the base. So an expansion whose
+    replacement is already present around the match DOES expand on a single pass
+    — e.g. pattern `cat` / replacement `the cat` on base `the cat sat` yields
+    `the the cat sat`. The old in-place code skipped that (via an `inside_existing`
+    guard), which produced the documented false-NEGATIVE (a legitimate first fix
+    silently no-op'd forever). We chose faithful application over silent-skip:
+    the result is visible in review, deterministic, and idempotent across re-runs.
+    An over-broad correction is fixed by tightening the correction, not by a
+    scanner guard that reintroduces the silent-skip class.
+
+    `first_only` stops after the first match (turn-scoped corrections, matching
+    the single occurrence the review card previews); otherwise every match is
+    replaced (unscoped/global). The `a < last` guard skips a match that overlaps
+    a prior replacement WITHIN this call. Empty r (deletion) applies normally.
+    Returns (new_text, n_mutations)."""
     out, last, n = [], 0, 0
     for m in re.finditer(pattern, text, flags=flags):
         a, b = m.start(), m.end()
@@ -110,12 +122,13 @@ def resolve_base():
             existing = json.loads(named.read_text())
         except json.JSONDecodeError:
             existing = None
-        # isinstance guard, not a bare existing[0]: a turns_named.json that is a
-        # JSON object (not the expected list) would raise KeyError/TypeError on
-        # [0], which the narrow except would NOT catch. Only a non-empty LIST has
-        # a meaningful first turn.
-        first = existing[0] if isinstance(existing, list) and existing else {}
-        if isinstance(first, dict) and "speaker" in first:
+        # Scan ALL turns, not just existing[0]: a real attributed file has a
+        # "speaker" on every turn (attribute.py always sets one), but this
+        # tolerates a malformed/empty first turn whose attribution lives further
+        # down. isinstance guards a non-list JSON (a bare object would raise on
+        # [0], which the narrow except above would NOT catch) and non-dict turns.
+        if isinstance(existing, list) and any(
+                isinstance(t, dict) and "speaker" in t for t in existing):
             return None  # legacy named workdir -> caller refuses
     return WORK / "turns.json"
 

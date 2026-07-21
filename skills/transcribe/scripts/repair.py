@@ -161,7 +161,13 @@ def derive_scope(f):
 
 
 def main():
+    # Content precedence shared with build_outputs/clean/make_review: corrected
+    # transcript -> pristine attributed base -> raw turns. In a full run, attribute
+    # tombstones the stale turns_named.json before repair runs, so repair must fall
+    # to turns_attributed.json (attributed text) here rather than raw turns.json.
     src = WORK / "turns_named.json"
+    if not src.exists():
+        src = WORK / "turns_attributed.json"
     if not src.exists():
         src = WORK / "turns.json"
     turns = json.loads(src.read_text())

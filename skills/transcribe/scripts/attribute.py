@@ -182,6 +182,12 @@ def main():
                                  "orig": t["text"]})
 
     (WORK / "turns_attributed.json").write_text(json.dumps(assigned, indent=1, ensure_ascii=False))
+    # Tombstone the now-stale derived transcript: a fresh base makes any existing
+    # turns_named.json (derived from the PREVIOUS base) stale. Deleting it makes
+    # staleness unrepresentable — apply_corrections regenerates it from this new
+    # base, and if apply is skipped/fails, downstream falls back to this fresh
+    # turns_attributed.json rather than serving a stale derived cache.
+    (WORK / "turns_named.json").unlink(missing_ok=True)
     from collections import Counter
     unl = sum(1 for t in assigned if t["speaker"] not in NAMES)
     print(f"  {len(assigned)} turns labelled "

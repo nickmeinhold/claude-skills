@@ -64,12 +64,13 @@ src = (named if named.exists()
        else attributed if attributed.exists()
        else WORK / "turns.json")
 turns = json.loads(src.read_text())
-# Mode from the DATA, not a filename — the identical rule clean.py uses
-# (`"speaker" in turns[0]`). Deriving both renderers' mode from the same signal
-# means they can never disagree about named-vs-anonymous (a file-existence
-# signal here could diverge from clean.py's data signal on a legacy/half-state
-# work dir; the data is the single source of truth).
-KEY = "speaker" if turns and "speaker" in turns[0] else "cluster"
+# Mode from the DATA, not a filename — the identical rule clean.py uses, so the
+# two renderers can never disagree about named-vs-anonymous. Scan for ANY
+# speaker-keyed turn (with an isinstance shape guard) rather than trusting
+# turns[0] blindly: symmetric rigor with resolve_base, and a non-dict/empty
+# first element can't TypeError the mode decision.
+KEY = "speaker" if any(isinstance(t, dict) and "speaker" in t
+                       for t in turns) else "cluster"
 
 
 def is_orphan_echo(t, prev):

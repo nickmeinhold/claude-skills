@@ -37,7 +37,12 @@ proposed = [(i, c) for i, c in enumerate(corrections)
             if c.get("status") == "proposed"
             and c.get("pattern") and c.get("replacement") is not None]
 
+# Content precedence shared with build_outputs/clean/repair: corrected
+# transcript -> pristine attributed base -> raw turns (so a half-state after
+# attribute's tombstone still resolves attributed text, not raw).
 src = WORK / "turns_named.json"
+if not src.exists():
+    src = WORK / "turns_attributed.json"
 if not src.exists():
     src = WORK / "turns.json"
 turns = json.loads(src.read_text())

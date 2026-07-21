@@ -78,7 +78,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/apply":
             cpath = WORK / "corrections.json"
+            # Same content precedence as the other readers (corrected -> attributed
+            # base -> raw) so the pre-apply snapshot restores the right file on a
+            # failed apply regardless of pipeline half-state.
             tpath = WORK / "turns_named.json"
+            if not tpath.exists():
+                tpath = WORK / "turns_attributed.json"
             if not tpath.exists():
                 tpath = WORK / "turns.json"
             # snapshot BOTH durable files so a failed apply/rebuild rolls back
