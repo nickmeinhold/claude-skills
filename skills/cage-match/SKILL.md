@@ -599,6 +599,10 @@ fi
 # COUPLING (Wu's catch — name it so a refactor can't silently break it): this
 # guarantee rests on `>`-truncation (K/T/W) and rm-before-launch (Carnot). A
 # future change that stops truncating, or drops the rm, reopens the stale class.
+# (Maxwell's own review is agent-overwritten in-process, not truncated/rm'd — a
+# re-run that fails to rewrite /tmp/maxwell-review-$1.md would grade the last
+# Maxwell; Maxwell isn't one of the availability-gated adversaries, but the
+# orchestrator should always author a fresh Maxwell review each round.)
 # The content-level backstop (a verdict citing a symbol absent from the current
 # diff) lives in Round 9.1.
 kelvin_ok() {
@@ -652,13 +656,17 @@ wu_ok() {
 # `ls -t | head -1` can grab an UNRELATED review (namespace-collision class,
 # [[feedback_session_local_id_as_global_key]]). Instead parse the EXACT path kimi
 # printed to its own stdout ("...saved to `/Users/.../.kimi/plans/<name>.md`") —
-# that names the file THIS run wrote, immune to concurrent peers. The mtime check
-# vs the run prompt stays as belt-and-braces defense-in-depth.
+# and that stdout is THIS run's wu-review.md (`>`-truncated at launch), so the path
+# it names is the file THIS run wrote, immune to concurrent peers. That path IS the
+# structural provenance guarantee — no mtime check needed. (An earlier revision
+# added `[ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]` as belt-and-braces, but
+# that reintroduced the exact strict-`-nt` equal-tick fragility this PR removed from
+# the *_ok gates — Carnot/Tesla/Wu all flagged it. Dropped for consistency: the
+# path-from-this-run's-stdout is a stronger guarantee than the clock ever was.)
 if ! wu_ok $1 \
    && grep -qiE 'verdict.*(APPROVE|REQUEST_CHANGES|COMMENT)' /tmp/wu-review-$1.md 2>/dev/null; then
   WU_PLANS_FILE=$(grep -oE '/[^ `"]*/\.kimi/plans/[^ `"]*\.md' /tmp/wu-review-$1.md 2>/dev/null | head -1)
-  if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ] \
-     && [ "$WU_PLANS_FILE" -nt /tmp/wu-prompt-$1.txt ]; then
+  if [ -n "$WU_PLANS_FILE" ] && [ -f "$WU_PLANS_FILE" ]; then
     # Prefer the harvested body's OWN anchored verdict; only synthesize a header
     # from the stdout summary's verdict if the plans file lacks the anchored line.
     if grep -qE '^\*\*Verdict:\*\*' "$WU_PLANS_FILE"; then
@@ -676,7 +684,7 @@ if ! wu_ok $1 \
     fi
     echo "harvested Wu review body from $WU_PLANS_FILE (K3 summarized to stdout)" >> /tmp/wu-err-$1.log
   else
-    echo "Wu harvest skipped: no valid ~/.kimi/plans path named in stdout newer than this run's prompt (stale/foreign-file canary)" >> /tmp/wu-err-$1.log
+    echo "Wu harvest skipped: no ~/.kimi/plans path named in this run's stdout (or the named file is missing) — nothing to recover" >> /tmp/wu-err-$1.log
   fi
 fi
 
@@ -793,8 +801,10 @@ claims by the guard below regardless of how many reviewers raised them.
 ## Round 9.1: Before counting a finding as real — the absence-claim & stale-symbol guard
 
 Two content-level canaries, applied to every finding before it's counted real
-(the executable `-nt` mtime gate in the `*_ok()` functions catches the mechanical
-case; these catch what survives it):
+(the structural stale-defense in the `*_ok()` functions — `>`-truncation for
+Kelvin/Tesla/Wu, `rm`-before-launch for Carnot, see the STALE-VERDICT DEFENSE
+note — makes a prior-round file unrepresentable at the mechanical level; these
+catch what survives it at the content level):
 
 - **Absence-claim guard.** Any finding asserting something is missing/absent/
   unwired/never-called: **open the actual file and confirm it's truly absent**
@@ -1040,7 +1050,7 @@ clean. Do not run Round 11 until the Round 9.7 ledger shows a full round with
 still fixed a real bug is exactly the one-round-early merge PR #121 warned about
 — the verdicts are necessary but not sufficient; the clean ledger is the rest.
 
-**Consensus rule:** label iff **Maxwell = APPROVE** AND (**Kelvin = APPROVE** OR **Carnot = APPROVE**). If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the two adversarial reviewers to APPROVE alongside Maxwell.
+**Consensus rule:** label iff **Maxwell = APPROVE** AND **at least one of (Kelvin, Carnot, Tesla, Wu) = APPROVE**. If ANY reviewer is `REQUEST_CHANGES`, do NOT label — that's the intended hold state and the gate should keep blocking. An unavailable reviewer is neither an APPROVE nor a block; the rule only needs one of the four adversarial reviewers to APPROVE alongside Maxwell. (The code below counts all four adversaries; this prose matches it — Carnot's catch that an earlier "Kelvin or Carnot" phrasing was split-brained against the four-reviewer `ADVERSARIAL_APPROVE` logic.)
 
 The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action is attributable to the cage-match identity. Labeling is best-effort: the label may not exist on every repo, so we create-if-missing and tolerate any residual error rather than failing the whole cage match.
 
@@ -1060,16 +1070,23 @@ else
 # Verdicts:
 #  - MAXWELL_VERDICT: set this from the verdict Maxwell wrote into
 #    /tmp/maxwell-review-$1.md (APPROVE / REQUEST_CHANGES / COMMENT).
-#  - KELVIN_VERDICT: already set above for the review post.
-#  - Carnot's verdict comes from the structured JSON (source of truth).
+#  - Every adversary's verdict is RE-DERIVED FROM ITS FILE here: this round runs
+#    in a fresh shell, so Round-10 variables (KELVIN_VERDICT included) don't
+#    persist. Carnot reads its structured JSON; Kelvin/Tesla/Wu re-parse the
+#    **Verdict:** line. (Carnot's catch: a stale `already set above` comment let
+#    KELVIN_VERDICT silently reach the gate empty, dropping a valid Kelvin APPROVE.)
 MAXWELL_VERDICT="COMMENT"   # Set from Maxwell's review verdict above.
 
 CARNOT_VERDICT=""
 if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   CARNOT_VERDICT=$(jq -r '.verdict' /tmp/carnot-output-$1.json 2>/dev/null)
 fi
-# Re-parse Tesla's and Wu's verdicts from their review files (this runs in a fresh
-# shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
+# Re-parse Kelvin's, Tesla's, and Wu's verdicts from their review files (this runs in a
+# fresh shell, so the Round 10 variables don't persist — mirror how CARNOT_VERDICT is re-derived).
+KELVIN_VERDICT=""
+if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
+  KELVIN_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/kelvin-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
+fi
 TESLA_VERDICT=""
 if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   TESLA_VERDICT=$(grep -ioE "Verdict:\**[[:space:]]*(APPROVE|REQUEST_CHANGES|COMMENT)" /tmp/tesla-review-$1.md 2>/dev/null | grep -oiE "APPROVE|REQUEST_CHANGES|COMMENT" | head -1 | tr '[:lower:]' '[:upper:]')
