@@ -49,6 +49,16 @@ Re-attribution regenerates the pristine base (`turns_attributed.json`) and
 re-derives `turns_named.json` from it + approved `corrections.json` entries — so
 hand fixes survive and re-applying is idempotent by construction (each run starts
 from a clean base, never accumulates onto already-corrected text).
+
+> **Migration note (base-derivation).** Corrections now apply *faithfully* to a
+> pristine base: an expansion whose replacement already surrounds its match
+> (pattern `cat` → `the cat` on text that is already `the cat sat`) will produce
+> `the the cat sat` rather than silently no-op'ing as the old in-place code did.
+> If you carry a `corrections.json` tuned under the previous behaviour, eyeball
+> the re-derived transcript once after migrating and tighten any over-broad
+> pattern (add surrounding context to the `pattern`). A pre-refactor work dir
+> with no `turns_attributed.json` is refused with a `--reattribute` prompt rather
+> than silently degraded, so you can't lose attribution by re-applying.
 Anchors are the single biggest accuracy lever — strictly better than the first
 pass, which had none to seed from. Use this when a misattribution slips through,
 or to upgrade a profile-only first pass. (Attribution self-heals failed chunks by

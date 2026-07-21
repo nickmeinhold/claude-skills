@@ -78,18 +78,16 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/apply":
             cpath = WORK / "corrections.json"
-            # Same content precedence as the other readers (corrected -> attributed
-            # base -> raw) so the pre-apply snapshot restores the right file on a
-            # failed apply regardless of pipeline half-state.
+            # The rollback target is the MUTATION PRODUCT, not a reader ladder:
+            # apply_corrections ONLY ever writes turns_named.json (the base files
+            # are immutable), so snapshot exactly that file. Record whether it
+            # existed pre-apply — a failed apply that CREATED it must be rolled
+            # back by REMOVING it, else "rollback" leaves corrected content behind
+            # a rolled-back UI (the half-state / first-derive case).
             tpath = WORK / "turns_named.json"
-            if not tpath.exists():
-                tpath = WORK / "turns_attributed.json"
-            if not tpath.exists():
-                tpath = WORK / "turns.json"
-            # snapshot BOTH durable files so a failed apply/rebuild rolls back
-            # cleanly (no half-applied turns, no orphaned status flips).
+            tnamed_existed = tpath.exists()
             snap_c = cpath.read_text() if cpath.exists() else None
-            snap_t = tpath.read_text() if tpath.exists() else None
+            snap_t = tpath.read_text() if tnamed_existed else None
             data = json.loads(snap_c) if snap_c else {"corrections": []}
             corrections = (data.get("corrections", []) if isinstance(data, dict)
                            else data if isinstance(data, list) else [])
@@ -120,8 +118,13 @@ class Handler(SimpleHTTPRequestHandler):
                 # hides a proposal the outputs don't reflect.
                 if snap_c is not None:
                     cpath.write_text(snap_c)
-                if snap_t is not None:
+                # Restore the derived output to its exact pre-apply state: if it
+                # existed, put the old bytes back; if it did NOT (apply created it
+                # this call), delete it so the rollback is real, not cosmetic.
+                if tnamed_existed:
                     tpath.write_text(snap_t)
+                else:
+                    tpath.unlink(missing_ok=True)
                 # regenerate ALL derived artifacts from the restored inputs — the
                 # review page AND the transcript outputs (build_outputs may have
                 # written stale .html/.txt/.srt before failing). Rewind all rails.

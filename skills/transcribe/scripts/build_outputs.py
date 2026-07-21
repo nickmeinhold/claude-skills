@@ -65,12 +65,14 @@ src = (named if named.exists()
        else WORK / "turns.json")
 turns = json.loads(src.read_text())
 # Mode from the DATA, not a filename — the identical rule clean.py uses, so the
-# two renderers can never disagree about named-vs-anonymous. Scan for ANY
-# speaker-keyed turn (with an isinstance shape guard) rather than trusting
-# turns[0] blindly: symmetric rigor with resolve_base, and a non-dict/empty
-# first element can't TypeError the mode decision.
-KEY = "speaker" if any(isinstance(t, dict) and "speaker" in t
-                       for t in turns) else "cluster"
+# two renderers can never disagree about named-vs-anonymous. Render KEY=speaker
+# only when EVERY turn carries a speaker (attribute stamps all turns or none):
+# `all`, not `any`, because every turn always has a "cluster", so falling to
+# cluster is crash-proof — whereas `any` + one stray speaker turn would KeyError
+# on the cluster-only siblings at t[KEY]. (resolve_base's legacy DETECTION uses
+# `any` on purpose: a different question — refuse if ANY attribution exists.)
+KEY = "speaker" if turns and all(isinstance(t, dict) and "speaker" in t
+                                 for t in turns) else "cluster"
 
 
 def is_orphan_echo(t, prev):
