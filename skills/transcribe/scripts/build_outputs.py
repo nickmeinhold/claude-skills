@@ -2,10 +2,10 @@
 """Assemble final deliverables: transcript.html / .txt / .srt.
 
 Reads the corrected transcript turns_named.json (apply_corrections derives it
-every run) if present, else raw turns.json. Named vs anonymous is a SEPARATE
-question — decided by whether turns_attributed.json exists (attribution ran),
-not by which content file is present, since anonymous runs derive
-turns_named.json too. Anonymous clusters render as "Speaker 0/1/...".
+every run) if present, else the pristine attributed base turns_attributed.json,
+else raw turns.json. Named vs anonymous is inferred from the DATA (a "speaker"
+key on each turn) — the same rule clean.py uses — so the two renderers never
+disagree about the mode. Anonymous clusters render as "Speaker 0/1/...".
 Drops orphan-echo duplicate turns,
 coalesces consecutive same-speaker turns, auto-discovers however many speakers
 in first-appearance order, assigns a stable colour per speaker.
@@ -51,16 +51,25 @@ def linkify(escaped_text, linked):
     return escaped_text
 
 
-# Content vs mode are two separate questions with two separate signals:
-#   * WHICH file holds the corrected transcript -> turns_named.json (apply_
-#     corrections writes it every run), else raw turns.json if apply never ran.
-#   * NAMED vs anonymous -> did attribution run? turns_attributed.json exists iff
-#     it did. (Anonymous runs derive turns_named.json too, so its existence no
-#     longer distinguishes the modes — hence the separate base-file signal.)
+# Content precedence: the corrected transcript (apply_corrections writes
+# turns_named.json every run) -> the pristine attributed base (attribution ran
+# but apply hasn't, e.g. a hand-run in that half-state) -> raw turns.json.
+# Falling through to turns_attributed.json (which carries speaker keys) rather
+# than raw turns.json keeps the rendered content consistent with the mode
+# inferred below — otherwise a post-attribute/pre-apply render would read
+# cluster-keyed raw turns while KEY said "speaker" and KeyError.
 named = WORK / "turns_named.json"
-src = named if named.exists() else WORK / "turns.json"
+attributed = WORK / "turns_attributed.json"
+src = (named if named.exists()
+       else attributed if attributed.exists()
+       else WORK / "turns.json")
 turns = json.loads(src.read_text())
-KEY = "speaker" if (WORK / "turns_attributed.json").exists() else "cluster"
+# Mode from the DATA, not a filename — the identical rule clean.py uses
+# (`"speaker" in turns[0]`). Deriving both renderers' mode from the same signal
+# means they can never disagree about named-vs-anonymous (a file-existence
+# signal here could diverge from clean.py's data signal on a legacy/half-state
+# work dir; the data is the single source of truth).
+KEY = "speaker" if turns and "speaker" in turns[0] else "cluster"
 
 
 def is_orphan_echo(t, prev):

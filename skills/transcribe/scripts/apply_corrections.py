@@ -108,9 +108,13 @@ def resolve_base():
     if named.exists():
         try:
             existing = json.loads(named.read_text())
-            first = existing[0] if existing else {}
-        except (json.JSONDecodeError, IndexError):
-            first = {}
+        except json.JSONDecodeError:
+            existing = None
+        # isinstance guard, not a bare existing[0]: a turns_named.json that is a
+        # JSON object (not the expected list) would raise KeyError/TypeError on
+        # [0], which the narrow except would NOT catch. Only a non-empty LIST has
+        # a meaningful first turn.
+        first = existing[0] if isinstance(existing, list) and existing else {}
         if isinstance(first, dict) and "speaker" in first:
             return None  # legacy named workdir -> caller refuses
     return WORK / "turns.json"
@@ -133,6 +137,22 @@ def main():
                 c["turn"] = int(c["turn"])
             except (ValueError, TypeError):
                 c["turn"] = None
+    # Corrections apply IN FILE ORDER, each against the text left by the prior one
+    # (a later entry legitimately transforms an earlier one's output). The one
+    # case that makes ambiguous is an EXACT DUPLICATE: two identical approved
+    # entries both expanding the same span compound (`cat->the cat` twice ->
+    # `the the cat`). Drop exact duplicates (same pattern/replacement/flags/scope/
+    # turn), preserving first occurrence — fixing the data, not re-adding a
+    # scanner self-match guard (which base-derivation deliberately deleted).
+    seen, deduped = set(), []
+    for c in approved:
+        key = (c["pattern"], c["replacement"], c.get("flags") or "",
+               c.get("scope", "correction"), c.get("turn"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    approved = deduped
     proposed = sum(1 for c in corrections if c.get("status") == "proposed")
 
     base = resolve_base()
