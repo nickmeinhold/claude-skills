@@ -1276,50 +1276,86 @@ MAXWELL_LOGIN='maxwell-merge-slam[bot]'
 KELVIN_LOGIN='kelvin-bit-brawler[bot]'; CARNOT_LOGIN='carnotcodecarver[bot]'
 TESLA_LOGIN='teslaarcprophet[bot]';     WU_LOGIN='wuparitybreaker[bot]'
 
-# Fetch ALL posted reviews + issue comments (--paginate: a multi-round cage match can push
-# the LATEST markers off the default 30-item first page, and reviews are oldest-first, so a
-# truncated read would compute latest-per-author over a stale sample — Carnot + Tesla's catch).
-# gh writes to a RAW file and its exit status is captured DIRECTLY via `$?` — no pipe (the
-# `| jq` pipe would need PIPESTATUS, a bashism that is EMPTY under this repo's zsh runtime and
-# would silently break the fail-closed check). `--paginate` emits one JSON array per page, so
-# the raw file holds a stream of arrays (`[..][..]`); the main jq below `--slurpfile`s that
-# stream (→ array-of-arrays) and `add`s it into one flat array — no intermediate jq step.
-# FAIL CLOSED on EITHER fetch failing: a merge-gating label must treat MISSING data as a
-# reason to withhold, never as empty data — else a failed comments read could hide an
-# authenticated REQUEST_CHANGES marker while an APPROVE on the reviews read still labels
-# (Carnot's catch: `|| echo '[]'` made each source fail OPEN independently).
-gh api --paginate "repos/$REPO/pulls/$1/reviews"   > /tmp/cm-reviews-$1.json  2>/dev/null; REVIEWS_RC=$?
-gh api --paginate "repos/$REPO/issues/$1/comments" > /tmp/cm-comments-$1.json 2>/dev/null; COMMENTS_RC=$?
+# Fetch ALL posted reviews + issue comments AS the Maxwell App identity ($MAXWELL_TOKEN) — the
+# SAME authenticated principal that applies the label — so the read-visibility set is the App's,
+# not whatever ambient gh user the shell happens to hold (Carnot's catch). --paginate: a
+# multi-round cage match can push the LATEST markers off the default 30-item first page, and
+# reviews are oldest-first, so a truncated read would compute latest-per-author over a stale
+# sample. gh writes a RAW file and its exit is captured via `$?` — no pipe (a `| jq` pipe needs
+# PIPESTATUS, a bashism EMPTY under this repo's zsh runtime, which would silently break the
+# fail-closed check). `--paginate` emits one array per page (`[..][..]`); the main jq
+# `--slurpfile`s that stream and `add`s it into one flat array. FAIL CLOSED on EITHER fetch
+# failing: a merge-gating label treats MISSING data as withhold, never as empty (Carnot:
+# `|| echo '[]'` failed OPEN independently — a failed comments read could hide an RC marker
+# while a reviews APPROVE still labeled).
+LABEL_ELIGIBLE=1
+MAXWELL_VERDICT=""; KELVIN_VERDICT=""; CARNOT_VERDICT=""; TESLA_VERDICT=""; WU_VERDICT=""
+ANY_REQUEST_CHANGES=0; ADVERSARIAL_APPROVE=0
+GH_TOKEN=$MAXWELL_TOKEN gh api --paginate "repos/$REPO/pulls/$1/reviews"   > /tmp/cm-reviews-$1.json  2>/dev/null; REVIEWS_RC=$?
+GH_TOKEN=$MAXWELL_TOKEN gh api --paginate "repos/$REPO/issues/$1/comments" > /tmp/cm-comments-$1.json 2>/dev/null; COMMENTS_RC=$?
 if [ "$REVIEWS_RC" -ne 0 ] || [ "$COMMENTS_RC" -ne 0 ]; then
   echo "WARN: reviews/comments fetch failed (rc reviews=$REVIEWS_RC comments=$COMMENTS_RC) — skipping 'cage-matched' (fail-closed; incomplete reviewer data must not mint a label)."
-  CM_MAP='{}'
+  LABEL_ELIGIBLE=0
 else
-# Keep only markers whose head == the live head; take the latest per author → {login: verdict}.
-# The verdict comes from the LAST marker in each body: `withmark` (Round 10) APPENDS the
-# authoritative marker after the model's free-text, so any marker the model itself echoed
-# earlier in its review (the head SHA is in its prompt) is superseded by the real trailer —
-# `scan | last`, not `capture` (first-match), closes that injection seam (Tesla's catch).
-# `$r | add` flattens the paginated page-arrays. This parse is exercised offline in
-# tests/test_label_consensus.sh.
+# Parse each body's LAST marker: `withmark` (Round 10) APPENDS the authoritative marker after the
+# model's free-text, so a marker the model echoed earlier (the head SHA is in its prompt) is
+# superseded — `scan | last`, not first-match `capture`, closes the injection seam (Tesla). Drop
+# DISMISSED reviews so a dismissed marker can't win `max_by(.ts)` (Tesla — body channel and review
+# event can disagree; an issue comment has no .state, so `!= "DISMISSED"` keeps it). `$r | add`
+# flattens paginated pages. This parse is exercised offline in tests/test_label_consensus.sh.
 CM_MAP=$(jq -n --slurpfile r /tmp/cm-reviews-$1.json --slurpfile c /tmp/cm-comments-$1.json \
   --arg head "$LIVE_HEAD" '
     { reviews: (($r | add) // []), comments: (($c | add) // []) }
     | [ (.reviews + .comments)[]
+        | select((.state // "") != "DISMISSED")
         | { login: .user.login, ts: (.submitted_at // .created_at), body: (.body // "") }
         | ( [ .body | scan("<!-- cage-match-verdict: (APPROVE|REQUEST_CHANGES|COMMENT) head=([0-9a-f]{7,40}) -->") ] | last ) as $m
         | select($m != null and $m[1] == $head)
         | {login, ts, v: $m[0]} ]
     | group_by(.login) | map(max_by(.ts)) | map({(.login): .v}) | add // {}' 2>/dev/null)
 [ -n "$CM_MAP" ] || CM_MAP='{}'
-fi
 cmv() { printf '%s' "$CM_MAP" | jq -r --arg k "$1" '.[$k] // ""' 2>/dev/null; }
 MAXWELL_VERDICT=$(cmv "$MAXWELL_LOGIN")
 KELVIN_VERDICT=$(cmv "$KELVIN_LOGIN"); CARNOT_VERDICT=$(cmv "$CARNOT_LOGIN")
 TESLA_VERDICT=$(cmv "$TESLA_LOGIN");   WU_VERDICT=$(cmv "$WU_LOGIN")
 
+# COMPLETENESS GATE (Carnot + Tesla's convergent catch: "absence of a blocker is not absence of
+# objection"). Reading verdicts from GitHub sees only what's POSTED — a reviewer whose RC post
+# 403'd or hasn't propagated is simply ABSENT, and a raw consensus would read that silence as
+# "no objection" and mint a false label. GitHub cannot know who was SUPPOSED to speak; the
+# sidecar can. Expected authenticated speaker set = Maxwell + every adversary that (a) was
+# AVAILABLE this session AND (b) posts as an authenticated bot (its App is configured). EVERY
+# expected speaker must have a fresh head-matched marker present, else WITHHOLD. who-should-speak
+# = sidecar availability; what-they-said = GitHub markers. App-less available reviewers are NOT
+# expected (they post as a human and only advise), so their absence is fine — the gate covers
+# authenticated posters only.
+KELVIN_AVAILABLE=0; CARNOT_AVAILABLE=0; TESLA_AVAILABLE=0; WU_AVAILABLE=0
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+# Source for $*_AVAILABLE ONLY — the sidecar's $*_VERDICT are IGNORED (the cmv() values above,
+# from GitHub, are the verdicts). Validated identically to Rounds 7/8/10 before sourcing.
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; fi
+kexp=0; [ "$KELVIN_AVAILABLE" -eq 1 ] && [ -n "${KELVIN_APP_ID:-}" ] && [ -n "${KELVIN_PRIVATE_KEY_B64:-}" ] && kexp=1
+cexp=0; [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNOT_PRIVATE_KEY_B64:-}" ] && cexp=1
+texp=0; [ "$TESLA_AVAILABLE"  -eq 1 ] && [ -n "${TESLA_APP_ID:-}" ]  && [ -n "${TESLA_PRIVATE_KEY_B64:-}" ]  && texp=1
+wexp=0; [ "$WU_AVAILABLE"     -eq 1 ] && [ -n "${WU_APP_ID:-}" ]     && [ -n "${WU_PRIVATE_KEY_B64:-}" ]     && wexp=1
+MISSING=$(jq -rn --argjson map "$CM_MAP" \
+  --arg mx "$MAXWELL_LOGIN" --arg k "$KELVIN_LOGIN" --arg c "$CARNOT_LOGIN" --arg t "$TESLA_LOGIN" --arg w "$WU_LOGIN" \
+  --argjson kexp "$kexp" --argjson cexp "$cexp" --argjson texp "$texp" --argjson wexp "$wexp" '
+    ( [$mx]
+      + (if $kexp==1 then [$k] else [] end)
+      + (if $cexp==1 then [$c] else [] end)
+      + (if $texp==1 then [$t] else [] end)
+      + (if $wexp==1 then [$w] else [] end) )
+    | map(select($map[.] == null)) | join(" ")' 2>/dev/null)
+if [ -n "$MISSING" ]; then
+  echo "WARN: expected authenticated reviewer(s) have no fresh marker on GitHub:$MISSING — skipping 'cage-matched' (fail-closed; a failed or still-propagating post must not read as 'no objection'. Re-run Round 11 after propagation, or investigate the missing post)."
+  LABEL_ELIGIBLE=0
+else
 # Consensus (rule unchanged): Maxwell APPROVE + >=1 adversary APPROVE + no reviewer
-# REQUEST_CHANGES. Only the five authenticated bot verdicts are read, so a spoofed/human
-# marker can neither gate the label nor hold it.
+# REQUEST_CHANGES. The completeness gate above guarantees every expected authenticated verdict is
+# actually present, so a missing RC can't be silently read as silence; and only the five bot
+# verdicts are read, so a spoofed/human marker can neither gate the label nor hold it.
 ANY_REQUEST_CHANGES=0
 for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT" "$WU_VERDICT"; do
   [ "$v" = "REQUEST_CHANGES" ] && ANY_REQUEST_CHANGES=1
@@ -1328,8 +1364,11 @@ ADVERSARIAL_APPROVE=0
 for v in "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT" "$WU_VERDICT"; do
   [ "$v" = "APPROVE" ] && ADVERSARIAL_APPROVE=1
 done
+fi  # end completeness gate
+fi  # end fetch-ok guard
 
-if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
+if [ "$LABEL_ELIGIBLE" -eq 1 ] \
+   && [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
    && [ "$MAXWELL_VERDICT" = "APPROVE" ] \
    && [ "$ADVERSARIAL_APPROVE" -eq 1 ]; then
   echo "Consensus APPROVE (GitHub ground truth, head $LIVE_HEAD) — applying 'cage-matched' label to PR #$1."
@@ -1345,9 +1384,12 @@ if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
   else
     echo "WARN: failed to apply 'cage-matched' label (label missing? permissions?). Continuing — cage match itself succeeded."
   fi
-else
+elif [ "$LABEL_ELIGIBLE" -eq 1 ]; then
   echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT; App-less reviewers advise but do not gate) — NOT applying 'cage-matched' label."
 fi
+# (If LABEL_ELIGIBLE=0, a specific WARN above — fetch failure or an incomplete authenticated
+# speaker set — already explained the withhold; no misleading "No consensus" line, which would
+# train the operator to re-run or override for the wrong reason — Carnot's catch.)
 
 fi  # end live-head guard (Task #13 — GitHub ground truth replaces the /tmp verdict source)
 

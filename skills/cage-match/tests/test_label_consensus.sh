@@ -40,17 +40,25 @@ DECIDE_JQ='
 '
 
 # Round 11 decision. $1 = live head; $2 = combined-json file ({reviews:[],comments:[]});
-# $3 = fetch_ok (default 1). fetch_ok=0 models EITHER GitHub read failing → fail-closed, so a
-# failed comments read can't hide an authenticated REQUEST_CHANGES while a reviews-read APPROVE
-# still labels (the production guard treats MISSING data as withhold, never as empty data).
+# $3 = fetch_ok (default 1); $4 = EXPECTED (space-separated authenticated logins that MUST have a
+# fresh marker, default: just Maxwell). fetch_ok=0 models EITHER GitHub read failing → fail-closed.
+# EXPECTED models the COMPLETENESS gate: every expected authenticated speaker (Maxwell + each
+# available App-bot) must be present in the map, else a failed/lagging RC post would be read as
+# silence and mint a false label ("absence of a blocker ≠ absence of objection").
 decide_label() ( # subshell = fresh shell, no carried state
-  local CUR_HEAD=$1 JSON=$2 FETCH_OK=${3:-1}
+  local CUR_HEAD=$1 JSON=$2 FETCH_OK=${3:-1} EXPECTED=${4:-$MAXWELL_LOGIN}
   [ "$FETCH_OK" -eq 1 ] || { echo "NOLABEL"; exit 0; }                 # fail-closed: a fetch failed → incomplete data
   [ -n "$CUR_HEAD" ] || { echo "NOLABEL"; exit 0; }                    # fail-closed: no live head → can't prove freshness
   [ -f "$JSON" ]     || { echo "NOLABEL"; exit 0; }
   local MAP
   MAP=$(jq -c --arg head "$CUR_HEAD" "$DECIDE_JQ" "$JSON" 2>/dev/null) || { echo "NOLABEL"; exit 0; }
   [ -n "$MAP" ] || { echo "NOLABEL"; exit 0; }
+  # COMPLETENESS: every expected authenticated speaker must have a fresh marker in the map.
+  local L
+  for L in $EXPECTED; do
+    [ "$(printf '%s' "$MAP" | jq -r --arg k "$L" 'has($k)' 2>/dev/null)" = "true" ] \
+      || { echo "NOLABEL"; exit 0; }                                   # an expected speaker is missing → withhold
+  done
   get() { printf '%s' "$MAP" | jq -r --arg k "$1" '.[$k] // ""'; }
   local MV KV CV TV WV
   MV=$(get "$MAXWELL_LOGIN"); KV=$(get "$K"); CV=$(get "$C"); TV=$(get "$T"); WV=$(get "$W")
@@ -158,6 +166,19 @@ check "18 last-marker-wins-real-APPROVE" LABEL "$(decide_label $H "$J")"
 #    fail-closed NOLABEL (missing data must not be treated as empty data).
 J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
 check "19 fetch-failure-fail-closed" NOLABEL "$(decide_label $H "$J" 0)"
+# 27 COMPLETENESS: Carnot was an expected authenticated speaker (available + App), but its marker
+#    is ABSENT (post 403'd / lagging) — Maxwell + Kelvin both APPROVE, yet the missing expected
+#    speaker forces WITHHOLD. This is the exact fail-open the PR #124 dogfood found: a muted RC
+#    must not read as silence.
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "27 completeness-missing-expected-bot-withholds" NOLABEL "$(decide_label $H "$J" 1 "$MAXWELL_LOGIN $C")"
+# 28 COMPLETENESS pass: every expected speaker (Maxwell + Kelvin) present → consensus applies → LABEL.
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "28 completeness-all-expected-present-labels" LABEL "$(decide_label $H "$J" 1 "$MAXWELL_LOGIN $K")"
+# 29 App-less reviewer is NOT an expected speaker: a human-authored (App-less) marker is present but
+#    not in EXPECTED, and all expected speakers are present → its non-gating presence must not block.
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" -- "$(item "nickmeinhold" APPROVE $H t1)")
+check "29 appless-not-expected-does-not-withhold" LABEL "$(decide_label $H "$J" 1 "$MAXWELL_LOGIN $K")"
 
 # --- drift guards: Round 11's label must no longer TRUST the sidecar (it reads authenticated
 #     GitHub markers instead). The sidecar SURVIVES for same-session availability/posting
@@ -165,8 +186,12 @@ check "19 fetch-failure-fail-closed" NOLABEL "$(decide_label $H "$J" 0)"
 #     So the invariant is "the label path moved to GitHub", not "the sidecar is gone".
 SKILL="$(dirname "$0")/../SKILL.md"
 if [ -f "$SKILL" ]; then
-  # (a) Round 11's sidecar copy is removed → SIDECAR_KEYS copies drop 5→4 (Rounds 7/8/10x2 remain).
-  check "20 round11-sidecar-copy-removed(SIDECAR_KEYS=4)" 4 "$(grep -cE "^SIDECAR_KEYS='" "$SKILL")"
+  # (a) SIDECAR_KEYS appears 5x: Rounds 7/8/10x2 (availability+verdict) + Round 11 (availability
+  #     ONLY, for the completeness gate — verdicts come from GitHub markers, never this file).
+  check "20 sidecar-keys-copies(=5)" 5 "$(grep -cE "^SIDECAR_KEYS='" "$SKILL")"
+  # (a2) Round 11 does NOT read a *_VERDICT from the sidecar (verdicts are GitHub-only); the
+  #      completeness gate reads only *_AVAILABLE. Assert the label decision uses cmv()/CM_MAP.
+  check "20b round11-verdicts-from-github(cmv)" 1 "$(grep -q 'MAXWELL_VERDICT=$(cmv' "$SKILL" && echo 1 || echo 0)"
   # (b) the verdict-marker format string is present on BOTH sides (Round 10 writes, Round 11 reads).
   check "21 marker-format-present(>=2)" 1 "$([ "$(grep -c 'cage-match-verdict:' "$SKILL")" -ge 2 ] && echo 1 || echo 0)"
   # (c) the authenticated bot-login allowlist is present in Round 11 (identity gate, not body-trust).

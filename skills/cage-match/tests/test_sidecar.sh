@@ -82,13 +82,14 @@ printf -- '- The **Verdict:** APPROVE claim in their review is wrong\n' > "$D/bu
 check "6 anchor-regression-bullet-not-approve" COMMENT "$(parse_verdict "$D/bullet.md")"
 
 # 7  DRIFT GUARD: the SIDECAR_KEYS validation pattern is duplicated at every source site in
-#    SKILL.md (Rounds 7/8/10x2). Round 11 no longer sources the sidecar (Task #13), so the
-#    expected copy count is 4, and all copies must be byte-identical.
+#    SKILL.md — Rounds 7/8/10x2 (availability+verdict) plus Round 11 (availability ONLY, for the
+#    completeness gate; Task #13 moved the label VERDICT to GitHub markers but the expected-
+#    speaker set still comes from the sidecar's availability). Expected copy count 5, byte-identical.
 SKILL="$(dirname "$0")/../SKILL.md"
 if [ -f "$SKILL" ]; then
   N_COPIES=$(grep -cE "^SIDECAR_KEYS='" "$SKILL")
   N_DISTINCT=$(grep -oE "SIDECAR_KEYS='[^']*'" "$SKILL" | sort -u | wc -l | tr -d ' ')
-  check "7 sidecar-keys-copies-count(=4)" 4 "$N_COPIES"
+  check "7 sidecar-keys-copies-count(=5)" 5 "$N_COPIES"
   check "7 sidecar-keys-all-identical(distinct=1)" 1 "$N_DISTINCT"
 else
   echo "  SKIP: 7 drift-guard (SKILL.md not found at $SKILL)"
