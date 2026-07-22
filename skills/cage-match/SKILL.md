@@ -93,14 +93,16 @@ else
   gh pr diff $1 > /tmp/pr-$1-diff.txt
 fi
 
-# Freshness seal for the Round 10/11 reviewer-state sidecar (Task #9). The sidecar
+# Freshness seal for the Round 7/8/10 reviewer-state sidecar (Task #9). The sidecar
 # carries availability+verdicts across fresh shells — but a PRESENT file is not a
 # FRESH file (the same presence≠freshness class the stale-review-file defenses kill
 # at launch). Two guards, set up here where PR_HEAD is known and valid:
 #   1. UNLINK any stale sidecar from a prior run of THIS PR, so a fresh cage-match
-#      always starts clean and a partial re-entry to Round 11 can't read old state.
+#      always starts clean and a partial re-entry can't read old availability/verdicts.
 #   2. RECORD this run's reviewed head, so Step D can stamp it into the sidecar and
-#      Round 11 can fail closed if the live head has since moved (stale verdicts).
+#      Round 10 can bind it into each posted verdict marker (`head=<sha>`). The label
+#      (Round 11) reads those markers from GitHub and fail-closes on a moved head —
+#      the sha in the marker IS the freshness proof (Task #13), no /tmp head check.
 rm -f /tmp/cm-state-$1.env
 printf '%s' "$PR_HEAD" > /tmp/cm-head-$1
 
@@ -802,10 +804,11 @@ fi
 TESLA_VERDICT=""; [ "$TESLA_AVAILABLE" -eq 1 ] && TESLA_VERDICT=$(parse_verdict /tmp/tesla-review-$1.md)
 WU_VERDICT="";    [ "$WU_AVAILABLE"    -eq 1 ] && WU_VERDICT=$(parse_verdict /tmp/wu-review-$1.md)
 
-# Stamp THIS run's reviewed head into the sidecar (recorded by Round 1). Round 11
-# re-derives the live head and fail-closes on a mismatch — so a stale sidecar (prior
-# run, or the branch moved since review) can never mint a label for code no longer
-# under review. Presence is not freshness; the head stamp is the freshness proof.
+# Stamp THIS run's reviewed head into the sidecar (recorded by Round 1). Round 10 binds
+# it into each posted verdict marker (`head=<sha>`); Round 11 reads those markers from
+# GitHub and fail-closes when the marker head != the live head — so a review of code no
+# longer under review can never mint a label. Presence is not freshness; the sha is the
+# freshness proof, now carried on GitHub rather than checked against a /tmp stamp.
 SIDECAR_PR_HEAD=$(cat /tmp/cm-head-$1 2>/dev/null)
 # Atomic write to a PRIVATE temp name (mktemp, not a predictable .tmp) then mv, so
 # two concurrent Step-D writers on the same PR can't interleave into one file
@@ -825,7 +828,7 @@ TESLA_VERDICT="$TESLA_VERDICT"
 WU_VERDICT="$WU_VERDICT"
 EOF_STATE
 mv "$SIDECAR_TMP" /tmp/cm-state-$1.env
-echo "Wrote reviewer state sidecar /tmp/cm-state-$1.env (head $SIDECAR_PR_HEAD; sourced by Rounds 7/8/10/11)."
+echo "Wrote reviewer state sidecar /tmp/cm-state-$1.env (head $SIDECAR_PR_HEAD; sourced by Rounds 7/8/10 — the Round 11 label reads GitHub markers, not this file)."
 ```
 
 ## Round 7: Strict Merge Gate
@@ -846,7 +849,7 @@ The valid dual-review condition: **Maxwell + at least one of (Kelvin, Carnot, Te
 # all fail-closed, and a `source` never executes an unvalidated /tmp file (Carnot +
 # Tesla: asymmetric armor is not armor). The check: exactly 10 lines, each a known
 # KEY="alnum-value" (no shell metachars, no missing/extra keys). Keep this SIDECAR_KEYS
-# pattern + the 10-key check identical across Rounds 7/8/10/11 (no shared function
+# pattern + the 10-key check identical across Rounds 7/8/10 (no shared function
 # crosses markdown fences). A MISSING/invalid sidecar is a hard fail at the GATE — if
 # Step D didn't record valid availability, we cannot confirm any reviewer ran.
 SIDECAR=/tmp/cm-state-$1.env
@@ -1125,8 +1128,22 @@ SIDECAR=/tmp/cm-state-$1.env
 SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
 if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; else echo "WARN: $SIDECAR missing/malformed/incomplete — re-run Step D before posting; verdicts unavailable." >&2; fi
 
+# Round 11 reads the label consensus from GitHub itself — NOT from this /tmp sidecar — so
+# each posted body carries an authenticated, commit-bound verdict marker:
+#   <!-- cage-match-verdict: <VERDICT> head=<sha> -->
+# `withmark FILE VERDICT` emits the review body followed by the marker, stamped with THIS
+# run's reviewed head ($SIDECAR_PR_HEAD, from the sidecar). The marker's authority at label
+# time is the POSTER'S GitHub identity (only a bot can post as itself) plus head-freshness
+# (a stale review carries a stale sha → Round 11 excludes it). An App-less reviewer posts via
+# `gh pr comment` as the orchestrator's own gh user, so its marker is authored by a human and
+# Round 11 ignores it — App-less reviewers advise but do not gate the label (configure their
+# App to re-include). This is why the sidecar is no longer a merge-gating trust boundary: it
+# carries same-session availability + the verdict Round 10 posts, but the LABEL now rests on
+# GitHub identity, dissolving the fork-PR (#11) and sidecar-auth (#12) failure classes.
+withmark() { cat "$1"; printf '\n\n<!-- cage-match-verdict: %s head=%s -->\n' "$2" "$SIDECAR_PR_HEAD"; }
+
 GH_TOKEN=$MAXWELL_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-  -f body="$(cat /tmp/maxwell-review-$1.md)" \
+  -f body="$(withmark /tmp/maxwell-review-$1.md "$MAXWELL_VERDICT")" \
   -f event="COMMENT" &
 
 if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
@@ -1135,10 +1152,10 @@ if [ "$KELVIN_AVAILABLE" -eq 1 ]; then
   # shape as Tesla/Wu below).
   if [ -n "$KELVIN_TOKEN" ]; then
     GH_TOKEN=$KELVIN_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-      -f body="$(cat /tmp/kelvin-review-$1.md)" \
+      -f body="$(withmark /tmp/kelvin-review-$1.md "$KELVIN_VERDICT")" \
       -f event="$KELVIN_VERDICT" &
   else
-    gh pr comment $1 --body "$(cat /tmp/kelvin-review-$1.md)" &
+    gh pr comment $1 --body "$(withmark /tmp/kelvin-review-$1.md "$KELVIN_VERDICT")" &
   fi
 fi
 
@@ -1146,12 +1163,12 @@ if [ "$CARNOT_AVAILABLE" -eq 1 ]; then
   if [ "$CARNOT_APP_CONFIGURED" -eq 1 ] && [ -n "$CARNOT_TOKEN" ]; then
     # Formal review as CarnotCodeCarver[bot], verdict carried — an APPROVE counts.
     GH_TOKEN=$CARNOT_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-      -f body="$(cat /tmp/carnot-review-$1.md)" \
+      -f body="$(withmark /tmp/carnot-review-$1.md "$CARNOT_VERDICT")" \
       -f event="$CARNOT_VERDICT" &
   else
     # Fallback (App not configured, OR token mint failed): plain comment from
     # the orchestrator's gh user — same guard shape as Tesla/Wu below.
-    gh pr comment $1 --body "$(cat /tmp/carnot-review-$1.md)" &
+    gh pr comment $1 --body "$(withmark /tmp/carnot-review-$1.md "$CARNOT_VERDICT")" &
   fi
 fi
 
@@ -1167,10 +1184,10 @@ if [ "$TESLA_AVAILABLE" -eq 1 ]; then
   # a silent gh call with GH_TOKEN="" (Kelvin's catch: unchecked token generation).
   if [ -n "$TESLA_TOKEN" ]; then
     GH_TOKEN=$TESLA_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-      -f body="$(cat /tmp/tesla-review-$1.md)" \
+      -f body="$(withmark /tmp/tesla-review-$1.md "$TESLA_VERDICT")" \
       -f event="$TESLA_VERDICT" &
   else
-    gh pr comment $1 --body "$(cat /tmp/tesla-review-$1.md)" &
+    gh pr comment $1 --body "$(withmark /tmp/tesla-review-$1.md "$TESLA_VERDICT")" &
   fi
 fi
 
@@ -1184,10 +1201,10 @@ if [ "$WU_AVAILABLE" -eq 1 ]; then
   # Same empty-token fallback as Tesla — mint failure degrades to a comment.
   if [ -n "$WU_TOKEN" ]; then
     GH_TOKEN=$WU_TOKEN gh api repos/$REPO/pulls/$1/reviews --method POST \
-      -f body="$(cat /tmp/wu-review-$1.md)" \
+      -f body="$(withmark /tmp/wu-review-$1.md "$WU_VERDICT")" \
       -f event="$WU_VERDICT" &
   else
-    gh pr comment $1 --body "$(cat /tmp/wu-review-$1.md)" &
+    gh pr comment $1 --body "$(withmark /tmp/wu-review-$1.md "$WU_VERDICT")" &
   fi
 fi
 
@@ -1211,10 +1228,10 @@ The label call uses Maxwell's GitHub App token (`MAXWELL_TOKEN`) so the action i
 
 ```bash
 # Re-mint Maxwell's token: this round runs in a fresh shell, so Round-10
-# variables (including MAXWELL_TOKEN) don't persist — same reason availability +
-# verdicts are sourced from the Step-D sidecar below. Prefer the Round-10 token file
-# (still valid within its 1-hour TTL), then fall back to minting a fresh one (needs
-# the App creds from .env in this shell).
+# variables (including MAXWELL_TOKEN) don't persist. The verdicts are NOT re-sourced
+# from the sidecar here — they're read from GitHub's posted markers below (Task #13).
+# Prefer the Round-10 token file (still valid within its 1-hour TTL), then fall back to
+# minting a fresh one (needs the App creds from .env in this shell).
 source ~/.claude/.env 2>/dev/null || source .env 2>/dev/null
 MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(cat /tmp/maxwell-token-$1 2>/dev/null)}
 MAXWELL_TOKEN=${MAXWELL_TOKEN:-$(~/.claude/scripts/github-app-token.sh "$MAXWELL_APP_ID" "$MAXWELL_PRIVATE_KEY_B64" "$REPO" 2>/dev/null)}
@@ -1222,53 +1239,152 @@ if [ -z "$MAXWELL_TOKEN" ]; then
   echo "WARN: could not mint MAXWELL_TOKEN — skipping 'cage-matched' labeling (best-effort; cage match itself is unaffected)."
 else
 
-# Availability + every verdict (Maxwell included) come from the Step-D sidecar — the
-# single place they were validly computed (RC guards + staleness defenses had run).
-# This fresh shell can't re-derive them safely (Step-D vars gone; re-parsing files is
-# stale-unsafe for a reviewer that didn't run this round), so `source` the sidecar.
-# This is the Task #9 fix: before it, MAXWELL_VERDICT was a hardcoded "COMMENT" (so
-# the APPROVE check below could never pass) and the adversary re-parse was gated on
-# non-persistent $*_AVAILABLE (so the label never applied). Now every input is live.
-# Fail CLOSED at three gates before trusting the sidecar — a merge-gating label must
-# never be minted from absent, corrupt, or STALE reviewer state:
-#   (1) MISSING  → Step D didn't run this session / /tmp cleared.
-#   (2) MALFORMED → any line isn't a known KEY="safe-value" (value = alnum/underscore
-#       only, no shell metachars). Validating BEFORE `source` refuses to execute an
-#       injected/hand-edited /tmp file (Carnot + Tesla: the reader never enforced the
-#       closed-enum invariant the write side assumes; `source` executes whatever's there).
-#   (3) STALE    → the sidecar's stamped head != the LIVE head (prior run, or the branch
-#       moved since review). Its verdicts don't describe the current code, so withhold.
-SIDECAR=/tmp/cm-state-$1.env
-SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
-if [ ! -f "$SIDECAR" ]; then
-  echo "WARN: $SIDECAR missing — Step D did not run this session, or /tmp was cleared. Skipping 'cage-matched' (fail-closed; a missing sidecar must not fabricate a consensus)."
-elif [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -ne 10 ] || grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
-  echo "WARN: $SIDECAR malformed or incomplete (not exactly 10 known KEY=\"safe-value\" lines). Skipping 'cage-matched' (fail-closed; shape≠schema — a partial key set must not source or label; refusing to execute untrusted /tmp)."
-else
-source "$SIDECAR"
-# Freshness (head stamp): the head the review ran against must still be the live head.
-CUR_HEAD=$(git ls-remote origin "refs/heads/$(jq -r .headRefName /tmp/pr-$1-info.json 2>/dev/null)" 2>/dev/null | head -1 | awk '{print $1}')
-if [ -z "$SIDECAR_PR_HEAD" ] || [ -z "$CUR_HEAD" ] || [ "$SIDECAR_PR_HEAD" != "$CUR_HEAD" ]; then
-  echo "WARN: sidecar head ($SIDECAR_PR_HEAD) != live head ($CUR_HEAD) — stale or moved reviewer state. Skipping 'cage-matched' (fail-closed)."
+# The label consensus is read from GITHUB'S posted reviews + issue comments — the
+# authenticated, commit-bound ground truth — NOT from the /tmp sidecar (Task #13, which
+# dissolves the fork-PR gap #11 and the sidecar-auth class #12). Each Round-10 body carries
+# a marker `<!-- cage-match-verdict: <V> head=<sha> -->`. The label's trust rests on:
+#   (a) IDENTITY — only a reviewer's GitHub App bot can post AS that bot; a human comment
+#       (or an App-less reviewer posting via `gh pr comment` as the orchestrator's gh user)
+#       is not one of the five bot logins, so it is ignored — it can neither gate nor block.
+#   (b) FRESHNESS — a marker whose head != the live head is a stale review, excluded by
+#       construction (no clock-grading, no /tmp head stamp: the sha IS the freshness proof).
+# Fail CLOSED throughout: no resolvable live head, no visible posts, or no consensus → no label.
+# Two named, fail-closed compromises (neither can mint a false label): (1) LIVE_HEAD via
+# `gh pr view headRefOid` (fork-native, but API-lag can return a one-commit-old sha → falsely
+# "stale" → label withheld, never falsely applied); (2) GitHub propagation between Round 10's
+# post and this read — if a just-posted review isn't visible yet, its marker is absent → label
+# withheld (re-run Round 11). Both degrade to "no label", which is safe for a best-effort label.
+# Resolve the live head the SAME way Round 1 does — `git ls-remote` for a same-repo PR
+# (the actual current remote ref, no API propagation lag), degrading to the API's
+# headRefOid only for a fork or a missing ref. Round 1 stamped the marker head from this
+# exact source, so marker-head and LIVE_HEAD agree on the common (non-fork) path; using the
+# laggy `gh pr view headRefOid` here would false-stale every fresh marker (Tesla's catch:
+# don't reintroduce the API-lag class Round 1 removed).
+PR_HEAD_BRANCH=$(jq -r .headRefName /tmp/pr-$1-info.json 2>/dev/null)
+IS_FORK=$(jq -r '.isCrossRepository' /tmp/pr-$1-info.json 2>/dev/null)
+LIVE_HEAD=""
+[ "$IS_FORK" = "false" ] && LIVE_HEAD=$(git ls-remote origin "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null | head -1 | awk '{print $1}')
+[ -z "$LIVE_HEAD" ] && LIVE_HEAD=$(gh pr view "$1" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null)
+if [ -z "$LIVE_HEAD" ]; then
+  echo "WARN: could not resolve PR #$1 live head — skipping 'cage-matched' (fail-closed; can't prove reviewer freshness)."
 else
 
-# Any REQUEST_CHANGES from any reviewer is a hard block on the label.
+# Authenticated reviewer identities (GitHub App slug + [bot], lowercased — verified against
+# real posted reviews on this repo's PRs #122/#123). Tesla/Wu appear here only when their App
+# is configured; App-less, they post as the orchestrator's gh user and cannot gate the label.
+MAXWELL_LOGIN='maxwell-merge-slam[bot]'
+KELVIN_LOGIN='kelvin-bit-brawler[bot]'; CARNOT_LOGIN='carnotcodecarver[bot]'
+TESLA_LOGIN='teslaarcprophet[bot]';     WU_LOGIN='wuparitybreaker[bot]'
+
+# Fetch ALL posted reviews + issue comments AS the Maxwell App identity ($MAXWELL_TOKEN) — the
+# SAME authenticated principal that applies the label — so the read-visibility set is the App's,
+# not whatever ambient gh user the shell happens to hold (Carnot's catch). --paginate: a
+# multi-round cage match can push the LATEST markers off the default 30-item first page, and
+# reviews are oldest-first, so a truncated read would compute latest-per-author over a stale
+# sample. gh writes a RAW file and its exit is captured via `$?` — no pipe (a `| jq` pipe needs
+# PIPESTATUS, a bashism EMPTY under this repo's zsh runtime, which would silently break the
+# fail-closed check). `--paginate` emits one array per page (`[..][..]`); the main jq
+# `--slurpfile`s that stream and `add`s it into one flat array. FAIL CLOSED on EITHER fetch
+# failing: a merge-gating label treats MISSING data as withhold, never as empty (Carnot:
+# `|| echo '[]'` failed OPEN independently — a failed comments read could hide an RC marker
+# while a reviews APPROVE still labeled).
+LABEL_ELIGIBLE=1
+MAXWELL_VERDICT=""; KELVIN_VERDICT=""; CARNOT_VERDICT=""; TESLA_VERDICT=""; WU_VERDICT=""
+ANY_REQUEST_CHANGES=0; ADVERSARIAL_APPROVE=0
+GH_TOKEN=$MAXWELL_TOKEN gh api --paginate "repos/$REPO/pulls/$1/reviews"   > /tmp/cm-reviews-$1.json  2>/dev/null; REVIEWS_RC=$?
+GH_TOKEN=$MAXWELL_TOKEN gh api --paginate "repos/$REPO/issues/$1/comments" > /tmp/cm-comments-$1.json 2>/dev/null; COMMENTS_RC=$?
+if [ "$REVIEWS_RC" -ne 0 ] || [ "$COMMENTS_RC" -ne 0 ]; then
+  echo "WARN: reviews/comments fetch failed (rc reviews=$REVIEWS_RC comments=$COMMENTS_RC) — skipping 'cage-matched' (fail-closed; incomplete reviewer data must not mint a label)."
+  LABEL_ELIGIBLE=0
+else
+# Parse each body's LAST marker: `withmark` (Round 10) APPENDS the authoritative marker after the
+# model's free-text, so a marker the model echoed earlier (the head SHA is in its prompt) is
+# superseded — `scan | last`, not first-match `capture`, closes the injection seam (Tesla). Drop
+# DISMISSED reviews so a dismissed marker can't win `max_by(.ts)` (Tesla — body channel and review
+# event can disagree; an issue comment has no .state, so `!= "DISMISSED"` keeps it). `$r | add`
+# flattens paginated pages. This parse is exercised offline in tests/test_label_consensus.sh.
+CM_MAP=$(jq -n --slurpfile r /tmp/cm-reviews-$1.json --slurpfile c /tmp/cm-comments-$1.json \
+  --arg head "$LIVE_HEAD" '
+    { reviews: (($r | add) // []), comments: (($c | add) // []) }
+    | [ (.reviews + .comments)[]
+        | select((.state // "") != "DISMISSED")
+        | { login: .user.login, ts: (.submitted_at // .created_at), body: (.body // "") }
+        | ( [ .body | scan("<!-- cage-match-verdict: (APPROVE|REQUEST_CHANGES|COMMENT) head=([0-9a-f]{7,40}) -->") ] | last ) as $m
+        | select($m != null and $m[1] == $head)
+        | {login, ts, v: $m[0]} ]
+    | group_by(.login) | map(max_by(.ts)) | map({(.login): .v}) | add // {}' 2>/dev/null)
+[ -n "$CM_MAP" ] || CM_MAP='{}'
+cmv() { printf '%s' "$CM_MAP" | jq -r --arg k "$1" '.[$k] // ""' 2>/dev/null; }
+MAXWELL_VERDICT=$(cmv "$MAXWELL_LOGIN")
+KELVIN_VERDICT=$(cmv "$KELVIN_LOGIN"); CARNOT_VERDICT=$(cmv "$CARNOT_LOGIN")
+TESLA_VERDICT=$(cmv "$TESLA_LOGIN");   WU_VERDICT=$(cmv "$WU_LOGIN")
+
+# COMPLETENESS GATE (Carnot + Tesla's convergent catch: "absence of a blocker is not absence of
+# objection"). Reading verdicts from GitHub sees only what's POSTED — a reviewer whose RC post
+# 403'd or hasn't propagated is simply ABSENT, and a raw consensus would read that silence as
+# "no objection" and mint a false label. GitHub cannot know who was SUPPOSED to speak; the
+# sidecar can. Expected authenticated speaker set = Maxwell + every adversary that (a) was
+# AVAILABLE this session AND (b) posts as an authenticated bot (its App is configured). EVERY
+# expected speaker must have a fresh head-matched marker present, else WITHHOLD. who-should-speak
+# = sidecar availability; what-they-said = GitHub markers. App-less available reviewers are NOT
+# expected (they post as a human and only advise), so their absence is fine — the gate covers
+# authenticated posters only.
+KELVIN_AVAILABLE=0; CARNOT_AVAILABLE=0; TESLA_AVAILABLE=0; WU_AVAILABLE=0
+SIDECAR=/tmp/cm-state-$1.env
+SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
+# Read AVAILABILITY from the sidecar WITHOUT sourcing it — grep out ONLY the four *_AVAILABLE
+# values. Sourcing would also import the sidecar's *_VERDICT lines, which (running after cmv)
+# would CLOBBER the GitHub-derived verdicts and silently re-route the whole decision back through
+# /tmp — the SoT-inversion Tesla caught. Grepping only the availability booleans removes that
+# coupling by construction: the sidecar's verdicts can never enter this shell. FAIL CLOSED if the
+# sidecar is missing/malformed: without it we cannot know the expected authenticated speaker set,
+# so a merge-gating label must not be minted (all-zero availability would otherwise collapse the
+# expected set to Maxwell-only and fail OPEN — Kelvin + Carnot + Tesla's convergent catch).
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  avail() { grep -oE "^$1=\"[01]\"" "$SIDECAR" 2>/dev/null | grep -oE '[01]' | head -1; }
+  KELVIN_AVAILABLE=$(avail KELVIN_AVAILABLE); CARNOT_AVAILABLE=$(avail CARNOT_AVAILABLE)
+  TESLA_AVAILABLE=$(avail TESLA_AVAILABLE);   WU_AVAILABLE=$(avail WU_AVAILABLE)
+else
+  echo "WARN: reviewer-state sidecar missing/malformed at Round 11 — cannot determine the expected authenticated speaker set. Skipping 'cage-matched' (fail-closed; an unknown speaker set must not collapse to Maxwell-only and label)."
+  LABEL_ELIGIBLE=0
+fi
+kexp=0; [ "$KELVIN_AVAILABLE" -eq 1 ] && [ -n "${KELVIN_APP_ID:-}" ] && [ -n "${KELVIN_PRIVATE_KEY_B64:-}" ] && kexp=1
+cexp=0; [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNOT_PRIVATE_KEY_B64:-}" ] && cexp=1
+texp=0; [ "$TESLA_AVAILABLE"  -eq 1 ] && [ -n "${TESLA_APP_ID:-}" ]  && [ -n "${TESLA_PRIVATE_KEY_B64:-}" ]  && texp=1
+wexp=0; [ "$WU_AVAILABLE"     -eq 1 ] && [ -n "${WU_APP_ID:-}" ]     && [ -n "${WU_PRIVATE_KEY_B64:-}" ]     && wexp=1
+MISSING=$(jq -rn --argjson map "$CM_MAP" \
+  --arg mx "$MAXWELL_LOGIN" --arg k "$KELVIN_LOGIN" --arg c "$CARNOT_LOGIN" --arg t "$TESLA_LOGIN" --arg w "$WU_LOGIN" \
+  --argjson kexp "$kexp" --argjson cexp "$cexp" --argjson texp "$texp" --argjson wexp "$wexp" '
+    ( [$mx]
+      + (if $kexp==1 then [$k] else [] end)
+      + (if $cexp==1 then [$c] else [] end)
+      + (if $texp==1 then [$t] else [] end)
+      + (if $wexp==1 then [$w] else [] end) )
+    | map(select($map[.] == null)) | join(" ")' 2>/dev/null)
+if [ -n "$MISSING" ]; then
+  echo "WARN: expected authenticated reviewer(s) have no fresh marker on GitHub:$MISSING — skipping 'cage-matched' (fail-closed; a failed or still-propagating post must not read as 'no objection'. Re-run Round 11 after propagation, or investigate the missing post)."
+  LABEL_ELIGIBLE=0
+else
+# Consensus (rule unchanged): Maxwell APPROVE + >=1 adversary APPROVE + no reviewer
+# REQUEST_CHANGES. The completeness gate above guarantees every expected authenticated verdict is
+# actually present, so a missing RC can't be silently read as silence; and only the five bot
+# verdicts are read, so a spoofed/human marker can neither gate the label nor hold it.
 ANY_REQUEST_CHANGES=0
 for v in "$MAXWELL_VERDICT" "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT" "$WU_VERDICT"; do
   [ "$v" = "REQUEST_CHANGES" ] && ANY_REQUEST_CHANGES=1
 done
-
-# Consensus APPROVE: Maxwell APPROVE + at least one adversarial APPROVE.
 ADVERSARIAL_APPROVE=0
-{ [ "$KELVIN_AVAILABLE" -eq 1 ] && [ "$KELVIN_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
-{ [ "$CARNOT_AVAILABLE" -eq 1 ] && [ "$CARNOT_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
-{ [ "$TESLA_AVAILABLE" -eq 1 ] && [ "$TESLA_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
-{ [ "$WU_AVAILABLE" -eq 1 ] && [ "$WU_VERDICT" = "APPROVE" ]; } && ADVERSARIAL_APPROVE=1
+for v in "$KELVIN_VERDICT" "$CARNOT_VERDICT" "$TESLA_VERDICT" "$WU_VERDICT"; do
+  [ "$v" = "APPROVE" ] && ADVERSARIAL_APPROVE=1
+done
+fi  # end completeness gate
+fi  # end fetch-ok guard
 
-if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
+if [ "$LABEL_ELIGIBLE" -eq 1 ] \
+   && [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
    && [ "$MAXWELL_VERDICT" = "APPROVE" ] \
    && [ "$ADVERSARIAL_APPROVE" -eq 1 ]; then
-  echo "Consensus APPROVE — applying 'cage-matched' label to PR #$1."
+  echo "Consensus APPROVE (GitHub ground truth, head $LIVE_HEAD) — applying 'cage-matched' label to PR #$1."
   # Best-effort: ensure the label exists, then add it. Neither call may
   # fail the cage match. Use Maxwell's App token so the label is
   # attributable to the cage-match identity.
@@ -1281,12 +1397,14 @@ if [ "$ANY_REQUEST_CHANGES" -eq 0 ] \
   else
     echo "WARN: failed to apply 'cage-matched' label (label missing? permissions?). Continuing — cage match itself succeeded."
   fi
-else
-  echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT) — NOT applying 'cage-matched' label."
+elif [ "$LABEL_ELIGIBLE" -eq 1 ]; then
+  echo "No consensus APPROVE (Maxwell=$MAXWELL_VERDICT Kelvin=$KELVIN_VERDICT Carnot=$CARNOT_VERDICT Tesla=$TESLA_VERDICT Wu=$WU_VERDICT; App-less reviewers advise but do not gate) — NOT applying 'cage-matched' label."
 fi
+# (If LABEL_ELIGIBLE=0, a specific WARN above — fetch failure or an incomplete authenticated
+# speaker set — already explained the withhold; no misleading "No consensus" line, which would
+# train the operator to re-run or override for the wrong reason — Carnot's catch.)
 
-fi  # end head-freshness guard (Task #9 round 2)
-fi  # end sidecar missing/malformed/present guard (Task #9)
+fi  # end live-head guard (Task #13 — GitHub ground truth replaces the /tmp verdict source)
 
 fi  # end empty-MAXWELL_TOKEN guard
 ```
