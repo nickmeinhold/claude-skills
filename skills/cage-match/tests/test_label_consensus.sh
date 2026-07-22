@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# Lifecycle test for the GitHub-ground-truth `cage-matched` label consensus (Task #13,
+# supersedes #11/#12). The /tmp reviewer-state sidecar is DISSOLVED: verdicts are carried
+# on GitHub itself as an authenticated, commit-bound marker in each reviewer's posted body
+#   <!-- cage-match-verdict: <APPROVE|REQUEST_CHANGES|COMMENT> head=<sha> -->
+# Round 11 fetches reviews + issue-comments, keeps only markers whose head == the LIVE head
+# (freshness by construction — a stale review carries a stale sha), takes the latest per
+# author, and reads consensus from the AUTHENTICATED bot logins only. A human comment (or an
+# App-less reviewer posting via `gh pr comment` as the orchestrator's gh user) is NOT one of
+# the five bot identities, so it can never gate the label — the #123 spoof case (a
+# nickmeinhold comment carrying a **Verdict:** line) is excluded by construction.
+#
+# This test replicates the skill's exact decide_label jq program + bash consensus and asserts
+# outcomes across the full lifecycle: clean consensus, any-RC-blocks, stale (head moved),
+# spoofed author, App-less-comment-excluded, latest-per-author (both orderings), no-marker,
+# and the fail-closed empty-head / empty-input cases a merge-gating label must never botch.
+set -u
+D=$(mktemp -d); PASS=0; FAIL=0
+
+MAXWELL_LOGIN='maxwell-merge-slam[bot]'
+# The four adversary bot identities. Tesla/Wu logins are their App slugs + [bot]; they only
+# reach this allowlist when their GitHub App is configured (App-less → posts as a human → excluded).
+K='kelvin-bit-brawler[bot]'; C='carnotcodecarver[bot]'; T='teslaarcprophet[bot]'; W='wuparitybreaker[bot]'
+
+# The verdict-marker parse + freshness filter + latest-per-author dedup — IDENTICAL to the
+# jq program embedded in SKILL.md Round 11. Yields {login: verdict} for fresh, marker-bearing
+# posts only. Allowlisting is done in bash below (consensus reads known bot keys only), so a
+# spoofed/unknown login may appear here but can never be read into the decision.
+DECIDE_JQ='
+[ (.reviews + .comments)[]
+  | { login: .user.login, ts: (.submitted_at // .created_at), body: .body }
+  | . + ( (try (.body
+        | capture("<!-- cage-match-verdict: (?<v>APPROVE|REQUEST_CHANGES|COMMENT) head=(?<h>[0-9a-f]{7,40}) -->"))
+      catch {v:null,h:null}) )
+  | select(.v != null and .h == $head)
+  | {login, ts, v} ]
+| group_by(.login) | map(max_by(.ts)) | map({(.login): .v}) | add // {}
+'
+
+# Round 11 decision. $1 = live head; $2 = combined-json file ({reviews:[],comments:[]}).
+decide_label() ( # subshell = fresh shell, no carried state
+  local CUR_HEAD=$1 JSON=$2
+  [ -n "$CUR_HEAD" ] || { echo "NOLABEL"; exit 0; }                    # fail-closed: no live head → can't prove freshness
+  [ -f "$JSON" ]     || { echo "NOLABEL"; exit 0; }
+  local MAP
+  MAP=$(jq -c --arg head "$CUR_HEAD" "$DECIDE_JQ" "$JSON" 2>/dev/null) || { echo "NOLABEL"; exit 0; }
+  [ -n "$MAP" ] || { echo "NOLABEL"; exit 0; }
+  get() { printf '%s' "$MAP" | jq -r --arg k "$1" '.[$k] // ""'; }
+  local MV KV CV TV WV
+  MV=$(get "$MAXWELL_LOGIN"); KV=$(get "$K"); CV=$(get "$C"); TV=$(get "$T"); WV=$(get "$W")
+  local ANY_RC=0 v
+  for v in "$MV" "$KV" "$CV" "$TV" "$WV"; do [ "$v" = "REQUEST_CHANGES" ] && ANY_RC=1; done
+  local ADV=0
+  for v in "$KV" "$CV" "$TV" "$WV"; do [ "$v" = "APPROVE" ] && ADV=1; done
+  if [ "$ANY_RC" -eq 0 ] && [ "$MV" = "APPROVE" ] && [ "$ADV" -eq 1 ]; then echo "LABEL"; else echo "NOLABEL"; fi
+)
+
+# --- fixture builders --------------------------------------------------------
+# item login verdict head ts [nomarker]  → one posted object (marker in body unless nomarker)
+item() {
+  local login=$1 v=$2 head=$3 ts=$4 nomarker=${5:-}
+  local body="## ${login} review"$'\n'"**Verdict:** ${v}"
+  [ -z "$nomarker" ] && body="${body}"$'\n'"<!-- cage-match-verdict: ${v} head=${head} -->"
+  jq -n --arg l "$login" --arg b "$body" --arg ts "$ts" \
+    '{user:{login:$l}, body:$b, submitted_at:$ts, created_at:$ts}'
+}
+# combined REVIEWS... -- COMMENTS...   ('--' separates the two arrays)
+combined() {
+  local rev=() com=() seen_sep=0
+  for a in "$@"; do
+    if [ "$a" = "--" ]; then seen_sep=1; continue; fi
+    if [ "$seen_sep" -eq 0 ]; then rev+=("$a"); else com+=("$a"); fi
+  done
+  local rj cj
+  rj=$( [ ${#rev[@]} -gt 0 ] && printf '%s\n' "${rev[@]}" | jq -s '.' || echo '[]' )
+  cj=$( [ ${#com[@]} -gt 0 ] && printf '%s\n' "${com[@]}" | jq -s '.' || echo '[]' )
+  jq -n --argjson r "$rj" --argjson c "$cj" '{reviews:$r, comments:$c}'
+}
+mkjson() { combined "$@" > "$D/in.json"; echo "$D/in.json"; }
+
+check() { if [ "$2" = "$3" ]; then echo "  PASS: $1 → $3"; PASS=$((PASS+1)); else echo "  FAIL: $1 → got $3, expected $2"; FAIL=$((FAIL+1)); fi; }
+H=abc1234; H2=def5678   # live head, and a moved head
+
+# 1  happy path: Maxwell APPROVE + one adversary APPROVE, all on live head
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "1 one-adversary-approve" LABEL "$(decide_label $H "$J")"
+# 2  any REQUEST_CHANGES blocks (Carnot RC among approvers)
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" "$(item "$C" REQUEST_CHANGES $H t1)")
+check "2 any-RC-blocks" NOLABEL "$(decide_label $H "$J")"
+# 3  no adversarial APPROVE (all adversaries COMMENT)
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" COMMENT $H t1)" "$(item "$C" COMMENT $H t1)")
+check "3 no-adversary-approve" NOLABEL "$(decide_label $H "$J")"
+# 4  Maxwell not APPROVE (Maxwell COMMENT, adversary APPROVE)
+J=$(mkjson "$(item "$MAXWELL_LOGIN" COMMENT $H t1)" "$(item "$T" APPROVE $H t1)")
+check "4 maxwell-not-approve" NOLABEL "$(decide_label $H "$J")"
+# 5  full five-way consensus
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" "$(item "$C" APPROVE $H t1)" "$(item "$T" APPROVE $H t1)" "$(item "$W" APPROVE $H t1)")
+check "5 full-consensus" LABEL "$(decide_label $H "$J")"
+# 6  STALE review: prior-head markers present, but the live head has MOVED → all excluded → NOLABEL
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "6 stale-head-moved-excluded" NOLABEL "$(decide_label $H2 "$J")"
+# 7  SPOOF: a human (nickmeinhold) posts an APPROVE marker as an issue comment → not a bot login → ignored.
+#    Maxwell APPROVE but NO real adversary → NOLABEL (the human's APPROVE cannot stand in for an adversary).
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" -- "$(item "nickmeinhold" APPROVE $H t1)")
+check "7 human-spoof-approve-ignored" NOLABEL "$(decide_label $H "$J")"
+# 8  SPOOF cannot BLOCK either: a human REQUEST_CHANGES comment must not hold the gate (only bots gate).
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" -- "$(item "nickmeinhold" REQUEST_CHANGES $H t1)")
+check "8 human-spoof-RC-does-not-block" LABEL "$(decide_label $H "$J")"
+# 9  App-less Tesla: posts via `gh pr comment` as the orchestrator's gh user (modeled as nickmeinhold),
+#    carrying a real Tesla verdict. Authenticated identity is the human, so it does NOT gate the label.
+#    Maxwell + Kelvin(App) still form consensus → LABEL (Tesla advises, doesn't gate).
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" -- "$(item "nickmeinhold" APPROVE $H t1)")
+check "9 appless-tesla-comment-advises-not-gates" LABEL "$(decide_label $H "$J")"
+# 10 LATEST-PER-AUTHOR: Kelvin RC (earlier) then APPROVE (later) on the SAME head → APPROVE wins → LABEL
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t2)" "$(item "$K" REQUEST_CHANGES $H t1)" "$(item "$K" APPROVE $H t2)")
+check "10 latest-per-author-approve-wins" LABEL "$(decide_label $H "$J")"
+# 11 LATEST-PER-AUTHOR inverse: Kelvin APPROVE (earlier) then RC (later) → RC wins → blocks → NOLABEL
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t2)" "$(item "$K" APPROVE $H t1)" "$(item "$K" REQUEST_CHANGES $H t2)")
+check "11 latest-per-author-RC-wins-blocks" NOLABEL "$(decide_label $H "$J")"
+# 12 NO MARKER: an adversary review whose body lost the marker → excluded (fail-closed), no consensus
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1 nomarker)")
+check "12 adversary-without-marker-excluded" NOLABEL "$(decide_label $H "$J")"
+# 13 Maxwell marker missing → Maxwell verdict unrecoverable → NOLABEL (Maxwell is the required anchor)
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1 nomarker)" "$(item "$K" APPROVE $H t1)")
+check "13 maxwell-without-marker-fail-closed" NOLABEL "$(decide_label $H "$J")"
+# 14 EMPTY live head (network/API fail resolving head) → fail-closed NOLABEL
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "14 empty-live-head-fail-closed" NOLABEL "$(decide_label "" "$J")"
+# 15 EMPTY input (no reviews, no comments — nobody posted) → NOLABEL
+J=$(mkjson)
+check "15 empty-input-fail-closed" NOLABEL "$(decide_label $H "$J")"
+# 16 MALFORMED body: a fake marker with a bad verdict token must not parse as a verdict.
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(printf '{"user":{"login":"%s"},"body":"<!-- cage-match-verdict: PWNED head=%s -->","submitted_at":"t1"}' "$K" "$H")")
+check "16 malformed-verdict-token-excluded" NOLABEL "$(decide_label $H "$J")"
+
+# --- drift guards: Round 11's label must no longer TRUST the sidecar (it reads authenticated
+#     GitHub markers instead). The sidecar SURVIVES for same-session availability/posting
+#     (Rounds 7/8/10) — GitHub can't supply availability, which is gated BEFORE Round 10 posts.
+#     So the invariant is "the label path moved to GitHub", not "the sidecar is gone".
+SKILL="$(dirname "$0")/../SKILL.md"
+if [ -f "$SKILL" ]; then
+  # (a) Round 11's sidecar copy is removed → SIDECAR_KEYS copies drop 5→4 (Rounds 7/8/10x2 remain).
+  check "17 round11-sidecar-copy-removed(SIDECAR_KEYS=4)" 4 "$(grep -cE "^SIDECAR_KEYS='" "$SKILL")"
+  # (b) the verdict-marker format string is present on BOTH sides (Round 10 writes, Round 11 reads).
+  check "18 marker-format-present(>=2)" 1 "$([ "$(grep -c 'cage-match-verdict:' "$SKILL")" -ge 2 ] && echo 1 || echo 0)"
+  # (c) the authenticated bot-login allowlist is present in Round 11 (identity gate, not body-trust).
+  check "19 bot-login-allowlist-present" 1 "$(grep -qF 'maxwell-merge-slam[bot]' "$SKILL" && echo 1 || echo 0)"
+  # (d) Round 11 no longer computes the label from the sidecar head-stamp check (that logic is deleted).
+  check "20 round11-no-sidecar-head-stamp-label" 0 "$(grep -c 'sidecar head' "$SKILL")"
+else
+  echo "  SKIP: 17-20 drift-guards (SKILL.md not found at $SKILL)"
+fi
+
+echo ""
+echo "RESULT: $PASS passed, $FAIL failed"
+rm -rf "$D"
+[ "$FAIL" -eq 0 ]
