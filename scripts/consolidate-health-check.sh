@@ -62,7 +62,15 @@
 set -euo pipefail
 
 # *** SINGLE SOURCE OF TRUTH for the directive-layer cap (task #5, dir-id 9b3d). ***
-# 40960 = 40 KiB (40*1024); raised from 38912 on 2026-07-11 after a cross-family semantic-dedup audit found the directive layer load-bearing to ~1% (only 656B genuine redundancy across 71 directives). This ONE number is the directive-layer budget; the
+# 47104 = 46 KiB (46*1024). METRIC CHANGE 2026-07-23: Check 1 now counts EVERY
+# directive line (any memory pointer in bare / .md / [[wiki-link]] form), not just
+# .md-suffixed lines — the old .md-only regex was BLIND to ~13 wiki-link-only
+# directives (~4.6KB of always-on cost). Budget recalibrated 40960 -> 47104 the SAME
+# day to the accurate post-verify-cluster-compression size (46809B / 87 directives):
+# NOT a raise in tolerance, the same tightness measured on a corrected ruler. Prior
+# (on the old .md-only basis): raised from 38912 on 2026-07-11 after a cross-family
+# semantic-dedup audit found the layer load-bearing to ~1% (656B redundancy / 71
+# directives). This ONE number is the directive-layer budget; the
 # /consolidate SKILL.md eviction audit (Trigger A) references THIS default rather
 # than restating a number — so the two cannot drift. Tune here, nowhere else.
 # History: 20→24 KiB (2026-06-18), 24→28 KiB (2026-06-22, #87), 28→31 KiB
@@ -73,7 +81,7 @@ set -euo pipefail
 # directives — strong evidence the corpus is rich, not fat. Cutting distinct
 # nuance to satisfy the cap is the self-harm trap the audit warns against; the
 # cap reflects the real set.
-BUDGET="${HEALTH_BUDGET:-40960}"
+BUDGET="${HEALTH_BUDGET:-47104}"
 CLAUDE_MD="${HEALTH_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 TIMING="${HEALTH_TIMING:-$HOME/.claude/consolidation/timing.jsonl}"
 WINDOW="${HEALTH_WINDOW:-10}"
@@ -129,7 +137,7 @@ def add(name, status, headline, detail=""):
     checks.append({"name": name, "status": status, "headline": headline, "detail": detail})
 
 # --- Check 1: eviction budget --------------------------------------------------
-ptr = re.compile(r"feedback_[a-z_]+\.md|concept_[a-z_]+\.md")
+ptr = re.compile(r"feedback_[a-z_]+|concept_[a-z_]+|dreamscape_[a-z_]+")  # any pointer form: bare, .md, or [[wiki-link]] — counts the whole directive layer, not just .md-suffixed lines (2026-07-23)
 if not os.path.isfile(claude_md):
     add("eviction-budget", "SKIP", f"CLAUDE.md not found at {claude_md}")
 else:
