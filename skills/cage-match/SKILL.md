@@ -1332,9 +1332,22 @@ TESLA_VERDICT=$(cmv "$TESLA_LOGIN");   WU_VERDICT=$(cmv "$WU_LOGIN")
 KELVIN_AVAILABLE=0; CARNOT_AVAILABLE=0; TESLA_AVAILABLE=0; WU_AVAILABLE=0
 SIDECAR=/tmp/cm-state-$1.env
 SIDECAR_KEYS='^(SIDECAR_PR_HEAD|KELVIN_AVAILABLE|CARNOT_AVAILABLE|TESLA_AVAILABLE|WU_AVAILABLE|MAXWELL_VERDICT|KELVIN_VERDICT|CARNOT_VERDICT|TESLA_VERDICT|WU_VERDICT)="[A-Za-z0-9_]*"$'
-# Source for $*_AVAILABLE ONLY — the sidecar's $*_VERDICT are IGNORED (the cmv() values above,
-# from GitHub, are the verdicts). Validated identically to Rounds 7/8/10 before sourcing.
-if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then source "$SIDECAR"; fi
+# Read AVAILABILITY from the sidecar WITHOUT sourcing it — grep out ONLY the four *_AVAILABLE
+# values. Sourcing would also import the sidecar's *_VERDICT lines, which (running after cmv)
+# would CLOBBER the GitHub-derived verdicts and silently re-route the whole decision back through
+# /tmp — the SoT-inversion Tesla caught. Grepping only the availability booleans removes that
+# coupling by construction: the sidecar's verdicts can never enter this shell. FAIL CLOSED if the
+# sidecar is missing/malformed: without it we cannot know the expected authenticated speaker set,
+# so a merge-gating label must not be minted (all-zero availability would otherwise collapse the
+# expected set to Maxwell-only and fail OPEN — Kelvin + Carnot + Tesla's convergent catch).
+if [ -f "$SIDECAR" ] && [ "$(grep -cE "$SIDECAR_KEYS" "$SIDECAR")" -eq 10 ] && ! grep -qvE "$SIDECAR_KEYS" "$SIDECAR"; then
+  avail() { grep -oE "^$1=\"[01]\"" "$SIDECAR" 2>/dev/null | grep -oE '[01]' | head -1; }
+  KELVIN_AVAILABLE=$(avail KELVIN_AVAILABLE); CARNOT_AVAILABLE=$(avail CARNOT_AVAILABLE)
+  TESLA_AVAILABLE=$(avail TESLA_AVAILABLE);   WU_AVAILABLE=$(avail WU_AVAILABLE)
+else
+  echo "WARN: reviewer-state sidecar missing/malformed at Round 11 — cannot determine the expected authenticated speaker set. Skipping 'cage-matched' (fail-closed; an unknown speaker set must not collapse to Maxwell-only and label)."
+  LABEL_ELIGIBLE=0
+fi
 kexp=0; [ "$KELVIN_AVAILABLE" -eq 1 ] && [ -n "${KELVIN_APP_ID:-}" ] && [ -n "${KELVIN_PRIVATE_KEY_B64:-}" ] && kexp=1
 cexp=0; [ "$CARNOT_AVAILABLE" -eq 1 ] && [ -n "${CARNOT_APP_ID:-}" ] && [ -n "${CARNOT_PRIVATE_KEY_B64:-}" ] && cexp=1
 texp=0; [ "$TESLA_AVAILABLE"  -eq 1 ] && [ -n "${TESLA_APP_ID:-}" ]  && [ -n "${TESLA_PRIVATE_KEY_B64:-}" ]  && texp=1

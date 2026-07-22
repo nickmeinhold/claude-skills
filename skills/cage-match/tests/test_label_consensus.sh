@@ -32,6 +32,7 @@ K='kelvin-bit-brawler[bot]'; C='carnotcodecarver[bot]'; T='teslaarcprophet[bot]'
 # closes that injection seam. IDENTICAL to the jq embedded in SKILL.md Round 11.
 DECIDE_JQ='
 [ (.reviews + .comments)[]
+  | select((.state // "") != "DISMISSED")
   | { login: .user.login, ts: (.submitted_at // .created_at), body: (.body // "") }
   | ( [ .body | scan("<!-- cage-match-verdict: (APPROVE|REQUEST_CHANGES|COMMENT) head=([0-9a-f]{7,40}) -->") ] | last ) as $m
   | select($m != null and $m[1] == $head)
@@ -46,8 +47,9 @@ DECIDE_JQ='
 # available App-bot) must be present in the map, else a failed/lagging RC post would be read as
 # silence and mint a false label ("absence of a blocker ≠ absence of objection").
 decide_label() ( # subshell = fresh shell, no carried state
-  local CUR_HEAD=$1 JSON=$2 FETCH_OK=${3:-1} EXPECTED=${4:-$MAXWELL_LOGIN}
-  [ "$FETCH_OK" -eq 1 ] || { echo "NOLABEL"; exit 0; }                 # fail-closed: a fetch failed → incomplete data
+  local CUR_HEAD=$1 JSON=$2 FETCH_OK=${3:-1} EXPECTED=${4:-$MAXWELL_LOGIN} SIDECAR_OK=${5:-1}
+  [ "$FETCH_OK" -eq 1 ]   || { echo "NOLABEL"; exit 0; }               # fail-closed: a fetch failed → incomplete data
+  [ "$SIDECAR_OK" -eq 1 ] || { echo "NOLABEL"; exit 0; }               # fail-closed: no sidecar → unknown expected-speaker set
   [ -n "$CUR_HEAD" ] || { echo "NOLABEL"; exit 0; }                    # fail-closed: no live head → can't prove freshness
   [ -f "$JSON" ]     || { echo "NOLABEL"; exit 0; }
   local MAP
@@ -180,6 +182,23 @@ check "28 completeness-all-expected-present-labels" LABEL "$(decide_label $H "$J
 J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)" -- "$(item "nickmeinhold" APPROVE $H t1)")
 check "29 appless-not-expected-does-not-withhold" LABEL "$(decide_label $H "$J" 1 "$MAXWELL_LOGIN $K")"
 
+# item carrying a review .state (issue comments have no .state). login v head ts state
+item_state() {
+  local login=$1 v=$2 head=$3 ts=$4 state=$5
+  local body="## ${login} review"$'\n'"<!-- cage-match-verdict: ${v} head=${head} -->"
+  jq -n --arg l "$login" --arg b "$body" --arg ts "$ts" --arg s "$state" \
+    '{user:{login:$l}, body:$b, submitted_at:$ts, created_at:$ts, state:$s}'
+}
+# 30 DISMISSED review's marker is dropped: Kelvin's only marker is on a DISMISSED review → Kelvin
+#    excluded → no adversary APPROVE → NOLABEL (a dismissed verdict must not win max_by(.ts)).
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item_state "$K" APPROVE $H t1 DISMISSED)")
+check "30 dismissed-review-marker-ignored" NOLABEL "$(decide_label $H "$J")"
+# 31 SIDECAR MISSING → fail-closed: without the sidecar the expected authenticated speaker set is
+#    unknown, so a merge-gating label must withhold rather than collapse to Maxwell-only (the
+#    round-3 dogfood fail-open). Valid GitHub consensus, but sidecar_ok=0 → NOLABEL.
+J=$(mkjson "$(item "$MAXWELL_LOGIN" APPROVE $H t1)" "$(item "$K" APPROVE $H t1)")
+check "31 sidecar-missing-fail-closed" NOLABEL "$(decide_label $H "$J" 1 "$MAXWELL_LOGIN $K" 0)"
+
 # --- drift guards: Round 11's label must no longer TRUST the sidecar (it reads authenticated
 #     GitHub markers instead). The sidecar SURVIVES for same-session availability/posting
 #     (Rounds 7/8/10) — GitHub can't supply availability, which is gated BEFORE Round 10 posts.
@@ -203,8 +222,18 @@ if [ -f "$SKILL" ]; then
   check "24 round11-paginates" 1 "$(grep -q 'gh api --paginate "repos/\$REPO/pulls/\$1/reviews"' "$SKILL" && echo 1 || echo 0)"
   check "25 round11-last-marker-scan" 1 "$(grep -q 'scan("<!-- cage-match-verdict' "$SKILL" && echo 1 || echo 0)"
   check "26 round11-fetch-fail-closed" 1 "$(grep -q 'incomplete reviewer data must not mint a label' "$SKILL" && echo 1 || echo 0)"
+  # (f) ANTI-CLOBBER (round-3 dogfood): Round 11 must NOT `source` the sidecar — sourcing imports its
+  #     *_VERDICT lines which, running after cmv(), would overwrite the GitHub verdicts and re-route
+  #     the decision through /tmp (Tesla's SoT-inversion). `source "$SIDECAR"` therefore appears
+  #     exactly 4x (Rounds 7/8/10x2); Round 11 reads availability via the grep-only `avail()` helper.
+  check "27 round11-does-not-source-sidecar(source=4)" 4 "$(grep -c 'source "\$SIDECAR"' "$SKILL")"
+  check "28 round11-availability-via-grep-not-source" 1 "$(grep -q 'avail() { grep -oE' "$SKILL" && echo 1 || echo 0)"
+  # (g) missing/malformed sidecar at Round 11 fails CLOSED (unknown speaker set must not label).
+  check "29 round11-missing-sidecar-fail-closed" 1 "$(grep -q 'an unknown speaker set must not collapse to Maxwell-only' "$SKILL" && echo 1 || echo 0)"
+  # (h) production jq drops DISMISSED reviews (matches the test's DECIDE_JQ).
+  check "30 round11-drops-dismissed" 1 "$(grep -q 'select((.state // "") != "DISMISSED")' "$SKILL" && echo 1 || echo 0)"
 else
-  echo "  SKIP: 20-26 drift-guards (SKILL.md not found at $SKILL)"
+  echo "  SKIP: 20-30 drift-guards (SKILL.md not found at $SKILL)"
 fi
 
 echo ""
