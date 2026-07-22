@@ -1254,7 +1254,17 @@ else
 # "stale" → label withheld, never falsely applied); (2) GitHub propagation between Round 10's
 # post and this read — if a just-posted review isn't visible yet, its marker is absent → label
 # withheld (re-run Round 11). Both degrade to "no label", which is safe for a best-effort label.
-LIVE_HEAD=$(gh pr view "$1" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null)
+# Resolve the live head the SAME way Round 1 does — `git ls-remote` for a same-repo PR
+# (the actual current remote ref, no API propagation lag), degrading to the API's
+# headRefOid only for a fork or a missing ref. Round 1 stamped the marker head from this
+# exact source, so marker-head and LIVE_HEAD agree on the common (non-fork) path; using the
+# laggy `gh pr view headRefOid` here would false-stale every fresh marker (Tesla's catch:
+# don't reintroduce the API-lag class Round 1 removed).
+PR_HEAD_BRANCH=$(jq -r .headRefName /tmp/pr-$1-info.json 2>/dev/null)
+IS_FORK=$(jq -r '.isCrossRepository' /tmp/pr-$1-info.json 2>/dev/null)
+LIVE_HEAD=""
+[ "$IS_FORK" = "false" ] && LIVE_HEAD=$(git ls-remote origin "refs/heads/${PR_HEAD_BRANCH}" 2>/dev/null | head -1 | awk '{print $1}')
+[ -z "$LIVE_HEAD" ] && LIVE_HEAD=$(gh pr view "$1" -R "$REPO" --json headRefOid -q .headRefOid 2>/dev/null)
 if [ -z "$LIVE_HEAD" ]; then
   echo "WARN: could not resolve PR #$1 live head — skipping 'cage-matched' (fail-closed; can't prove reviewer freshness)."
 else
@@ -1266,24 +1276,42 @@ MAXWELL_LOGIN='maxwell-merge-slam[bot]'
 KELVIN_LOGIN='kelvin-bit-brawler[bot]'; CARNOT_LOGIN='carnotcodecarver[bot]'
 TESLA_LOGIN='teslaarcprophet[bot]';     WU_LOGIN='wuparitybreaker[bot]'
 
-# Fetch posted reviews + issue comments; keep only markers whose head == the live head; take
-# the latest per author → {login: verdict}. This jq program is IDENTICAL to the one exercised
-# offline in tests/test_label_consensus.sh (16 lifecycle cases: spoof, stale, latest-per-author,
-# fail-closed). Default page size (30) covers a cage match's handful of reviews/comments.
-gh api "repos/$REPO/pulls/$1/reviews"   2>/dev/null > /tmp/cm-reviews-$1.json  || echo '[]' > /tmp/cm-reviews-$1.json
-gh api "repos/$REPO/issues/$1/comments" 2>/dev/null > /tmp/cm-comments-$1.json || echo '[]' > /tmp/cm-comments-$1.json
+# Fetch ALL posted reviews + issue comments (--paginate: a multi-round cage match can push
+# the LATEST markers off the default 30-item first page, and reviews are oldest-first, so a
+# truncated read would compute latest-per-author over a stale sample — Carnot + Tesla's catch).
+# gh writes to a RAW file and its exit status is captured DIRECTLY via `$?` — no pipe (the
+# `| jq` pipe would need PIPESTATUS, a bashism that is EMPTY under this repo's zsh runtime and
+# would silently break the fail-closed check). `--paginate` emits one JSON array per page, so
+# the raw file holds a stream of arrays (`[..][..]`); the main jq below `--slurpfile`s that
+# stream (→ array-of-arrays) and `add`s it into one flat array — no intermediate jq step.
+# FAIL CLOSED on EITHER fetch failing: a merge-gating label must treat MISSING data as a
+# reason to withhold, never as empty data — else a failed comments read could hide an
+# authenticated REQUEST_CHANGES marker while an APPROVE on the reviews read still labels
+# (Carnot's catch: `|| echo '[]'` made each source fail OPEN independently).
+gh api --paginate "repos/$REPO/pulls/$1/reviews"   > /tmp/cm-reviews-$1.json  2>/dev/null; REVIEWS_RC=$?
+gh api --paginate "repos/$REPO/issues/$1/comments" > /tmp/cm-comments-$1.json 2>/dev/null; COMMENTS_RC=$?
+if [ "$REVIEWS_RC" -ne 0 ] || [ "$COMMENTS_RC" -ne 0 ]; then
+  echo "WARN: reviews/comments fetch failed (rc reviews=$REVIEWS_RC comments=$COMMENTS_RC) — skipping 'cage-matched' (fail-closed; incomplete reviewer data must not mint a label)."
+  CM_MAP='{}'
+else
+# Keep only markers whose head == the live head; take the latest per author → {login: verdict}.
+# The verdict comes from the LAST marker in each body: `withmark` (Round 10) APPENDS the
+# authoritative marker after the model's free-text, so any marker the model itself echoed
+# earlier in its review (the head SHA is in its prompt) is superseded by the real trailer —
+# `scan | last`, not `capture` (first-match), closes that injection seam (Tesla's catch).
+# `$r | add` flattens the paginated page-arrays. This parse is exercised offline in
+# tests/test_label_consensus.sh.
 CM_MAP=$(jq -n --slurpfile r /tmp/cm-reviews-$1.json --slurpfile c /tmp/cm-comments-$1.json \
   --arg head "$LIVE_HEAD" '
-    { reviews: ($r[0] // []), comments: ($c[0] // []) }
+    { reviews: (($r | add) // []), comments: (($c | add) // []) }
     | [ (.reviews + .comments)[]
-        | { login: .user.login, ts: (.submitted_at // .created_at), body: .body }
-        | . + ( (try (.body
-              | capture("<!-- cage-match-verdict: (?<v>APPROVE|REQUEST_CHANGES|COMMENT) head=(?<h>[0-9a-f]{7,40}) -->"))
-            catch {v:null,h:null}) )
-        | select(.v != null and .h == $head)
-        | {login, ts, v} ]
+        | { login: .user.login, ts: (.submitted_at // .created_at), body: (.body // "") }
+        | ( [ .body | scan("<!-- cage-match-verdict: (APPROVE|REQUEST_CHANGES|COMMENT) head=([0-9a-f]{7,40}) -->") ] | last ) as $m
+        | select($m != null and $m[1] == $head)
+        | {login, ts, v: $m[0]} ]
     | group_by(.login) | map(max_by(.ts)) | map({(.login): .v}) | add // {}' 2>/dev/null)
 [ -n "$CM_MAP" ] || CM_MAP='{}'
+fi
 cmv() { printf '%s' "$CM_MAP" | jq -r --arg k "$1" '.[$k] // ""' 2>/dev/null; }
 MAXWELL_VERDICT=$(cmv "$MAXWELL_LOGIN")
 KELVIN_VERDICT=$(cmv "$KELVIN_LOGIN"); CARNOT_VERDICT=$(cmv "$CARNOT_LOGIN")
